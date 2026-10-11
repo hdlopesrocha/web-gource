@@ -23,6 +23,7 @@ function node(id: number, overrides: Partial<SimNode> = {}): SimNode {
     parent: 0,
     children: [],
     position: { x: id * 0.5, y: 0, z: 0 },
+    targetPosition: { x: id * 0.5, y: 0, z: 0 },
     radius: 0.2,
     sizeBytes: 0,
     sizeKnown: false,

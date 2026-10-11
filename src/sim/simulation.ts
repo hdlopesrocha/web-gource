@@ -7,6 +7,7 @@ import {
   hashUnit,
   LAYOUT,
   ORIGIN,
+  placeOnRings,
   splitPath,
   type Vec3,
 } from './layout'
@@ -22,7 +23,10 @@ export interface SimNode {
   kind: SimNodeKind
   parent: number
   children: number[]
+  /** Current (animated) position. */
   position: Vec3
+  /** Where the dynamic layout wants this node to be. */
+  targetPosition: Vec3
   /** Visual radius in world units (derived from the size mode). */
   radius: number
   /** File size in bytes as reported by the host (0 when unknown). */
@@ -167,6 +171,12 @@ export class Simulation {
   private maxActivity = 0
   /** Host-reported sizes for the whole snapshot (path → bytes). */
   private fileSizes = new Map<string, number>()
+  /** Nodes currently easing towards a new layout position. */
+  private movingNodes = new Set<number>()
+  /** Nodes that moved since the last drain, for the renderer. */
+  private movedNodes: number[] = []
+  /** Reflow file rings when files appear, disappear or change size. */
+  dynamicLayout = true
   /** Reference size for the circle scale (95th percentile of the snapshot). */
   private sizeReferenceBytes = 1024
   private activitySamples: { position: Vec3; time: number }[] = []
@@ -239,6 +249,8 @@ export class Simulation {
     this.totalDeletions = 0
     this.maxBytes = 0
     this.maxActivity = 0
+    this.movingNodes.clear()
+    this.movedNodes = []
     this.activitySamples = []
     this.time = 0
     this.maxAppliedIndex = -1
@@ -253,6 +265,7 @@ export class Simulation {
       parent: -1,
       children: [],
       position: { ...ORIGIN },
+      targetPosition: { ...ORIGIN },
       radius: LAYOUT.dirRadius * LAYOUT.rootRadius,
       sizeBytes: 0,
       sizeKnown: false,
@@ -268,6 +281,87 @@ export class Simulation {
     this.nodeList.push(root)
     this.nodeByPath.set('', root)
     this.firstToggle[0] = 0
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Dynamic layout
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Recompute where a directory's files sit.
+   *
+   * Files are packed onto one or more concentric rings whose radius follows the
+   * current circle sizes, so adding a file — or a circle growing — pushes its
+   * neighbours outwards instead of overlapping them.
+   */
+  reflowDirectory(dirId: number): void {
+    if (!this.dynamicLayout) return
+    const dir = this.nodeList[dirId]
+    if (!dir || dir.kind === 'file') return
+    const files: SimNode[] = []
+    for (const childId of dir.children) {
+      const child = this.nodeList[childId]
+      if (child && child.kind === 'file' && child.visible) files.push(child)
+    }
+    if (files.length === 0) return
+
+    const placements = placeOnRings(
+      files.map((node) => ({ key: node.path, radius: node.radius })),
+      { minRadius: LAYOUT.fileRingRadius, gap: LAYOUT.fileGap },
+    )
+    for (let index = 0; index < files.length; index += 1) {
+      const node = files[index]
+      const placement = placements[index]
+      if (!placement) continue
+      const target: Vec3 = {
+        x: dir.position.x + placement.x,
+        y: dir.position.y + placement.y,
+        z: 0,
+      }
+      const dx = node.targetPosition.x - target.x
+      const dy = node.targetPosition.y - target.y
+      if (dx * dx + dy * dy < 0.0004) continue
+      node.targetPosition = target
+      this.movingNodes.add(node.id)
+    }
+  }
+
+  /** Put every file back on its path-derived position (static layout). */
+  resetToStaticLayout(): void {
+    for (const node of this.nodeList) {
+      if (node.kind !== 'file') continue
+      const parent = this.nodeList[node.parent]
+      if (!parent) continue
+      const target = addVec(parent.position, fileOffset(node.path))
+      const dx = node.targetPosition.x - target.x
+      const dy = node.targetPosition.y - target.y
+      if (dx * dx + dy * dy < 0.0004) continue
+      node.targetPosition = target
+      this.movingNodes.add(node.id)
+    }
+  }
+
+  /** Reflow every directory (after a seek, a size change or a filter). */
+  reflowAll(): void {
+    if (!this.dynamicLayout) return
+    for (const node of this.nodeList) {
+      if (node.kind === 'file') continue
+      this.reflowDirectory(node.id)
+    }
+  }
+
+  /** Snap a freshly created node onto its layout position (no slide-in). */
+  private snapToTarget(node: SimNode): void {
+    node.position = { ...node.targetPosition }
+    this.movingNodes.delete(node.id)
+  }
+
+  /** Node ids that moved since the last call (consumed by the renderer). */
+  drainMovedNodes(): number[] {
+    if (this.movedNodes.length === 0) return []
+    const moved = this.movedNodes
+    this.movedNodes = []
+    return moved
   }
 
   /* ------------------------------------------------------------------ *
@@ -298,6 +392,7 @@ export class Simulation {
       node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
     }
     this.needsFullSync = true
+    this.reflowAll()
   }
 
   get currentSizeMode(): SizeMode {
@@ -352,7 +447,11 @@ export class Simulation {
         node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
       }
     }
-    if (scaleChanged || touched > 0) this.needsFullSync = true
+    if (scaleChanged || touched > 0) {
+      this.needsFullSync = true
+      // Sizes change radii, so the rings have to be recomputed.
+      this.reflowAll()
+    }
   }
 
   /** Reference values used by the size legend in the UI. */
@@ -476,6 +575,13 @@ export class Simulation {
 
     this.events = []
     this.needsFullSync = true
+    this.movingNodes.clear()
+    this.reflowAll()
+    // Seeked state is instant: place everything without animation.
+    for (const node of this.nodeList) {
+      node.position = { ...node.targetPosition }
+      this.movedNodes.push(node.id)
+    }
   }
 
   private applyCommit(index: number): void {
@@ -557,6 +663,7 @@ export class Simulation {
         node.visible = false
         if (fresh) this.recordToggle(node.id, index)
         this.visibleFiles = Math.max(0, this.visibleFiles - 1)
+        this.reflowDirectory(node.parent)
       }
       if (fresh) {
         node.lastKind = 'delete'
@@ -584,7 +691,10 @@ export class Simulation {
       this.maxActivity = Math.max(this.maxActivity, node.activity)
       this.totalAdditions += change.additions
       this.totalDeletions += change.deletions
+      const previousRadius = node.radius
       node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+      // A growing circle needs more room: let the ring adapt.
+      if (Math.abs(node.radius - previousRadius) > 0.01) this.reflowDirectory(node.parent)
     }
     this.pushEvent({ type: 'node-changed', node, kind })
     this.pushEvent({ type: 'activity', node, kind, strength: change.additions + change.deletions + 1 })
@@ -612,10 +722,12 @@ export class Simulation {
     }
     this.nodeByPath.delete(oldPath)
     this.nodeByPath.set(newPath, node)
+    const previousParent = node.parent
     node.movedFrom = { ...node.position }
     node.path = newPath
     node.name = name
     node.position = addVec(parent.position, fileOffset(newPath))
+    node.targetPosition = { ...node.position }
     // Sizes belong to paths: a renamed file takes its new path's size.
     const renamedSize = this.fileSizes.get(newPath)
     if (renamedSize !== undefined) {
@@ -635,6 +747,9 @@ export class Simulation {
     this.pushEvent({ type: 'node-changed', node, kind: 'rename' })
     this.pushEvent({ type: 'activity', node, kind: 'rename', strength: change.additions + change.deletions + 1 })
     if (author) author.lastKind = 'rename'
+    // Reflow both the old and the new directory.
+    if (previousParent !== node.parent) this.reflowDirectory(previousParent)
+    this.reflowDirectory(node.parent)
     return node
   }
 
@@ -646,6 +761,8 @@ export class Simulation {
         existing.visible = true
         if (fresh) this.recordToggle(existing.id, index)
         this.visibleFiles += 1
+        this.reflowDirectory(existing.parent)
+        this.movingNodes.add(existing.id)
       }
       return existing
     }
@@ -659,6 +776,7 @@ export class Simulation {
       parent: parent.id,
       children: [],
       position: addVec(parent.position, fileOffset(path)),
+      targetPosition: addVec(parent.position, fileOffset(path)),
       radius: LAYOUT.fileRadius,
       sizeBytes: 0,
       sizeKnown: false,
@@ -684,6 +802,9 @@ export class Simulation {
     if (fresh) this.recordToggle(node.id, index)
     this.visibleFiles += 1
     this.pushEvent({ type: 'node-added', node })
+    // The new file takes its slot and pushes its siblings outwards.
+    this.reflowDirectory(parent.id)
+    this.snapToTarget(node)
     return node
   }
 
@@ -703,6 +824,7 @@ export class Simulation {
       parent: parent.id,
       children: [],
       position: addVec(parent.position, directoryOffset(path, depth)),
+      targetPosition: addVec(parent.position, directoryOffset(path, depth)),
       radius: LAYOUT.dirRadius * (1 + Math.min(0.6, hashUnit(path, 7) * 0.6)),
       sizeBytes: 0,
       sizeKnown: false,
@@ -787,6 +909,28 @@ export class Simulation {
     const step = Math.min(Math.max(dt, 0), 0.1)
     const stiffness = this.options.motionStiffness
     const damping = 2 * Math.sqrt(stiffness)
+    if (this.movingNodes.size > 0) {
+      const rate = 1 - Math.exp(-step * LAYOUT.reflowRate)
+      for (const id of this.movingNodes) {
+        const node = this.nodeList[id]
+        if (!node) {
+          this.movingNodes.delete(id)
+          continue
+        }
+        const target = node.targetPosition
+        const nx = node.position.x + (target.x - node.position.x) * rate
+        const ny = node.position.y + (target.y - node.position.y) * rate
+        node.position = { x: nx, y: ny, z: 0 }
+        this.movedNodes.push(id)
+        const remainingX = target.x - nx
+        const remainingY = target.y - ny
+        if (remainingX * remainingX + remainingY * remainingY < 0.0004) {
+          node.position = { ...target }
+          this.movingNodes.delete(id)
+        }
+      }
+    }
+
     for (const author of this.authorList.values()) {
       const dx = author.target.x - author.position.x
       const dy = author.target.y - author.position.y

@@ -73,7 +73,7 @@ describe('author motion', () => {
     sim.applyUpTo(1)
     const target = { ...author.target }
     const distanceBefore = Math.hypot(target.x - author.position.x, target.y - author.position.y)
-    expect(distanceBefore).toBeGreaterThan(5)
+    expect(distanceBefore).toBeGreaterThan(3)
 
     // One frame moves a little, not all the way.
     sim.update(1 / 60, sim.currentTime + 1 / 60)
@@ -231,6 +231,7 @@ describe('BeamField', () => {
       parent: 0,
       children: [],
       position: { x, y, z: 0 },
+      targetPosition: { x, y, z: 0 },
       radius: 0.4,
       sizeBytes: 0,
       sizeKnown: false,

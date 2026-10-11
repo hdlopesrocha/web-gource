@@ -340,6 +340,13 @@ export class SceneRenderer {
     const nodes = sim.nodes
     const simTime = sim.currentTime
     this.pendingNodes = nodes
+
+    // Nodes easing towards a new layout position (dynamic file rings).
+    const moved = sim.drainMovedNodes()
+    if (moved.length > 0 && !this.fullSyncPending) {
+      this.nodes.sync(nodes, false, moved)
+      this.edges.sync(nodes, false, moved)
+    }
     this.nodes.update(simTime, nodes)
     this.edges.update(simTime, nodes)
     this.particles.update(dt)

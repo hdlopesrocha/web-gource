@@ -158,6 +158,8 @@ export interface AppState {
     autoZoom: boolean
     /** How file circles are sized: host-reported bytes, line activity, uniform. */
     sizeMode: SizeMode
+    /** Reflow file rings as files appear and circles grow. */
+    dynamicLayout: boolean
     pacing: PacingMode
     /** Custom pacing values, used when `pacing === 'custom'`. */
     customSecondsPerDay: number
@@ -220,6 +222,7 @@ const defaultSettings: AppState['settings'] = {
   followActivity: true,
   autoZoom: true,
   sizeMode: 'bytes',
+  dynamicLayout: true,
   pacing: 'balanced',
   customSecondsPerDay: CUSTOM_DEFAULTS.secondsPerDay,
   customMinSpacing: CUSTOM_DEFAULTS.minSpacing,

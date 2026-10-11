@@ -51,6 +51,17 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Dynamic layout</h3>
+        <p class="muted small">
+          Files are packed onto one or more rings around their directory. The ring radius follows the circles that
+          have to fit, so adding a file — or a circle growing with its size — smoothly pushes its neighbours outwards
+          instead of overlapping them, and the rings re-form as files are deleted. Positions are still derived from
+          the repository state alone, so the same history always produces the same map. Settings → Visual can pin
+          every file to its path-derived position instead.
+        </p>
+      </section>
+
+      <section>
         <h3>Circle sizes</h3>
         <p class="muted small">
           File circles grow with the file size. Sizes come from the host's own file listing for the newest commit in

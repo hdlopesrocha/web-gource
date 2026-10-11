@@ -174,6 +174,15 @@ onMounted(() => {
             <label>Circle scale · {{ settings.radiusScale.toFixed(2) }}×</label>
             <input type="range" min="0.4" max="2.5" step="0.05" :value="settings.radiusScale" @input="update({ radiusScale: Number(($event.target as HTMLInputElement).value) })" />
           </div>
+          <label class="switch">
+            <input type="checkbox" :checked="settings.dynamicLayout" @change="update({ dynamicLayout: ($event.target as HTMLInputElement).checked })" />
+            Dynamic layout
+          </label>
+          <p class="faint note">
+            With the dynamic layout on, files are packed onto rings around their directory: adding a file, or a circle
+            growing with its size, pushes its neighbours outwards smoothly instead of overlapping them. Turn it off to
+            pin every file to the position derived from its path.
+          </p>
         </section>
 
         <section class="group">

@@ -322,6 +322,7 @@ export class VisualizerController {
       return
     }
     engine.setSpeed(store.hud?.speed ?? 1)
+    engine.setDynamicLayout(store.settings.dynamicLayout)
     this.engine = engine
     store.view = 'stage'
     engine.start()
@@ -495,6 +496,7 @@ export class VisualizerController {
     this.engine.applyRendererSettings(this.rendererSettings())
     this.engine.applyCameraOptions(this.cameraOptions())
     if (patch.sizeMode) this.engine.setSizeMode(patch.sizeMode)
+    if (patch.dynamicLayout !== undefined) this.engine.setDynamicLayout(patch.dynamicLayout)
     if (patch.pacing) this.engine.setScheduleOptions(this.scheduleOptions())
   }
 

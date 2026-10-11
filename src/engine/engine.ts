@@ -355,6 +355,21 @@ export class Engine {
     this.cameraOptions = { ...this.cameraOptions, ...options }
   }
 
+  /**
+   * Turn the dynamic file rings on or off. Turning them off eases files back to
+   * their path-derived positions.
+   */
+  setDynamicLayout(enabled: boolean): void {
+    this.sim.dynamicLayout = enabled
+    if (enabled) {
+      this.sim.reflowAll()
+    } else {
+      this.sim.resetToStaticLayout()
+    }
+    this.renderer.requestFullSync()
+    this.emitHud(true)
+  }
+
   /** How file circles are sized (bytes / activity / uniform). */
   private sizeMode: SizeMode = 'bytes'
 

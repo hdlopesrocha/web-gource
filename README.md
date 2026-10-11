@@ -201,6 +201,27 @@ Given the same history and settings, the same sequence of events is produced:
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
 
+### Dynamic layout
+
+![Files packed on rings around their directories](docs/screenshot-rings.png)
+
+Files are packed onto one or more concentric rings around their directory, and
+those rings reflow while history plays:
+
+* the ring radius follows the circles that have to fit (arc length *and* the
+  chord between neighbouring slots), so a folder full of large files gets a
+  wider ring and its contents never overlap;
+* adding a file pushes its siblings to new slots, and deleting one closes the
+  gap — both eased over ~0.7 s instead of jumping;
+* a circle that grows with its file size (or with accumulated line activity in
+  activity mode) expands its ring and pushes its neighbours outwards;
+* order is by path, so a new file shifts the ring by one slot deterministically
+  rather than reshuffling it;
+* positions remain a pure function of the applied commits, so seeking to a point
+  in history produces exactly the layout that playing to it would;
+* Settings → Visual can switch the dynamic layout off, which eases every file
+  back to its path-derived position for a static map.
+
 ### Reading the activity
 
 ![A beam connecting an author to the file it just changed](docs/screenshot-beams.png)
@@ -268,6 +289,10 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * activity: avatar motion is continuous and bounded by the speed limit, tethers are created per
   changed file, refreshed, expired and capped, beams fade, follow both endpoints, scale with zoom
   and respect their capacity;
+* dynamic layout: ring packing never overlaps circles, grows with item count and radius, uses
+  concentric rings for crowds, is deterministic and order independent; in the simulation, adding,
+  deleting or growing a file moves its siblings smoothly, seek and playback produce identical
+  layouts, and the static mode pins files to their path-derived positions;
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
   pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
