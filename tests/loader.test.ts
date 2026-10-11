@@ -136,6 +136,47 @@ describe('loadHistory', () => {
     expect(result.commits.some((commit) => commit.files === null && commit.filesMissing === 'error')).toBe(true)
   })
 
+  it('fetches file sizes once and exposes them on the result', async () => {
+    const commits = generateCommits(6)
+    const { resolved, mock } = setup(commits, {
+      treeSizes: { 'src/module-0/file-0.ts': 2048, 'src/module-1/file-1.ts': 900_000 },
+    })
+    const result = await loadHistory(resolved, { maxCommits: 6, range: 'latest' })
+    expect(result.fileSizes.get('src/module-1/file-1.ts')).toBe(900_000)
+    expect(result.sizeSource).toBe('git-tree')
+    expect(mock.requests.filter((request) => request.url.includes('/git/trees/'))).toHaveLength(1)
+
+    const timeline = buildTimeline(result.repo, result.commits, {
+      fileSizes: result.fileSizes,
+      sizeSource: result.sizeSource,
+    })
+    expect(timeline.fileSizes.size).toBe(2)
+    expect(timeline.stats.filesWithSize).toBeGreaterThan(0)
+    expect(timeline.stats.totalBytes).toBeGreaterThan(900_000)
+    expect(timeline.stats.sizeSource).toBe('git-tree')
+  })
+
+  it('explains when sizes cannot be fetched', async () => {
+    // No treeSizes configured: the tree endpoint answers 404.
+    const commits = generateCommits(4)
+    const { resolved } = setup(commits)
+    const result = await loadHistory(resolved, { maxCommits: 4, range: 'latest' })
+    expect(result.fileSizes.size).toBe(0)
+    expect(result.sizeSource).toBe('unavailable')
+  })
+
+  it('skips the size request when the quota is nearly exhausted', async () => {
+    const commits = generateCommits(6)
+    const { resolved, mock } = setup(commits, {
+      rateRemaining: 4,
+      treeSizes: { 'src/module-0/file-0.ts': 2048 },
+    })
+    const result = await loadHistory(resolved, { maxCommits: 6, range: 'latest' })
+    expect(result.fileSizes.size).toBe(0)
+    expect(mock.requests.filter((request) => request.url.includes('/git/trees/'))).toHaveLength(0)
+    expect(result.warnings.join(' ')).toMatch(/sizes were skipped/i)
+  })
+
   it('feeds the timeline builder with a complete normalized history', async () => {
     const commits = generateCommits(20)
     const { resolved } = setup(commits)

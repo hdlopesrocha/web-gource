@@ -1,4 +1,4 @@
-import type { CommitPage, ProviderProgress, RawCommit, RepoInfo } from '../types'
+import type { CommitPage, FileSizeResult, ProviderProgress, RawCommit, RepoInfo } from '../types'
 
 /** Credentials for a provider. Tokens are never persisted in source. */
 export interface ProviderAuth {
@@ -74,6 +74,16 @@ export interface GitProvider {
    * Used by the "start from the first commit" range option.
    */
   loadEarliestPage?(repo: ParsedRepoUrl, options: LoadPageOptions): Promise<CommitPage>
+
+  /**
+   * File sizes for a snapshot of the repository, when the host exposes them
+   * cheaply. Returning `null` means "not available here"; the visualization
+   * then falls back to sizing circles by line activity.
+   */
+  fetchFileSizes?(
+    repo: ParsedRepoUrl,
+    options: { ref?: string; signal?: AbortSignal; auth?: ProviderAuth },
+  ): Promise<FileSizeResult | null>
 
   /**
    * Attach file changes to commits (mutates them in place).

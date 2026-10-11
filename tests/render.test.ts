@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
-import { ParticleField, pointSizePixels, projectionScaleFor } from '../src/render/particles'
-import { CameraRig } from '../src/render/camera'
+import { ParticleField, pointSizePixels } from '../src/render/particles'
+import { Camera2D } from '../src/render/camera'
 import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
 import type { SimNode } from '../src/sim/simulation'
@@ -24,6 +24,9 @@ function node(id: number, overrides: Partial<SimNode> = {}): SimNode {
     children: [],
     position: { x: id * 0.5, y: 0, z: 0 },
     radius: 0.2,
+    sizeBytes: 0,
+    sizeKnown: false,
+    activity: 0,
     bornIndex: id,
     lastChangeIndex: id,
     lastKind: null,
@@ -134,24 +137,14 @@ describe('EdgeField', () => {
 })
 
 describe('ParticleField', () => {
-  it('projects world-space particle sizes into sane device pixels', () => {
-    // Matches the shader: gl_PointSize = aSize * projectionScale / distance.
-    const scale1080 = projectionScaleFor(1080, 52)
-    expect(scale1080).toBeGreaterThan(900)
-    for (const distance of [20, 50, 120]) {
-      const pixels = pointSizePixels(0.15, scale1080, distance)
-      expect(pixels).toBeGreaterThan(1)
-      expect(pixels).toBeLessThan(30)
-    }
-    // Higher resolution and wider FOV produce smaller pixels for the same world size.
-    expect(pointSizePixels(0.15, projectionScaleFor(2160, 52), 50)).toBeGreaterThan(
-      pointSizePixels(0.15, projectionScaleFor(1080, 52), 50),
-    )
-    expect(pointSizePixels(0.15, projectionScaleFor(1080, 90), 50)).toBeLessThan(
-      pointSizePixels(0.15, projectionScaleFor(1080, 52), 50),
-    )
-    // Far away particles never disappear completely.
-    expect(pointSizePixels(0.15, scale1080, 5000)).toBe(1)
+  it('keeps particle sizes constant on screen (CSS pixels × pixel ratio)', () => {
+    // Matches the shader: gl_PointSize = aSize * uPixelRatio.
+    expect(pointSizePixels(3, 1)).toBe(3)
+    expect(pointSizePixels(3, 2)).toBe(6)
+    // Retina screens double the device pixels but not the visual size.
+    expect(pointSizePixels(3, 2) / 2).toBe(pointSizePixels(3, 1))
+    // Never smaller than a single device pixel.
+    expect(pointSizePixels(0.1, 1)).toBe(1)
   })
 
   it('emits, integrates and fades particles', () => {
@@ -195,34 +188,65 @@ describe('ParticleField', () => {
   })
 })
 
-describe('CameraRig', () => {
-  it('frames and follows the focus point', () => {
-    const rig = new CameraRig(16 / 9)
-    rig.frame({ center: { x: 0, y: 0, z: 0 }, radius: 20 }, true)
-    const options = { followActivity: true, autoRotate: false, autoZoom: true, rotateSpeed: 0 }
-    for (let index = 0; index < 200; index += 1) {
-      rig.update(1 / 60, options, { x: 40, y: 0, z: 0 }, { center: { x: 0, y: 0, z: 0 }, radius: 20 })
+describe('Camera2D', () => {
+  it('stays flat: an orthographic camera looking down the Z axis', () => {
+    const rig = new Camera2D()
+    rig.setViewport(1600, 900)
+    expect(rig.camera.isOrthographicCamera).toBe(true)
+    // The frustum spans the visible world area, and every point of the scene
+    // sits on the z = 0 plane.
+    expect(rig.camera.top - rig.camera.bottom).toBeCloseTo(rig.viewHeight, 6)
+    expect(rig.camera.position.z).toBeGreaterThan(0)
+  })
+
+  it('follows recent activity and fits the repository', () => {
+    const rig = new Camera2D()
+    rig.setViewport(1600, 900)
+    rig.frame({ center: { x: 0, y: 0 }, radius: 20 }, true)
+    const options = { followActivity: true, autoZoom: true, smoothing: 2 }
+    for (let index = 0; index < 300; index += 1) {
+      rig.update(1 / 60, options, { x: 40, y: -10 }, { center: { x: 0, y: 0 }, radius: 20 })
     }
     expect(rig.focusPoint.x).toBeGreaterThan(10)
-    expect(rig.camera.position.length()).toBeGreaterThan(1)
+    expect(rig.focusPoint.y).toBeLessThan(0)
+    // Zoom stays inside sane bounds and follows the bounds radius.
+    const bigZoom = rig.currentZoom
+    rig.frame({ center: { x: 0, y: 0 }, radius: 400 }, true)
+    expect(rig.currentZoom).toBeLessThan(bigZoom)
   })
 
-  it('orbits when autorotate is enabled and stays finite', () => {
-    const rig = new CameraRig()
-    rig.frame({ center: { x: 0, y: 0, z: 0 }, radius: 10 }, true)
-    const options = { followActivity: false, autoRotate: true, autoZoom: false, rotateSpeed: 1 }
-    const before = rig.camera.position.clone()
-    for (let index = 0; index < 120; index += 1) {
-      rig.update(1 / 60, options, null, { center: { x: 0, y: 0, z: 0 }, radius: 10 })
+  it('zooms around a world point and converts pixels to world units', () => {
+    const rig = new Camera2D()
+    rig.setViewport(800, 600)
+    rig.frame({ center: { x: 0, y: 0 }, radius: 50 }, true)
+    const worldPerPixel = rig.worldPerPixel(600)
+    expect(worldPerPixel).toBeCloseTo(rig.viewHeight / 600, 8)
+    rig.nudge({ zoom: 2 })
+    rig.update(1 / 60, { followActivity: false, autoZoom: false, smoothing: 1 }, null, {
+      center: { x: 0, y: 0 },
+      radius: 50,
+    })
+    expect(rig.currentZoom).toBeGreaterThan(1)
+    // Panning moves the centre in world units.
+    const before = rig.center2D.x
+    rig.nudge({ panX: 10 })
+    rig.update(0.5, { followActivity: false, autoZoom: false, smoothing: 1 }, null, {
+      center: { x: 0, y: 0 },
+      radius: 50,
+    })
+    expect(rig.center2D.x).toBeGreaterThan(before)
+  })
+
+  it('keeps automatic behaviour inside finite bounds', () => {
+    const rig = new Camera2D()
+    rig.setViewport(1280, 720)
+    const options = { followActivity: false, autoZoom: true, smoothing: 1 }
+    for (let index = 0; index < 200; index += 1) {
+      rig.update(1 / 60, options, null, { center: { x: index * 10, y: -index * 5 }, radius: 5 + index })
     }
-    expect(rig.camera.position.distanceTo(before)).toBeGreaterThan(0.5)
     expect(Number.isFinite(rig.camera.position.x)).toBe(true)
-  })
-
-  it('changes the projection aspect', () => {
-    const rig = new CameraRig()
-    rig.setAspect(1)
-    expect(rig.camera.aspect).toBe(1)
+    expect(Number.isFinite(rig.camera.position.y)).toBe(true)
+    expect(rig.viewHeight).toBeGreaterThan(0)
   })
 })
 

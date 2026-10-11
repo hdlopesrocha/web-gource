@@ -1,18 +1,18 @@
 # Web Gource
 
 A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste a public
-Git repository URL and watch its history grow into an animated 3D scene — directories branching
-like a tree, files appearing as leaves, authors flying between the files they touch, and activity
-bursts coloured by add / modify / delete / rename.
+Git repository URL and watch its history grow into an animated 2D map — directories branching like
+a tree, files appearing as circles sized by their real file size, authors flying between the files
+they touch, and activity bursts coloured by add / modify / delete / rename.
 
 Nothing is cloned, uploaded, or built on a server. Commit history is read straight from the
 hosting provider's REST API in the browser, normalized into a timeline, and rendered with an
 independently written Three.js renderer.
 
-![Web Gource visualizing a repository](docs/screenshot.png)
+![Web Gource visualizing a repository as a 2D map with circles sized by file size](docs/screenshot.png)
 
 ```
-https://github.com/owner/repository   →   animated 3D repository history
+https://github.com/owner/repository   →   animated 2D repository history
 ```
 
 ## Quick start
@@ -83,8 +83,8 @@ browser — there is no backend.
 | `F` | Fullscreen |
 | `?` | Help |
 
-Drag to orbit, right-drag (or shift-drag) to pan, scroll to zoom. Manual input pauses the automatic
-camera for a few seconds.
+Drag to pan, scroll to zoom (the point under the pointer stays anchored). Manual input pauses the
+automatic view for a few seconds.
 
 ## How it works
 
@@ -184,18 +184,36 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Rendering
 
-* Files and directories are two `InstancedMesh` objects (one icosahedron, one octahedron) with
-  per-instance colour and matrix updates only for changed nodes; both grow by reallocating and
-  copying instance buffers when a repository turns out to be larger than expected.
+* Files and directories are two `InstancedMesh` objects — flat discs for files, rings for
+  directories — viewed through an orthographic camera, with per-instance colour and matrix updates
+  only for changed nodes. Both grow by reallocating and copying instance buffers when a repository
+  turns out to be larger than expected.
 * Branch edges share one `LineSegments` buffer with two vertices per node.
-* Activity effects and author trails come from a single additive `Points` pool with a free-list
-  (no allocations per commit), with point sizes converted from world units to device pixels.
-* Avatars and labels are pooled sprites with LRU canvas-texture caches, so hundreds of authors and
-  thousands of labels stay bounded in memory.
-* The camera follows recent activity, adapts its distance to the repository size and orbits slowly;
-  manual input takes over immediately.
+* Activity effects and author trails come from a single additive `Points` pool with a free-list (no
+  allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
+  at any zoom level.
+* Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
+  dense repositories stay readable. File labels can include the host-reported size.
+* A camera-following background gradient and grid keep panning and zooming readable, and the
+  minimap shows the whole tree with the current view position.
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
+
+### File sizes on screen
+
+Circle size is a first-class signal, not decoration:
+
+* Sizes come from the host's own file listing for the newest commit in the loaded window — one
+  extra request (GitHub's recursive tree endpoint), cached, never one request per file.
+* The scale is logarithmic with a mild power curve against the **95th percentile** of the window,
+  so small files stay visible and a single generated file cannot flatten everything else. The
+  Settings panel shows a legend with the exact mapping and reports how many circles use a real size.
+* Files the host does not report (or every file, when the listing is unavailable or truncated) fall
+  back to accumulated line activity, and the UI says so instead of pretending.
+* Labels of just-changed files show the size (`renderer.ts · 14 KB`), the activity overlay lists the
+  size of every changed file, and the Data tab reports the tracked total.
+* The mapping can be switched between file size, line activity and uniform circles; a global
+  multiplier scales all circles.
 
 ### Video export
 
@@ -227,10 +245,12 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * simulation: directory creation, delete + re-add visibility, renames, unknown-path modifications,
   merge commits, seek ≡ replay, no double counting on replay, author behaviour, bounds;
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
-  pool limits and decay, camera framing/orbit;
+  pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
   WebGL-unavailable degradation;
 * component smoke tests (jsdom) for the landing view, playback bar, stage, panels and help overlay;
+* file sizing: logarithmic mapping monotonicity and bounds, 95th-percentile reference, fallbacks
+  for unknown sizes, size-mode switching, sizes arriving after nodes exist, host tree parsing;
 * scale checks: 5,000 commits and ~3,600 files build in ~0.1 s and seek in well under a frame.
 
 `npm run test:api` additionally validates the parsers against the real API (field names, pagination
@@ -244,7 +264,10 @@ headers, file change shapes) and skips gracefully when the quota is exhausted.
   is one request per commit. Token-authenticated loads make this practical.
 * **Windows of history, not full histories.** A very large repository cannot be fully fetched in a
   browser without a token; the UI is explicit about the loaded window.
-* **File contents are not fetched.** Only paths, change kinds and line counts.
+* **File contents are not fetched.** Only paths, change kinds, line counts and (via the tree
+  endpoint) byte sizes for the newest commit in the window.
+* **Sizes are a snapshot, not a history.** A file that shrank during the window is drawn at its
+  current size; tracking size over time would need one tree request per commit.
 * **Synthetic avatars.** Profile pictures from the host are not fetched: generated initials keep the
   scene deterministic and avoid third-party requests.
 * **No audio.** Gource's background music has no browser equivalent here.

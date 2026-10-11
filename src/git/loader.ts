@@ -1,5 +1,6 @@
 import { GitError, isAbortError } from './errors'
 import { authFor, type ResolvedRepo } from './providers'
+import { QUOTA_RESERVE } from './providers/github'
 import type { GitProvider, ParsedRepoUrl, ProviderAuth } from './providers/types'
 import type { ProviderProgress, RawCommit, RepoInfo } from './types'
 
@@ -22,6 +23,11 @@ export interface LoadOptions {
   onStage?: (stage: LoadStage) => void
   /** Called with repository metadata before any commit is fetched. */
   onRepo?: (repo: RepoInfo) => void
+  /**
+   * Called as soon as file sizes are known, so the visualization can size its
+   * circles while the file changes are still being hydrated.
+   */
+  onFileSizes?: (info: { fileSizes: Map<string, number>; truncated: boolean; source: string }) => void
   /** Called with chronologically ordered commits, oldest batch first. */
   onCommits?: (commits: RawCommit[]) => void
   signal?: AbortSignal
@@ -45,6 +51,10 @@ export interface LoadResult {
   repo: RepoInfo
   /** Chronologically ordered (oldest first). */
   commits: RawCommit[]
+  /** Host-reported file sizes for the newest commit in the window. */
+  fileSizes: Map<string, number>
+  sizesTruncated: boolean
+  sizeSource: string
   /** True when the whole requested window was retrieved. */
   complete: boolean
   /** True when older history exists beyond the loaded window. */
@@ -220,6 +230,47 @@ export async function loadHistory(resolved: ResolvedRepo, options: LoadOptions):
     )
   }
 
+  // ---- File sizes (one cheap request) ------------------------------------
+  let fileSizes = new Map<string, number>()
+  let sizesTruncated = false
+  let sizeSource = 'unavailable'
+  const newestSha = window[window.length - 1]?.sha
+  const quotaTight = rateRemaining !== undefined && rateRemaining <= QUOTA_RESERVE
+  if (provider.fetchFileSizes && newestSha && !quotaTight) {
+    emitStage({
+      kind: 'info',
+      status: 'Fetching file sizes for circle sizing…',
+    })
+    try {
+      const sizes = await provider.fetchFileSizes(parsed, {
+        ref: options.branch || newestSha,
+        signal: options.signal,
+        auth,
+      })
+      if (sizes && sizes.sizes.size > 0) {
+        fileSizes = sizes.sizes
+        sizesTruncated = sizes.truncated
+        sizeSource = sizes.source
+        requestCount += 1
+        options.onFileSizes?.({ fileSizes, truncated: sizesTruncated, source: sizeSource })
+        if (sizes.truncated) {
+          warnings.push(
+            'The host truncated the file listing, so some circles use line activity instead of the real file size.',
+          )
+        }
+      }
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      warnings.push(
+        `File sizes could not be fetched (${(error as Error).message}); circles are sized by line activity instead.`,
+      )
+    }
+  } else if (provider.fetchFileSizes && quotaTight) {
+    warnings.push(
+      'File sizes were skipped because the API quota was nearly exhausted; circles are sized by line activity instead.',
+    )
+  }
+
   // ---- File-level hydration, oldest first, emitted in batches -------------
   let missingFiles = 0
   let stoppedHydrating = false
@@ -282,6 +333,9 @@ export async function loadHistory(resolved: ResolvedRepo, options: LoadOptions):
     parsed,
     repo,
     commits: window,
+    fileSizes,
+    sizesTruncated,
+    sizeSource,
     complete: !hasOlderHistory,
     truncated: hasOlderHistory,
     requestCount,

@@ -3,19 +3,12 @@ import type { ChangeKind } from '../timeline/types'
 import { colorForChange } from './palette'
 
 /**
- * Conversion factor from a world-space size to device pixels:
- * `viewportHeightPixels / (2 * tan(fov / 2))`.
- *
- * A point of `worldSize` units at distance `d` covers `worldSize * scale / d`
- * device pixels, which is exactly what the particle vertex shader computes.
+ * Particle sizes are given in CSS pixels: in a flat 2D scene sparks should keep
+ * a constant screen size instead of growing with the zoom level. The shader only
+ * has to apply the device pixel ratio.
  */
-export function projectionScaleFor(viewportHeightPixels: number, fovDegrees: number): number {
-  return viewportHeightPixels / (2 * Math.tan((fovDegrees * Math.PI) / 360))
-}
-
-/** Device-pixel size of a world-space sized point (mirrors the shader). */
-export function pointSizePixels(worldSize: number, projectionScale: number, distance: number): number {
-  return Math.max(1, (worldSize * projectionScale) / Math.max(0.001, distance))
+export function pointSizePixels(sizeCssPixels: number, pixelRatio = 1): number {
+  return Math.max(1, sizeCssPixels * pixelRatio)
 }
 
 /**
@@ -69,23 +62,21 @@ export class ParticleField {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       uniforms: {
-        uProjectionScale: { value: 1000 },
+        uPixelRatio: { value: 1 },
       },
       vertexShader: /* glsl */ `
         attribute vec3 aColor;
         attribute float aSize;
         attribute float aAlpha;
-        uniform float uProjectionScale;
+        uniform float uPixelRatio;
         varying vec3 vColor;
         varying float vAlpha;
         void main() {
           vColor = aColor;
           vAlpha = aAlpha;
-          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-          // aSize is a world-space size; convert it to device pixels the same
-          // way a sphere of that diameter would be projected.
-          gl_PointSize = max(1.0, aSize * uProjectionScale / max(0.001, -mvPosition.z));
-          gl_Position = projectionMatrix * mvPosition;
+          // aSize is a size in CSS pixels, constant on screen.
+          gl_PointSize = max(1.0, aSize * uPixelRatio);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: /* glsl */ `
@@ -117,12 +108,9 @@ export class ParticleField {
     this.points.visible = enabled
   }
 
-  /**
-   * Conversion factor from world-space particle size to device pixels:
-   * `drawingBufferHeight / (2 * tan(fov / 2))`.
-   */
-  setProjectionScale(scale: number): void {
-    this.material.uniforms.uProjectionScale.value = scale
+  /** Device pixel ratio applied to the CSS-pixel particle sizes. */
+  setPixelRatio(ratio: number): void {
+    this.material.uniforms.uPixelRatio.value = ratio
   }
 
   setIntensity(intensity: number): void {
@@ -210,7 +198,7 @@ export class ParticleField {
           z: Math.sin(angle) * Math.cos(elevation) * speed,
         },
         color,
-        size: 0.1 + Math.random() * 0.16,
+        size: 2.2 + Math.random() * 3.4,
         life: 0.5 + Math.random() * 0.85,
         drag: kind === 'delete' ? 1.1 : 1.8,
         gravity,
@@ -230,7 +218,7 @@ export class ParticleField {
         z: (Math.random() - 0.5) * 0.6,
       },
       color,
-      size: 0.09 + Math.random() * 0.09,
+      size: 1.8 + Math.random() * 1.8,
       life: 0.7 + Math.random() * 0.6,
       drag: 2.6,
       gravity: 0,

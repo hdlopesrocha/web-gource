@@ -3,6 +3,7 @@ import type { RepoInfo } from '../git/types'
 import type { TimelineStats } from '../timeline/types'
 import type { HudState } from '../engine/engine'
 import type { RendererSettings } from '../render/renderer'
+import type { SizeMode } from '../sim/simulation'
 import type { RecordingProgress } from '../engine/recorder'
 import { listProviderDescriptors } from '../git/providers'
 
@@ -154,8 +155,9 @@ export interface AppState {
   dateRange: { from: number | null; to: number | null }
   settings: RendererSettings & {
     followActivity: boolean
-    autoRotate: boolean
     autoZoom: boolean
+    /** How file circles are sized: host-reported bytes, line activity, uniform. */
+    sizeMode: SizeMode
     pacing: PacingMode
     /** Custom pacing values, used when `pacing === 'custom'`. */
     customSecondsPerDay: number
@@ -199,21 +201,22 @@ function persist(key: string, value: unknown): void {
 const defaultSettings: AppState['settings'] = {
   fileColorMode: 'extension',
   showEdges: true,
-  edgeOpacity: 0.45,
+  edgeOpacity: 0.5,
   showDirs: true,
-  fileSize: 1,
+  radiusScale: 1,
   particleIntensity: 1,
   showLabels: true,
   showDirectoryLabels: true,
   showFileLabels: true,
+  showFileSizes: true,
   showAuthorNames: true,
   showAuthorGlow: true,
   authorScale: 1,
-  showStars: true,
-  fogDensity: 0.0011,
+  showGrid: true,
+  gridSpacing: 40,
   followActivity: true,
-  autoRotate: true,
   autoZoom: true,
+  sizeMode: 'bytes',
   pacing: 'balanced',
   customSecondsPerDay: CUSTOM_DEFAULTS.secondsPerDay,
   customMinSpacing: CUSTOM_DEFAULTS.minSpacing,

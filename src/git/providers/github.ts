@@ -3,7 +3,16 @@ import { mergeRateLimit, requestJson, type RateLimitSnapshot } from '../http'
 import { apiCache } from '../cache'
 import { joinUrl } from '../url'
 import { mapConcurrent } from '../pool'
-import type { CommitPage, PageCursor, ProviderProgress, RawAuthor, RawCommit, RawFileChange, RepoInfo } from '../types'
+import type {
+  CommitPage,
+  FileSizeResult,
+  PageCursor,
+  ProviderProgress,
+  RawAuthor,
+  RawCommit,
+  RawFileChange,
+  RepoInfo,
+} from '../types'
 import type { GitProvider, HydrateOptions, LoadPageOptions, ParsedRepoUrl, ProviderAuth } from './types'
 import { decodePageCursor, encodePageCursor } from './types'
 
@@ -39,6 +48,19 @@ interface GhFile {
 interface GhCommitDetail extends GhCommitListItem {
   stats?: { additions?: number; deletions?: number; total?: number }
   files?: GhFile[]
+}
+
+interface GhTreeEntry {
+  path: string
+  mode?: string
+  type: 'blob' | 'tree' | 'commit'
+  size?: number
+}
+
+interface GhTree {
+  sha: string
+  truncated?: boolean
+  tree?: GhTreeEntry[]
 }
 
 interface GhRepo {
@@ -288,6 +310,50 @@ export class GitHubProvider implements GitProvider {
       next: lastPage > 1 ? encodePageCursor(lastPage - 1) : null,
       totalCount: lastPage * perPage,
     }
+  }
+
+  /**
+   * File sizes for one snapshot of the repository.
+   *
+   * GitHub returns the whole recursive tree (with blob sizes) in a single
+   * request, which is why circle sizes can be based on real file sizes without
+   * spending one request per file.
+   */
+  async fetchFileSizes(
+    repo: ParsedRepoUrl,
+    options: { ref?: string; signal?: AbortSignal; auth?: ProviderAuth } = {},
+  ): Promise<FileSizeResult | null> {
+    const ref = options.ref?.trim()
+    if (!ref) return null
+    const cacheKey = `github:sizes:${repo.owner}/${repo.repo}:${ref}`
+    const cached = await apiCache.get<FileSizeResult>(cacheKey)
+    if (cached) return cached
+
+    const url = withQuery(joinUrl(this.apiBase(repo), 'repos', repo.owner, repo.repo, 'git', 'trees', ref), {
+      recursive: 1,
+    })
+    const response = await requestJson<GhTree>(url, {
+      signal: options.signal,
+      headers: this.headers(options.auth),
+      retries: 1,
+      // A missing tree (empty repository, unusual ref) simply means "no sizes".
+      allow404: true,
+    })
+    if (response.status === 404 || !response.data) return null
+    const sizes = new Map<string, number>()
+    for (const entry of response.data?.tree ?? []) {
+      if (entry.type !== 'blob' || typeof entry.size !== 'number') continue
+      sizes.set(entry.path, entry.size)
+    }
+    if (sizes.size === 0) return null
+    const result: FileSizeResult = {
+      sizes,
+      truncated: Boolean(response.data?.truncated),
+      source: 'git-tree',
+    }
+    // Sizes for a commit are immutable, so this can be cached for a long time.
+    await apiCache.set(cacheKey, result, 30 * 60 * 1000)
+    return result
   }
 
   async hydrateFiles(repo: ParsedRepoUrl, commits: RawCommit[], options: HydrateOptions): Promise<void> {

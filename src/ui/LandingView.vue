@@ -73,8 +73,9 @@ const examples = [
           <h1>Web Gource</h1>
         </div>
         <p class="tagline">
-          Paste a public Git repository and watch its history grow into an animated 3D scene — commits, authors,
-          directories and files, all rendered with WebGL in your browser.
+          Paste a public Git repository and watch its history grow into an animated 2D map — commits, authors,
+          directories and files drawn as circles sized by their real file size, rendered with WebGL in your
+          browser.
         </p>
       </header>
 
@@ -209,17 +210,17 @@ const examples = [
           </p>
         </div>
         <div class="feature">
-          <h3>Gource-style scene</h3>
+          <h3>Flat Gource-style map</h3>
           <p>
-            Instanced WebGL nodes, branching directories, author avatars and colour-coded effects for additions,
-            modifications, deletions and renames.
+            Instanced WebGL circles on a plane: directories branch out, files are sized by their real file size,
+            author avatars move between them, and effects are colour-coded per change type.
           </p>
         </div>
         <div class="feature">
           <h3>Playback & export</h3>
           <p>
-            Seek, scrub, filter by author or date, change pacing, then export the animation to WebM/MP4 with the
-            browser's own recorder.
+            Seek, scrub, filter by author or date, change pacing, switch circle sizing between file size and line
+            activity, then export the animation to WebM/MP4 with the browser's own recorder.
           </p>
         </div>
       </section>

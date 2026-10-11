@@ -82,6 +82,21 @@ export interface RepoInfo {
   commitCountEstimate?: number
 }
 
+/**
+ * File sizes (path → bytes) for a snapshot of the repository.
+ *
+ * Hosts expose this cheaply (GitHub: one recursive tree request), which is what
+ * lets the visualization size file circles by real file size instead of by
+ * change activity.
+ */
+export interface FileSizeResult {
+  sizes: Map<string, number>
+  /** True when the host truncated the listing (very large repositories). */
+  truncated: boolean
+  /** Where the sizes came from, shown in the UI (`git-tree`, `synthetic`). */
+  source: string
+}
+
 /** Page of commits returned by a provider, newest first. */
 export interface CommitPage {
   commits: RawCommit[]

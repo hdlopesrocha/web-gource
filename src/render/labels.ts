@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { SimNode } from '../sim/simulation'
 import { labelTextures, labelAspect } from './textures'
+import { formatBytes } from '../util/format'
 
 export interface LabelRenderOptions {
   enabled: boolean
@@ -8,10 +9,19 @@ export interface LabelRenderOptions {
   directories: boolean
   /** Show file names for recently changed files. */
   files: boolean
+  /** Append the file size to file labels when the host reported it. */
+  fileSizes: boolean
   /** Maximum number of simultaneous labels. */
   maxLabels: number
   /** Pixel height of a label on screen; keeps text readable at any zoom. */
   pixelHeight: number
+}
+
+export interface LabelViewport {
+  width: number
+  height: number
+  /** World units covered by one device pixel (orthographic projection). */
+  worldPerPixel: number
 }
 
 interface LabelSlot {
@@ -61,12 +71,12 @@ export class LabelField {
    */
   update(
     dt: number,
-    camera: THREE.PerspectiveCamera,
+    camera: THREE.Camera,
     focus: THREE.Vector3,
     nodes: readonly SimNode[],
     currentIndex: number,
     options: LabelRenderOptions,
-    viewport: { width: number; height: number },
+    viewport: LabelViewport,
   ): void {
     if (!options.enabled) {
       for (const slot of this.slots) {
@@ -82,9 +92,7 @@ export class LabelField {
       this.current = this.select(nodes, currentIndex, focus, options)
     }
 
-    const cameraPosition = camera.position
     const height = Math.max(1, viewport.height)
-    const fovScale = (2 * Math.tan((camera.fov * Math.PI) / 360)) / height
     const placed: ScreenRect[] = []
     let index = 0
 
@@ -98,8 +106,9 @@ export class LabelField {
       // Behind the camera or far outside the viewport: not worth a slot.
       if (projected.z > 1 || Math.abs(projected.x) > 1.1 || Math.abs(projected.y) > 1.1) continue
 
-      const distance = cameraPosition.distanceTo(worldPosition)
-      const worldHeight = options.pixelHeight * fovScale * Math.max(1, distance)
+      // Constant screen size: the world height of a label only depends on the
+      // projection scale, not on any distance.
+      const worldHeight = options.pixelHeight * viewport.worldPerPixel
       const texture = labelTextures.get(entry.textureKey, JSON.stringify(labelStyleFor(node)))
       const aspect = labelAspect(texture)
       const screenWidth = options.pixelHeight * aspect
@@ -175,7 +184,7 @@ export class LabelField {
       }
       files.sort((a, b) => b.lastChangeIndex - a.lastChangeIndex)
       for (const node of files.slice(0, fileBudget)) {
-        result.push({ nodeId: node.id, textureKey: node.name })
+        result.push({ nodeId: node.id, textureKey: labelTextFor(node, options.fileSizes) })
       }
     }
     return result
@@ -214,6 +223,12 @@ export function overlapsAny(rect: ScreenRect, placed: readonly ScreenRect[], gap
     }
   }
   return false
+}
+
+/** File label text, optionally with the host-reported size. */
+function labelTextFor(node: SimNode, showSize: boolean): string {
+  if (!showSize || !node.sizeKnown || node.sizeBytes <= 0) return node.name
+  return `${node.name} · ${formatBytes(node.sizeBytes)}`
 }
 
 function labelStyleFor(node: SimNode): {

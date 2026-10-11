@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { store } from '../state/store'
 import { formatDateTime, formatDuration } from '../timeline/schedule'
+import { formatBytes } from '../util/format'
 
 const hud = computed(() => store.hud)
 const stats = computed(() => store.timelineStats)
@@ -61,6 +62,7 @@ const subject = computed(() => hud.value?.commit?.subject ?? '—')
       <div v-for="change in hud.commit.changes.slice(0, 9)" :key="change.path + change.kind" class="change-row">
         <span class="chip" :class="change.kind">{{ changeKindLabel[change.kind] }}</span>
         <span class="path mono" :title="change.path">{{ change.path }}</span>
+        <span v-if="change.size !== undefined" class="size mono faint">{{ formatBytes(change.size) }}</span>
       </div>
       <div v-if="hud.commit.changes.length > 9" class="faint more">
         +{{ hud.commit.changes.length - 9 }} more files in this commit
@@ -87,6 +89,10 @@ const subject = computed(() => hud.value?.commit?.subject ?? '—')
       <div class="stat">
         <span class="stat-value">{{ (hud?.totalFiles ?? 0).toLocaleString() }}</span>
         <span class="stat-label">files in history</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">{{ formatBytes(hud?.totalBytes ?? 0) }}</span>
+        <span class="stat-label">tracked size</span>
       </div>
       <div class="stat">
         <span class="stat-value">{{ stats?.authors ?? 0 }}</span>
@@ -216,9 +222,14 @@ const subject = computed(() => hud.value?.commit?.subject ?? '—')
   font-size: 11.5px;
 }
 
+.size {
+  flex: none;
+  font-size: 10px;
+}
+
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   border-top: 1px solid var(--panel-border);
   padding-top: 9px;

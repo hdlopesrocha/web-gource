@@ -306,6 +306,9 @@ describe('PlaybackBar', () => {
       visibleFiles: 5,
       visibleDirs: 2,
       totalFiles: 12,
+      sizeMode: 'bytes',
+      filesWithSize: 8,
+      totalBytes: 4096,
       additions: 10,
       deletions: 2,
       fps: 60,
@@ -359,7 +362,7 @@ describe('panels', () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')
     await wrapper.findAll('.tabs button')[1].trigger('click')
-    expect(wrapper.text()).toContain('Automatic camera')
+    expect(wrapper.text()).toContain('Automatic view')
     await wrapper.findAll('.tabs button')[2].trigger('click')
     expect(wrapper.text()).toContain('Video export')
     await wrapper.findAll('.tabs button')[3].trigger('click')
@@ -398,11 +401,11 @@ describe('store', () => {
   it('resets run state without clearing settings', () => {
     store.warnings = ['something']
     store.hiddenAuthors = ['login:ada']
-    store.settings.autoRotate = false
+    store.settings.autoZoom = false
     resetRunState()
     expect(store.warnings).toHaveLength(0)
     expect(store.hiddenAuthors).toHaveLength(0)
-    expect(store.settings.autoRotate).toBe(false)
-    store.settings.autoRotate = true
+    expect(store.settings.autoZoom).toBe(false)
+    store.settings.autoZoom = true
   })
 })

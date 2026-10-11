@@ -68,6 +68,9 @@ export function backgroundColor(): THREE.Color {
   return new THREE.Color(0x05070e)
 }
 
-export function fogColor(): THREE.Color {
-  return new THREE.Color(0x070b16)
+/** Faint grid lines behind the tree. */
+export function gridColor(): THREE.Color {
+  return new THREE.Color(0x2a3c5e)
 }
+
+export const GRID_COLOR = new THREE.Color(0x2a3c5e)

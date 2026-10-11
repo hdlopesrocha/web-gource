@@ -22,19 +22,19 @@ const HIGHLIGHT_THRESHOLD = 0.92
 const scratchColor = new THREE.Color()
 
 /**
- * Instanced renderer for tree nodes.
+ * Instanced renderer for the 2D tree.
  *
- * One InstancedMesh holds every file (icosahedra) and one holds every directory
- * (octahedra). Node ids map to stable instance slots, so incremental updates
- * only touch the instances that changed and a full sync is only needed after a
- * seek. Dead nodes are hidden by scaling their matrix to zero.
+ * Files are flat discs and directories are rings, both on the XY plane facing
+ * the orthographic camera. Node ids map to stable instance slots, so
+ * incremental updates only touch the instances that changed and a full sync is
+ * only needed after a seek. Hidden nodes are collapsed to a zero scale.
  */
 export class NodeField {
   readonly group = new THREE.Group()
   private fileMesh: THREE.InstancedMesh
   private dirMesh: THREE.InstancedMesh
-  private fileGeometry: THREE.IcosahedronGeometry
-  private dirGeometry: THREE.OctahedronGeometry
+  private fileGeometry: THREE.BufferGeometry
+  private dirGeometry: THREE.BufferGeometry
   private fileMaterial: THREE.MeshBasicMaterial
   private dirMaterial: THREE.MeshBasicMaterial
   private fileCapacity: number
@@ -48,7 +48,7 @@ export class NodeField {
   private recent = new Map<number, RecentTouch>()
   private colorMode: FileColorMode
   private showDirs = true
-  private fileSizeScale = 1
+  private radiusScale = 1
   private matrix = new THREE.Matrix4()
   private position = new THREE.Vector3()
   private quaternion = new THREE.Quaternion()
@@ -61,14 +61,16 @@ export class NodeField {
     this.baseFileColors = new Float32Array(options.maxFiles * 3)
     this.baseDirColors = new Float32Array(options.maxDirs * 3)
 
-    this.fileGeometry = new THREE.IcosahedronGeometry(1, 0)
-    this.dirGeometry = new THREE.OctahedronGeometry(1, 0)
+    // Flat shapes: discs for files, rings for directories.
+    this.fileGeometry = new THREE.CircleGeometry(1, 24)
+    this.dirGeometry = new THREE.RingGeometry(0.58, 1, 26)
     this.fileMaterial = new THREE.MeshBasicMaterial({ toneMapped: false })
-    this.dirMaterial = new THREE.MeshBasicMaterial({ toneMapped: false })
+    this.dirMaterial = new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide })
 
     this.fileMesh = this.createMesh(this.fileGeometry, this.fileMaterial, this.fileCapacity)
     this.dirMesh = this.createMesh(this.dirGeometry, this.dirMaterial, this.dirCapacity)
-    this.dirMesh.renderOrder = 1
+    this.fileMesh.renderOrder = 2
+    this.dirMesh.renderOrder = 3
   }
 
   private createMesh(
@@ -95,8 +97,8 @@ export class NodeField {
     this.sync(nodes, true)
   }
 
-  setFileSizeScale(scale: number): void {
-    this.fileSizeScale = scale
+  setRadiusScale(scale: number): void {
+    this.radiusScale = scale
   }
 
   setDirsVisible(visible: boolean, nodes: readonly SimNode[]): void {
@@ -183,7 +185,6 @@ export class NodeField {
     replacement.instanceMatrix.array.set(mesh.instanceMatrix.array)
     replacement.instanceMatrix.needsUpdate = true
     if (mesh.instanceColor) {
-      // `instanceColor` is allocated lazily on the first setColorAt call.
       replacement.setColorAt(0, new THREE.Color(0, 0, 0))
       replacement.instanceColor?.array.set(mesh.instanceColor.array)
       if (replacement.instanceColor) replacement.instanceColor.needsUpdate = true
@@ -191,70 +192,56 @@ export class NodeField {
     this.group.remove(mesh)
     if (kind === 'file') {
       this.fileMesh = replacement
+      this.fileMesh.renderOrder = 2
       this.fileCapacity = next
       const colors = new Float32Array(next * 3)
       colors.set(this.baseFileColors)
       this.baseFileColors = colors
     } else {
       this.dirMesh = replacement
-      this.dirMesh.renderOrder = 1
+      this.dirMesh.renderOrder = 3
       this.dirCapacity = next
       const colors = new Float32Array(next * 3)
       colors.set(this.baseDirColors)
       this.baseDirColors = colors
     }
-    // The old InstancedMesh only owns its instance buffers; geometry and
-    // material are shared with the replacement, so nothing else is disposed.
     mesh.dispose()
   }
 
   private baseColorFor(node: SimNode): THREE.Color {
     if (this.colorMode === 'flat') return scratchColor.setRGB(0.85, 0.9, 1)
-    if (this.colorMode === 'activity') {
-      const kind = node.lastKind ?? 'modify'
-      return colorForChange(kind)
-    }
+    if (this.colorMode === 'activity') return colorForChange(node.lastKind ?? 'modify')
     return colorForExtension(extensionOf(node.path), scratchColor)
   }
 
   /** Write one node's transform, colour and visibility. */
   private writeNode(node: SimNode, updateColor: boolean): void {
     const isFile = node.kind === 'file'
-    // Incremental updates can introduce nodes that were never synced before.
     if (isFile) this.allocateFile(node)
     else this.allocateDir(node)
     const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
     if (instance === undefined) return
     const mesh = isFile ? this.fileMesh : this.dirMesh
 
-    this.position.set(node.position.x, node.position.y, node.position.z)
-    this.matrix.compose(this.position, this.quaternion, this.scale.set(0, 0, 0))
-    mesh.setMatrixAt(instance, this.matrix)
-
+    this.position.set(node.position.x, node.position.y, 0)
     if (!node.visible) {
+      this.matrix.compose(this.position, this.quaternion, this.scale.set(0, 0, 0))
+      mesh.setMatrixAt(instance, this.matrix)
       if (updateColor) {
         const base = isFile ? this.baseFileColors : this.baseDirColors
-        const r = base[instance * 3] * 0.16
-        const g = base[instance * 3 + 1] * 0.16
-        const b = base[instance * 3 + 2] * 0.16
-        this.setInstanceColor(mesh, instance, r, g, b)
+        this.setInstanceColor(mesh, instance, base[instance * 3] * 0.16, base[instance * 3 + 1] * 0.16, base[instance * 3 + 2] * 0.16)
       }
       return
     }
 
-    const growth = isFile ? 1 + Math.min(0.65, Math.log1p(node.changes) * 0.16) : 1
-    const radius = node.radius * growth * (isFile ? this.fileSizeScale : 1) * (this.showDirs || isFile ? 1 : 0)
-    this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, radius))
+    // The radius comes from the simulation: it encodes the file-size scale.
+    const radius = Math.max(0.02, node.radius * (isFile ? this.radiusScale : 1))
+    this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, 1))
     mesh.setMatrixAt(instance, this.matrix)
 
     if (updateColor) {
-      if (isFile) {
-        const base = this.baseFileColors
-        this.setInstanceColor(mesh, instance, base[instance * 3], base[instance * 3 + 1], base[instance * 3 + 2])
-      } else {
-        const base = this.baseDirColors
-        this.setInstanceColor(mesh, instance, base[instance * 3], base[instance * 3 + 1], base[instance * 3 + 2])
-      }
+      const base = isFile ? this.baseFileColors : this.baseDirColors
+      this.setInstanceColor(mesh, instance, base[instance * 3], base[instance * 3 + 1], base[instance * 3 + 2])
     }
   }
 
@@ -281,29 +268,25 @@ export class NodeField {
       }
       const total = Math.max(0.0001, touch.until - touch.start)
       const remaining = (touch.until - now) / total
+      const isFile = node.kind === 'file'
+      const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
+      if (instance === undefined) continue
+      const mesh = isFile ? this.fileMesh : this.dirMesh
       if (remaining <= 0) {
-        // Restore the base colour once the highlight has faded out.
-        const isFile = node.kind === 'file'
-        const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
-        if (instance !== undefined) {
-          const base = isFile ? this.baseFileColors : this.baseDirColors
-          this.setInstanceColor(isFile ? this.fileMesh : this.dirMesh, instance, base[instance * 3], base[instance * 3 + 1], base[instance * 3 + 2])
-          if (isFile) colorDirtyFiles = true
-          else colorDirtyDirs = true
-        }
+        const base = isFile ? this.baseFileColors : this.baseDirColors
+        this.setInstanceColor(mesh, instance, base[instance * 3], base[instance * 3 + 1], base[instance * 3 + 2])
+        if (isFile) colorDirtyFiles = true
+        else colorDirtyDirs = true
         this.recent.delete(nodeId)
         continue
       }
       const amount = Math.min(1, Math.max(0, remaining)) ** 0.7
-      const isFile = node.kind === 'file'
-      const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
-      if (instance === undefined) continue
       const base = isFile ? this.baseFileColors : this.baseDirColors
       const change = colorForChange(touch.kind)
       const r = base[instance * 3] + (change.r - base[instance * 3]) * amount * HIGHLIGHT_THRESHOLD
       const g = base[instance * 3 + 1] + (change.g - base[instance * 3 + 1]) * amount * HIGHLIGHT_THRESHOLD
       const b = base[instance * 3 + 2] + (change.b - base[instance * 3 + 2]) * amount * HIGHLIGHT_THRESHOLD
-      this.setInstanceColor(isFile ? this.fileMesh : this.dirMesh, instance, r, g, b)
+      this.setInstanceColor(mesh, instance, r, g, b)
       if (isFile) colorDirtyFiles = true
       else colorDirtyDirs = true
     }

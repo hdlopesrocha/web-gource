@@ -166,6 +166,8 @@ export class TimelineBuilder {
       commits,
       authors,
       authorById,
+      fileSizes: new Map<string, number>(),
+      sizesTruncated: false,
       warnings: [...this.warnings],
       truncated: this.truncated,
       stats: {
@@ -173,6 +175,10 @@ export class TimelineBuilder {
         authors: authors.length,
         files: this.filePaths.size,
         uniquePaths: { files: this.filePaths.size, dirs: this.dirPaths.size },
+        filesWithSize: 0,
+        totalBytes: 0,
+        largestFileBytes: 0,
+        sizeSource: 'unavailable',
         merges: commits.filter((commit) => commit.isMerge).length,
         withoutFileData: commits.filter((commit) => !commit.filesKnown).length,
         additions: commits.reduce((sum, commit) => sum + commit.additions, 0),
@@ -225,6 +231,10 @@ export interface BuildTimelineOptions {
   filter?: (commit: RawCommit) => boolean
   truncated?: boolean
   warnings?: string[]
+  /** Host-reported file sizes for this snapshot. */
+  fileSizes?: Map<string, number>
+  sizesTruncated?: boolean
+  sizeSource?: string
   /** Custom activity bucketing, e.g. based on a schedule in simulated time. */
   activity?: (commits: TimelineCommit[]) => ActivityBucket[]
 }
@@ -241,5 +251,29 @@ export function buildTimeline(repo: RepoInfo, commits: readonly RawCommit[], opt
   builder.addCommits(selected as RawCommit[])
   builder.markTruncated(Boolean(options.truncated))
   if (options.warnings) builder.addWarnings(options.warnings)
-  return builder.build(options.activity)
+  const timeline = builder.build(options.activity)
+  const fileSizes = options.fileSizes ?? new Map<string, number>()
+  timeline.fileSizes = fileSizes
+  timeline.sizesTruncated = Boolean(options.sizesTruncated)
+  timeline.stats.sizeSource = options.sizeSource ?? (fileSizes.size > 0 ? 'unknown' : 'unavailable')
+
+  // Size statistics only cover files that actually appear in the loaded window.
+  const touched = new Set<string>()
+  for (const commit of timeline.commits) {
+    for (const change of commit.changes) touched.add(change.path)
+  }
+  let filesWithSize = 0
+  let totalBytes = 0
+  let largestFileBytes = 0
+  for (const path of touched) {
+    const bytes = fileSizes.get(path)
+    if (bytes === undefined) continue
+    filesWithSize += 1
+    totalBytes += bytes
+    if (bytes > largestFileBytes) largestFileBytes = bytes
+  }
+  timeline.stats.filesWithSize = filesWithSize
+  timeline.stats.totalBytes = totalBytes
+  timeline.stats.largestFileBytes = largestFileBytes
+  return timeline
 }

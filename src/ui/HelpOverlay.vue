@@ -35,8 +35,21 @@ const shortcuts: { keys: string; action: string }[] = [
           </li>
         </ul>
         <p class="faint small">
-          Drag to orbit · right-drag or shift-drag to pan · scroll to zoom. Manual input pauses the automatic camera
-          for a few seconds.
+          The scene is flat: drag to pan, scroll to zoom (the point under the pointer stays anchored). Manual input
+          pauses the automatic view for a few seconds.
+        </p>
+      </section>
+
+      <section>
+        <h3>Circle sizes</h3>
+        <p class="muted small">
+          File circles grow with the file size. Sizes come from the host's own file listing for the newest commit in
+          the loaded window (GitHub: one recursive tree request), so they are real byte counts rather than estimates.
+          The scale is logarithmic against the 95th percentile, which keeps small files visible and stops a single
+          generated file from flattening the scale. Files the host does not report — and every file when sizes are
+          unavailable — fall back to line activity, and the Settings panel shows exactly how many circles use which.
+          The mapping can be switched to line activity or to uniform circles, and file labels show the size of the
+          files that were just changed.
         </p>
       </section>
 

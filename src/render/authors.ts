@@ -69,8 +69,11 @@ export class AuthorField {
     return slot
   }
 
-  /** Position the visible avatars, updating textures only when they change. */
-  sync(authors: readonly SimAuthor[]): void {
+  /**
+   * Position the visible avatars, updating textures only when they change.
+   * `minimumHeight` keeps them readable when the scene is zoomed far out.
+   */
+  sync(authors: readonly SimAuthor[], minimumHeight = 0): void {
     let index = 0
     for (const author of authors) {
       if (!author.visible) continue
@@ -92,13 +95,14 @@ export class AuthorField {
         slot.material.map = texture
         slot.material.needsUpdate = true
         const aspect = (texture.userData.aspect as number) ?? 1
-        const height = AVATAR_HEIGHT * this.options.scale
+        const height = Math.max(AVATAR_HEIGHT * this.options.scale, minimumHeight)
         slot.sprite.scale.set(height * aspect, height, 1)
       }
       if (!slot.material.map) continue
       slot.sprite.position.set(author.position.x, author.position.y + 2.5, author.position.z)
       slot.glow.position.copy(slot.sprite.position)
-      slot.glow.scale.setScalar(6.5 * this.options.scale)
+      const spriteHeight = slot.sprite.scale.y
+      slot.glow.scale.setScalar(Math.max(6.5 * this.options.scale, spriteHeight * 1.9))
       slot.sprite.visible = true
       slot.glow.visible = this.options.showGlow
       slot.sprite.material.opacity = author.lastKind === 'delete' ? 0.95 : 1

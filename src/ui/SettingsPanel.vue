@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { controller } from '../engine/controller'
 import { PACING_PRESETS, resolvePacing, store } from '../state/store'
-import { RESOLUTION_PRESETS, formatBytes } from '../engine/recorder'
+import { RESOLUTION_PRESETS } from '../engine/recorder'
 import { formatDuration } from '../timeline/schedule'
+import { formatBytes } from '../util/format'
+import { fileRadiusForActivity, fileRadiusForBytes } from '../sim/simulation'
 import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
@@ -20,6 +22,53 @@ const support = computed(() => controller.recordingSupport())
 const recording = computed(() => store.recording)
 const settings = computed(() => store.settings)
 const progress = computed(() => store.recording.progress)
+const sizeCoverage = computed(() => {
+  const stats = store.timelineStats
+  const known = stats?.filesWithSize ?? 0
+  const total = stats?.files ?? 0
+  return { known, total }
+})
+
+const sizeSourceLabel = computed(() => {
+  switch (store.timelineStats?.sizeSource) {
+    case 'git-tree':
+      return 'host file listing'
+    case 'synthetic':
+      return 'synthetic demo data'
+    case 'unavailable':
+      return 'unavailable'
+    default:
+      return store.timelineStats?.sizeSource ?? 'unknown'
+  }
+})
+
+const sizeTotalLabel = computed(() => formatBytes(store.timelineStats?.totalBytes ?? 0))
+const referenceBytes = computed(() => Math.max(1024, controller.sizeReference().bytes))
+
+/**
+ * Legend circles use the same logarithmic mapping as the renderer, scaled to a
+ * comfortable pixel range so the relative sizes are visible.
+ */
+const sizeLegend = computed(() => {
+  const reference = Math.max(1024, controller.sizeReference().bytes)
+  const samples = [1024, 16 * 1024, 256 * 1024, reference]
+  const unique = [...new Set(samples.map((value) => Math.min(value, reference)))].sort((a, b) => a - b)
+  const mode = store.settings.sizeMode
+  const activityReference = controller.sizeReference().activity
+  return unique.map((bytes) => {
+    const radius =
+      mode === 'bytes'
+        ? fileRadiusForBytes(bytes, reference)
+        : mode === 'activity'
+          ? fileRadiusForActivity(bytes / 40, activityReference)
+          : 0.34
+    return {
+      label: mode === 'bytes' ? formatBytes(bytes) : `${Math.round(bytes / 40)} lines`,
+      pixels: Math.round(Math.max(6, radius * 14 * store.settings.radiusScale)),
+    }
+  })
+})
+
 const pacingValues = computed(() =>
   resolvePacing(store.settings.pacing, {
     secondsPerDay: store.settings.customSecondsPerDay,
@@ -92,21 +141,53 @@ onMounted(() => {
         </section>
 
         <section class="group">
+          <h3>Circle sizes</h3>
+          <div class="field">
+            <label for="size-mode">Size circles by</label>
+            <select id="size-mode" :value="settings.sizeMode" @change="update({ sizeMode: ($event.target as HTMLSelectElement).value as typeof settings.sizeMode })">
+              <option value="bytes">File size (from the host)</option>
+              <option value="activity">Line activity (additions + deletions)</option>
+              <option value="uniform">Uniform (all the same)</option>
+            </select>
+          </div>
+          <div class="size-legend">
+            <div v-for="sample in sizeLegend" :key="sample.label" class="legend-item">
+              <span class="legend-circle" :style="{ width: `${sample.pixels}px`, height: `${sample.pixels}px` }" />
+              <span class="faint mono">{{ sample.label }}</span>
+            </div>
+          </div>
+          <p class="faint note">
+            <template v-if="settings.sizeMode === 'bytes'">
+              {{ sizeCoverage.known }} of {{ sizeCoverage.total }} file circles use a real file size
+              ({{ sizeSourceLabel }})<template v-if="sizeCoverage.total - sizeCoverage.known > 0">; the rest fall back to line
+              activity</template>. The scale is logarithmic against the 95th percentile
+              ({{ formatBytes(referenceBytes) }}), so one huge generated file cannot squash everything else. Sizes come
+              from the host's file listing for the newest commit in the window, so a file that shrank during the window
+              still shows its current size.
+            </template>
+            <template v-else-if="settings.sizeMode === 'activity'">
+              Circles are scaled by added + removed lines accumulated in the loaded window.
+            </template>
+            <template v-else>Every file circle has the same size.</template>
+          </p>
+          <div class="field">
+            <label>Circle scale · {{ settings.radiusScale.toFixed(2) }}×</label>
+            <input type="range" min="0.4" max="2.5" step="0.05" :value="settings.radiusScale" @input="update({ radiusScale: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+        </section>
+
+        <section class="group">
           <h3>Scene</h3>
-          <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Directory nodes</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Directory rings</label>
           <label class="switch"><input type="checkbox" :checked="settings.showEdges" @change="update({ showEdges: ($event.target as HTMLInputElement).checked })" /> Branch edges</label>
-          <label class="switch"><input type="checkbox" :checked="settings.showStars" @change="update({ showStars: ($event.target as HTMLInputElement).checked })" /> Background stars</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showGrid" @change="update({ showGrid: ($event.target as HTMLInputElement).checked })" /> Background grid</label>
           <div class="field">
             <label>Edge opacity · {{ settings.edgeOpacity.toFixed(2) }}</label>
             <input type="range" min="0.05" max="1" step="0.05" :value="settings.edgeOpacity" @input="update({ edgeOpacity: Number(($event.target as HTMLInputElement).value) })" />
           </div>
           <div class="field">
-            <label>File size · {{ settings.fileSize.toFixed(2) }}×</label>
-            <input type="range" min="0.4" max="2.5" step="0.05" :value="settings.fileSize" @input="update({ fileSize: Number(($event.target as HTMLInputElement).value) })" />
-          </div>
-          <div class="field">
-            <label>Fog density · {{ settings.fogDensity.toFixed(4) }}</label>
-            <input type="range" min="0" max="0.004" step="0.0001" :value="settings.fogDensity" @input="update({ fogDensity: Number(($event.target as HTMLInputElement).value) })" />
+            <label>Grid spacing · {{ settings.gridSpacing }} units</label>
+            <input type="range" min="10" max="120" step="5" :value="settings.gridSpacing" @input="update({ gridSpacing: Number(($event.target as HTMLInputElement).value) })" />
           </div>
           <div class="field">
             <label>Activity particles · {{ settings.particleIntensity.toFixed(2) }}×</label>
@@ -119,6 +200,7 @@ onMounted(() => {
           <label class="switch"><input type="checkbox" :checked="settings.showLabels" @change="update({ showLabels: ($event.target as HTMLInputElement).checked })" /> Show labels</label>
           <label class="switch"><input type="checkbox" :checked="settings.showDirectoryLabels" @change="update({ showDirectoryLabels: ($event.target as HTMLInputElement).checked })" /> Directory names</label>
           <label class="switch"><input type="checkbox" :checked="settings.showFileLabels" @change="update({ showFileLabels: ($event.target as HTMLInputElement).checked })" /> Recently changed files</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showFileSizes" @change="update({ showFileSizes: ($event.target as HTMLInputElement).checked })" /> File sizes in labels</label>
           <label class="switch"><input type="checkbox" :checked="settings.showAuthorNames" @change="update({ showAuthorNames: ($event.target as HTMLInputElement).checked })" /> Author names</label>
         </section>
 
@@ -134,11 +216,10 @@ onMounted(() => {
 
       <template v-else-if="tab === 'camera'">
         <section class="group">
-          <h3>Automatic camera</h3>
+          <h3>Automatic view</h3>
           <label class="switch"><input type="checkbox" :checked="settings.followActivity" @change="update({ followActivity: ($event.target as HTMLInputElement).checked })" /> Follow the most recent activity</label>
-          <label class="switch"><input type="checkbox" :checked="settings.autoRotate" @change="update({ autoRotate: ($event.target as HTMLInputElement).checked })" /> Slow orbit</label>
-          <label class="switch"><input type="checkbox" :checked="settings.autoZoom" @change="update({ autoZoom: ($event.target as HTMLInputElement).checked })" /> Adapt zoom to repository size</label>
-          <button class="btn small" type="button" @click="controller.resetCamera()">Reset camera (C)</button>
+          <label class="switch"><input type="checkbox" :checked="settings.autoZoom" @change="update({ autoZoom: ($event.target as HTMLInputElement).checked })" /> Fit the repository automatically</label>
+          <button class="btn small" type="button" @click="controller.resetCamera()">Reset view (C)</button>
         </section>
         <section class="group">
           <h3>Playback pacing</h3>
@@ -185,8 +266,8 @@ onMounted(() => {
         <section class="group">
           <h3>Navigation</h3>
           <p class="faint note">
-            Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · arrow keys to step through commits.
-            Manual control pauses the automatic camera for a few seconds.
+            The scene is flat: drag to pan, scroll to zoom (the pointer stays anchored), arrow keys step through
+            commits. Manual input pauses the automatic view for a few seconds.
           </p>
         </section>
       </template>
@@ -291,6 +372,8 @@ onMounted(() => {
             <li><span class="faint">Commits</span><span>{{ store.timelineStats?.commits.toLocaleString() ?? 0 }}</span></li>
             <li><span class="faint">Authors</span><span>{{ store.timelineStats?.authors ?? 0 }}</span></li>
             <li><span class="faint">Files touched</span><span>{{ store.timelineStats?.files.toLocaleString() ?? 0 }}</span></li>
+            <li><span class="faint">File sizes</span><span>{{ store.timelineStats?.filesWithSize.toLocaleString() ?? 0 }} files · {{ sizeTotalLabel }}</span></li>
+            <li><span class="faint">Size source</span><span>{{ sizeSourceLabel }}</span></li>
             <li><span class="faint">Merges</span><span>{{ store.timelineStats?.merges ?? 0 }}</span></li>
             <li><span class="faint">Without file data</span><span>{{ store.timelineStats?.withoutFileData ?? 0 }}</span></li>
             <li><span class="faint">Line changes</span><span>+{{ (store.timelineStats?.additions ?? 0).toLocaleString() }} / −{{ (store.timelineStats?.deletions ?? 0).toLocaleString() }}</span></li>
@@ -460,5 +543,27 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.size-legend {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 8px 4px 2px;
+}
+
+.legend-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+}
+
+.legend-circle {
+  display: block;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #cfe6ff, #4f9ede);
+  box-shadow: 0 0 10px rgba(94, 200, 255, 0.35);
 }
 </style>

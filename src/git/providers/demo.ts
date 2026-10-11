@@ -1,4 +1,4 @@
-import type { CommitPage, RawCommit, RepoInfo } from '../types'
+import type { CommitPage, FileSizeResult, RawCommit, RepoInfo } from '../types'
 import type { GitProvider, HydrateOptions, LoadPageOptions, ParsedRepoUrl } from './types'
 
 /**
@@ -108,6 +108,27 @@ export class DemoProvider implements GitProvider {
     // Simulate a little latency so the loading UI is exercised.
     await new Promise((resolve) => setTimeout(resolve, 60))
     return { commits, next, totalCount: total }
+  }
+
+  /**
+   * Synthetic file sizes: the demo has no real blobs, so it derives a stable
+   * size per path (clearly labelled `synthetic` in the UI).
+   */
+  async fetchFileSizes(repo: ParsedRepoUrl): Promise<FileSizeResult | null> {
+    const seed = this.options.seed ?? Number(repo.params?.seed ?? 1234)
+    const total = this.options.commits ?? 420
+    const sizes = new Map<string, number>()
+    for (let index = 0; index < total; index += 1) {
+      const commit = this.generateCommit(seed, index, total)
+      for (const file of commit.files ?? []) {
+        if (sizes.has(file.path)) continue
+        const rand = mulberry32(fnv1a(`${seed}:${file.path}`))
+        // Skewed distribution: most files small, a few large.
+        const bytes = Math.round(120 + Math.pow(rand(), 3) * 260_000 + rand() * 4_000)
+        sizes.set(file.path, bytes)
+      }
+    }
+    return { sizes, truncated: false, source: 'synthetic' }
   }
 
   /** The demo provider already generates complete commits, so this is a no-op. */

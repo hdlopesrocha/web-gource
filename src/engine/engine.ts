@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import type { ActivityBucket, Timeline, TimelineCommit, TimelineAuthor } from '../timeline/types'
 import { buildSchedule, type Schedule, type ScheduleOptions } from '../timeline/schedule'
-import { Simulation } from '../sim/simulation'
-import { CameraRig, type CameraOptions } from '../render/camera'
+import { Simulation, type SizeMode } from '../sim/simulation'
+import { Camera2D, type CameraOptions } from '../render/camera'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
 import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
@@ -17,7 +17,7 @@ export interface HudCommitInfo {
   filesKnown: boolean
   filesMissingReason?: string
   filesTruncated: boolean
-  changes: { path: string; kind: ChangeKind }[]
+  changes: { path: string; kind: ChangeKind; size?: number }[]
   additions: number
   deletions: number
   filesTotal?: number
@@ -48,6 +48,10 @@ export interface HudState {
   visibleFiles: number
   visibleDirs: number
   totalFiles: number
+  /** Size mode and how many circles use a host-reported size. */
+  sizeMode: SizeMode
+  filesWithSize: number
+  totalBytes: number
   additions: number
   deletions: number
   fps: number
@@ -65,9 +69,8 @@ export interface EngineOptions {
 
 export const DEFAULT_CAMERA_OPTIONS: CameraOptions = {
   followActivity: true,
-  autoRotate: true,
   autoZoom: true,
-  rotateSpeed: 0.05,
+  smoothing: 1.4,
 }
 
 /** HUD updates per second (kept low so Vue does not re-render every frame). */
@@ -83,7 +86,7 @@ const HUD_RATE = 8
  */
 export class Engine {
   readonly renderer: SceneRenderer
-  readonly rig: CameraRig
+  readonly rig: Camera2D
   private sim: Simulation
   private timeline: Timeline
   private schedule: Schedule
@@ -121,6 +124,7 @@ export class Engine {
     this.cameraOptions = { ...DEFAULT_CAMERA_OPTIONS, ...options.camera }
     this.sim = new Simulation(timeline.commits, timeline.authorById)
     this.sim.scheduleTime = (index) => this.scheduleTime(index)
+    this.sim.setFileSizes(timeline.fileSizes)
     this.sim.seek(-1)
 
     this.renderer = new SceneRenderer(canvas, {
@@ -129,7 +133,7 @@ export class Engine {
     })
     if (options.renderer) this.renderer.applySettings(options.renderer)
     this.renderer.setNodes(this.sim.nodes)
-    this.rig = new CameraRig(this.aspect)
+    this.rig = new Camera2D()
     this.rig.attach(canvas)
     this.renderer.requestFullSync()
 
@@ -139,7 +143,6 @@ export class Engine {
     }
 
     this.resize()
-    this.renderer.updateEffectScale(this.rig.camera)
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(() => this.resize())
       this.resizeObserver.observe(container)
@@ -153,10 +156,6 @@ export class Engine {
 
   private handleWindowResize = () => this.resize()
 
-  private get aspect(): number {
-    const rect = this.container.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0 ? rect.width / rect.height : 16 / 9
-  }
   /* ------------------------------------------------------------------ *
    * Timeline management
    * ------------------------------------------------------------------ */
@@ -184,7 +183,19 @@ export class Engine {
     this.schedule = buildSchedule(timeline.commits, this.schedule.options, this.schedule)
     this.sim.setCommits(timeline.commits, timeline.authorById)
     this.sim.scheduleTime = (index) => this.scheduleTime(index)
+    // Host-reported sizes usually arrive with the first batch and cover files
+    // that appear later, so they are applied on every extension.
+    this.sim.setFileSizes(timeline.fileSizes)
     this.renderer.setNodes(this.sim.nodes)
+    this.emitHud(true)
+  }
+
+  /** Attach file sizes that arrived after the timeline was built. */
+  extendSizes(sizes: Map<string, number>): void {
+    if (sizes.size === 0) return
+    this.timeline.fileSizes = sizes
+    this.sim.setFileSizes(sizes)
+    this.renderer.requestFullSync()
     this.emitHud(true)
   }
 
@@ -195,6 +206,8 @@ export class Engine {
     this.schedule = buildSchedule(timeline.commits, this.schedule.options)
     this.sim = new Simulation(timeline.commits, timeline.authorById)
     this.sim.scheduleTime = (index) => this.scheduleTime(index)
+    this.sim.setSizeMode(this.sizeMode)
+    this.sim.setFileSizes(timeline.fileSizes)
     this.renderer.setNodes(this.sim.nodes)
     const target = options.keepPosition ? ratio * this.schedule.duration : 0
     if (options.frameCamera) this.rig.frame(this.sim.bounds(), true)
@@ -342,6 +355,30 @@ export class Engine {
     this.cameraOptions = { ...this.cameraOptions, ...options }
   }
 
+  /** How file circles are sized (bytes / activity / uniform). */
+  private sizeMode: SizeMode = 'bytes'
+
+  setSizeMode(mode: SizeMode): void {
+    this.sizeMode = mode
+    this.sim.setSizeMode(mode)
+    this.renderer.requestFullSync()
+    this.emitHud(true)
+  }
+
+  get currentSizeMode(): SizeMode {
+    return this.sizeMode
+  }
+
+  /** Reference values for the size legend in the UI. */
+  sizeReference(): { bytes: number; activity: number; mode: SizeMode } {
+    return this.sim.sizeReference
+  }
+
+  /** How many file circles use a host-reported size. */
+  sizeCoverage(): { known: number; total: number; bytes: number } {
+    return this.sim.sizeCoverage()
+  }
+
   setScheduleOptions(options: Partial<ScheduleOptions>): void {
     const ratio = this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0
     this.schedule = buildSchedule(this.timeline.commits, options)
@@ -382,7 +419,7 @@ export class Engine {
   /** Render a single frame without advancing time (used for still captures). */
   renderOnce(): void {
     this.renderer.consumeEvents(this.sim, performance.now() * 0.001)
-    this.renderer.update(0, performance.now() * 0.001, this.sim, this.rig.camera)
+    this.renderer.update(0, performance.now() * 0.001, this.sim, this.rig)
     this.renderer.render(this.rig.camera)
   }
 
@@ -420,7 +457,7 @@ export class Engine {
     this.rig.update(simDt, this.cameraOptions, focus, bounds)
 
     this.renderer.consumeEvents(this.sim, clock)
-    this.renderer.update(simDt, clock, this.sim, this.rig.camera)
+    this.renderer.update(simDt, clock, this.sim, this.rig)
     this.renderer.render(this.rig.camera)
 
     // FPS tracking for the HUD.
@@ -492,6 +529,9 @@ export class Engine {
       visibleFiles: stats.visibleFiles,
       visibleDirs: stats.dirs,
       totalFiles: stats.files,
+      sizeMode: this.sizeMode,
+      filesWithSize: this.timeline.stats.filesWithSize,
+      totalBytes: this.timeline.stats.totalBytes,
       additions: stats.additions,
       deletions: stats.deletions,
       fps: Math.round(this.fps),
@@ -519,7 +559,12 @@ export class Engine {
       filesKnown: commit.filesKnown,
       filesMissingReason: commit.filesMissingReason,
       filesTruncated: commit.filesTruncated,
-      changes: commit.changes.slice(0, 40).map((change) => ({ path: change.path, kind: change.kind })),
+      changes: commit.changes.slice(0, 40).map((change) => {
+        const size = this.timeline.fileSizes.get(change.path)
+        return size === undefined
+          ? { path: change.path, kind: change.kind }
+          : { path: change.path, kind: change.kind, size }
+      }),
       additions: commit.additions,
       deletions: commit.deletions,
       filesTotal: commit.filesTotal,
@@ -557,15 +602,13 @@ export class Engine {
     const height = Math.max(1, rect.height)
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     this.renderer.resize(width, height, dpr)
-    this.rig.setAspect(width / height)
-    this.renderer.updateEffectScale(this.rig.camera)
+    this.rig.setViewport(width, height)
   }
 
   /** Resize to an explicit resolution (used while recording a fixed size). */
   resizeTo(width: number, height: number): void {
     this.renderer.resize(width, height, 1)
-    this.rig.setAspect(width / height)
-    this.renderer.updateEffectScale(this.rig.camera)
+    this.rig.setViewport(width, height)
     this.canvas.style.aspectRatio = `${width} / ${height}`
   }
 

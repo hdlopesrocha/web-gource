@@ -12,7 +12,7 @@ export interface MinimapOptions {
  * Top-down 2D overview of the repository tree plus the camera frustum.
  *
  * Drawn on a small canvas: directories and files as dots (coloured by the same
- * palette as the 3D scene), authors as bright rings, and the current camera
+ * palette as the main view), authors as bright rings, and the current view
  * target as a crosshair. Updated at a low rate since it is a navigation aid.
  */
 export class Minimap {
@@ -20,7 +20,7 @@ export class Minimap {
   private canvas: HTMLCanvasElement
   private dpr = 1
   private extent = 60
-  private lastCenter = { x: 0, z: 0 }
+  private lastCenter = { x: 0, y: 0 }
 
   constructor(canvas: HTMLCanvasElement, private readonly options: MinimapOptions) {
     this.canvas = canvas
@@ -38,8 +38,8 @@ export class Minimap {
     this.canvas.style.height = `${size}px`
   }
 
-  /** Render one frame. `camera` is the 3D camera target/position. */
-  render(sim: Simulation, cameraTarget: { x: number; y: number; z: number }): void {
+  /** Render one frame. `cameraTarget` is the centre of the 2D view. */
+  render(sim: Simulation, cameraTarget: { x: number; y: number; z?: number }): void {
     const ctx = this.ctx
     const size = this.canvas.width
     const half = size / 2
@@ -49,7 +49,7 @@ export class Minimap {
     const targetExtent = Math.max(24, bounds.radius * 1.15)
     this.extent += (targetExtent - this.extent) * 0.08
     this.lastCenter.x += (bounds.center.x - this.lastCenter.x) * 0.08
-    this.lastCenter.z += (bounds.center.z - this.lastCenter.z) * 0.08
+    this.lastCenter.y += (bounds.center.y - this.lastCenter.y) * 0.08
     const scale = half / this.extent
 
     ctx.clearRect(0, 0, size, size)
@@ -57,7 +57,8 @@ export class Minimap {
     ctx.fillRect(0, 0, size, size)
 
     const toX = (x: number) => half + (x - this.lastCenter.x) * scale
-    const toY = (z: number) => half + (z - this.lastCenter.z) * scale
+    // Screen Y grows downwards, world Y upwards.
+    const toY = (y: number) => half - (y - this.lastCenter.y) * scale
 
     // Tree dots.
     const nodes = sim.nodes
@@ -65,7 +66,7 @@ export class Minimap {
       if (!node.visible) continue
       if (node.kind === 'root') continue
       const x = toX(node.position.x)
-      const y = toY(node.position.z)
+      const y = toY(node.position.y)
       if (x < -4 || y < -4 || x > size + 4 || y > size + 4) continue
       if (node.kind === 'dir') {
         ctx.fillStyle = 'rgba(120,170,235,0.5)'
@@ -84,7 +85,7 @@ export class Minimap {
       for (const author of sim.authors) {
         if (!author.visible) continue
         ctx.beginPath()
-        ctx.arc(toX(author.position.x), toY(author.position.z), 3 * this.dpr, 0, Math.PI * 2)
+        ctx.arc(toX(author.position.x), toY(author.position.y), 3 * this.dpr, 0, Math.PI * 2)
         ctx.fillStyle = 'rgba(255,255,255,0.9)'
         ctx.fill()
       }
@@ -93,7 +94,7 @@ export class Minimap {
     // Camera target crosshair.
     if (this.options.showCamera) {
       const x = toX(cameraTarget.x)
-      const y = toY(cameraTarget.z)
+      const y = toY(cameraTarget.y)
       ctx.strokeStyle = 'rgba(255,255,255,0.55)'
       ctx.lineWidth = 1 * this.dpr
       ctx.beginPath()

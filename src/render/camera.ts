@@ -1,71 +1,102 @@
 import * as THREE from 'three'
 
 export interface CameraOptions {
-  /** Keep the focus point centred on recent activity. */
+  /** Keep the centre of interest on recent activity. */
   followActivity: boolean
-  /** Slowly orbit around the focus point. */
-  autoRotate: boolean
-  /** Adapt the distance to the size of the repository. */
+  /** Adapt the zoom to the size of the repository. */
   autoZoom: boolean
-  /** Radians per second for the automatic orbit. */
-  rotateSpeed: number
+  /** Seconds of smoothing for automatic panning. */
+  smoothing: number
 }
 
 export interface CameraBounds {
-  center: { x: number; y: number; z: number }
+  center: { x: number; y: number; z?: number }
   radius: number
 }
 
-const MIN_PHI = 0.18
-const MAX_PHI = Math.PI - 0.18
-const MIN_DISTANCE = 4
-const MAX_DISTANCE = 1400
 /** Seconds after a manual interaction during which automatic motion pauses. */
-const INTERACTION_GRACE = 6
+const INTERACTION_GRACE = 5
+/** Visible world height at zoom 1, in world units. */
+const BASE_VIEW_HEIGHT = 220
+const MIN_ZOOM = 0.15
+const MAX_ZOOM = 14
 
 /**
- * Orbit camera with Gource-like automatic behaviour and manual override.
+ * Flat, orthographic camera for the 2D scene.
  *
- * Automatic mode keeps the interesting part of the tree in frame: the focus
- * point follows recent activity, the distance adapts to the repository size and
- * the camera slowly orbits. Dragging, pinching or scrolling takes over
- * immediately and hands control back after a few idle seconds.
+ * Dragging pans, the wheel zooms around the pointer, and in automatic mode the
+ * view follows the centre of recent activity and fits the repository. There is
+ * no rotation or perspective: everything stays on the XY plane.
  */
-export class CameraRig {
-  readonly camera: THREE.PerspectiveCamera
-  private target = new THREE.Vector3()
-  private desiredTarget = new THREE.Vector3()
-  private distance = 60
-  private desiredDistance = 60
-  private theta = Math.PI * 0.25
-  private desiredTheta = Math.PI * 0.25
-  private phi = Math.PI * 0.38
-  private desiredPhi = Math.PI * 0.38
+export class Camera2D {
+  readonly camera: THREE.OrthographicCamera
+  /** Centre of the view in world coordinates. */
+  private center = new THREE.Vector2(0, 0)
+  private desiredCenter = new THREE.Vector2(0, 0)
+  private zoom = 1
+  private desiredZoom = 1
   private interactionUntil = 0
-  private dragging: 'rotate' | 'pan' | null = null
+  private dragging = false
   private lastPointer = { x: 0, y: 0 }
-  private panOffset = new THREE.Vector3()
+  private viewport = { width: 1, height: 1 }
   private disposers: (() => void)[] = []
 
-  constructor(aspect = 16 / 9) {
-    this.camera = new THREE.PerspectiveCamera(52, aspect, 0.35, 26000)
-    this.camera.position.set(0, 30, 80)
+  constructor() {
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100)
+    this.camera.position.set(0, 0, 10)
     this.camera.lookAt(0, 0, 0)
+    this.setViewport(16, 9)
   }
 
   get isUserControlling(): boolean {
-    return performance.now() * 0.001 < this.interactionUntil || this.dragging !== null
+    return performance.now() * 0.001 < this.interactionUntil || this.dragging
   }
 
-  get currentDistance(): number {
-    return this.distance
+  /** Visible world height, in world units. */
+  get viewHeight(): number {
+    return BASE_VIEW_HEIGHT / this.zoom
+  }
+
+  /** World units per device pixel (used for constant-size effects and text). */
+  worldPerPixel(viewportHeightPixels: number): number {
+    return this.viewHeight / Math.max(1, viewportHeightPixels)
+  }
+
+  /** Centre of the view (the point labels and the minimap focus on). */
+  get focusPoint(): THREE.Vector3 {
+    return new THREE.Vector3(this.center.x, this.center.y, 0)
+  }
+
+  get center2D(): { x: number; y: number } {
+    return { x: this.center.x, y: this.center.y }
+  }
+
+  get currentZoom(): number {
+    return this.zoom
+  }
+
+  setViewport(width: number, height: number): void {
+    this.viewport = { width: Math.max(1, width), height: Math.max(1, height) }
+    this.applyFrustum()
+  }
+
+  private applyFrustum(): void {
+    const aspect = this.viewport.width / this.viewport.height
+    const halfHeight = this.viewHeight / 2
+    const halfWidth = halfHeight * aspect
+    this.camera.left = this.center.x - halfWidth
+    this.camera.right = this.center.x + halfWidth
+    this.camera.top = this.center.y + halfHeight
+    this.camera.bottom = this.center.y - halfHeight
+    this.camera.position.set(this.center.x, this.center.y, 10)
+    this.camera.updateProjectionMatrix()
   }
 
   attach(element: HTMLElement): void {
     const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0 && event.button !== 2) return
+      if (event.button !== 0 && event.button !== 1 && event.button !== 2) return
       this.markInteraction()
-      this.dragging = event.button === 2 || event.shiftKey ? 'pan' : 'rotate'
+      this.dragging = true
       this.lastPointer = { x: event.clientX, y: event.clientY }
       element.setPointerCapture?.(event.pointerId)
       event.preventDefault()
@@ -76,28 +107,30 @@ export class CameraRig {
       const dy = event.clientY - this.lastPointer.y
       this.lastPointer = { x: event.clientX, y: event.clientY }
       this.markInteraction()
-      if (this.dragging === 'rotate') {
-        this.desiredTheta -= dx * 0.005
-        this.desiredPhi = clamp(this.desiredPhi - dy * 0.005, MIN_PHI, MAX_PHI)
-        this.desiredTheta -= 0
-      } else {
-        const scale = this.distance * 0.0016
-        const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0)
-        const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1)
-        this.panOffset.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale)
-        this.desiredTarget.copy(this.target).add(this.panOffset)
-      }
+      const scale = this.worldPerPixel(this.viewport.height)
+      // Drag the world with the pointer.
+      this.desiredCenter.x -= dx * scale
+      this.desiredCenter.y += dy * scale
     }
     const onPointerUp = (event: PointerEvent) => {
       if (!this.dragging) return
-      this.dragging = null
+      this.dragging = false
       element.releasePointerCapture?.(event.pointerId)
     }
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       this.markInteraction()
-      const factor = Math.exp(event.deltaY * 0.0012)
-      this.desiredDistance = clamp(this.desiredDistance * factor, MIN_DISTANCE, MAX_DISTANCE)
+      const rect = element.getBoundingClientRect()
+      const pointerX = event.clientX - rect.left
+      const pointerY = event.clientY - rect.top
+      // World position under the pointer, kept fixed while zooming.
+      const before = this.screenToWorld(pointerX, pointerY, rect.width, rect.height)
+      const factor = Math.exp(-event.deltaY * 0.0015)
+      this.desiredZoom = clamp(this.desiredZoom * factor, MIN_ZOOM, MAX_ZOOM)
+      // Solve for the centre that keeps `before` under the pointer.
+      const scale = BASE_VIEW_HEIGHT / this.desiredZoom / Math.max(1, rect.height)
+      this.desiredCenter.x = before.x - (pointerX - rect.width / 2) * scale
+      this.desiredCenter.y = before.y + (pointerY - rect.height / 2) * scale
     }
     const onContextMenu = (event: MouseEvent) => event.preventDefault()
 
@@ -115,102 +148,82 @@ export class CameraRig {
     })
   }
 
+  /** Convert a screen position (CSS pixels inside the canvas) to world space. */
+  private screenToWorld(screenX: number, screenY: number, width: number, height: number): { x: number; y: number } {
+    const scale = this.viewHeight / Math.max(1, height)
+    return {
+      x: this.center.x + (screenX - width / 2) * scale,
+      y: this.center.y - (screenY - height / 2) * scale,
+    }
+  }
+
   private markInteraction(): void {
     this.interactionUntil = performance.now() * 0.001 + INTERACTION_GRACE
   }
 
-  /** Zoom/(de)rotate programmatically (keyboard shortcuts). */
-  nudge(delta: { theta?: number; phi?: number; distance?: number; panX?: number; panY?: number }): void {
+  /** Programmatic pan/zoom (keyboard shortcuts). */
+  nudge(delta: { panX?: number; panY?: number; zoom?: number }): void {
     this.markInteraction()
-    if (delta.theta) this.desiredTheta += delta.theta
-    if (delta.phi) this.desiredPhi = clamp(this.desiredPhi + delta.phi, MIN_PHI, MAX_PHI)
-    if (delta.distance) this.desiredDistance = clamp(this.desiredDistance * delta.distance, MIN_DISTANCE, MAX_DISTANCE)
-    if (delta.panX || delta.panY) {
-      const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0)
-      const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1)
-      this.panOffset
-        .addScaledVector(right, delta.panX ?? 0)
-        .addScaledVector(up, delta.panY ?? 0)
-      this.desiredTarget.copy(this.target).add(this.panOffset)
+    if (delta.panX) this.desiredCenter.x += delta.panX
+    if (delta.panY) this.desiredCenter.y += delta.panY
+    if (delta.zoom) this.desiredZoom = clamp(this.desiredZoom * delta.zoom, MIN_ZOOM, MAX_ZOOM)
+  }
+
+  /** Fit the given bounds, immediately or with smoothing. */
+  frame(bounds: CameraBounds, immediate = true): void {
+    const zoom = this.zoomForRadius(bounds.radius)
+    this.desiredCenter.set(bounds.center.x, bounds.center.y)
+    this.desiredZoom = zoom
+    if (immediate) {
+      this.center.copy(this.desiredCenter)
+      this.zoom = zoom
+      this.applyFrustum()
     }
   }
 
-  /** Reset the manual pan offset and re-centre on the repository. */
+  /** Reset pan/zoom and let the automatic behaviour take over. */
   recenter(bounds: CameraBounds): void {
-    this.panOffset.set(0, 0, 0)
-    this.desiredTarget.set(bounds.center.x, bounds.center.y, bounds.center.z)
-    this.desiredDistance = clamp(bounds.radius * 1.9, 26, MAX_DISTANCE)
-    this.markInteraction()
+    this.frame(bounds, false)
     this.interactionUntil = 0
   }
 
-  /** Frame the repository immediately (used when a repository is loaded). */
-  frame(bounds: CameraBounds, immediate = true): void {
-    this.target.set(bounds.center.x, bounds.center.y, bounds.center.z)
-    this.desiredTarget.copy(this.target)
-    const distance = clamp(bounds.radius * 2.2, 30, MAX_DISTANCE)
-    this.desiredDistance = distance
-    if (immediate) {
-      this.distance = distance
-      this.theta = this.desiredTheta = Math.PI * 0.25
-      this.phi = this.desiredPhi = Math.PI * 0.4
-    }
+  private zoomForRadius(radius: number): number {
+    const aspect = this.viewport.width / this.viewport.height
+    // Fit a square of side 2*radius in the smaller viewport dimension.
+    const neededHeight = radius * 2
+    const neededWidth = radius * 2 * (aspect < 1 ? 1 / Math.max(0.2, aspect) : 1)
+    const height = Math.max(neededHeight, neededWidth / Math.max(0.2, aspect))
+    return clamp(BASE_VIEW_HEIGHT / Math.max(20, height), MIN_ZOOM, MAX_ZOOM)
   }
 
-  update(
-    dt: number,
-    options: CameraOptions,
-    focus: { x: number; y: number; z: number } | null,
-    bounds: CameraBounds,
-  ): void {
+  update(dt: number, options: CameraOptions, focus: { x: number; y: number } | null, bounds: CameraBounds): void {
     const manual = this.isUserControlling
 
     if (!manual) {
-      if (options.followActivity && focus) {
-        this.desiredTarget.set(
-          focus.x * 0.75 + bounds.center.x * 0.25,
-          focus.y * 0.75 + bounds.center.y * 0.25,
-          focus.z * 0.75 + bounds.center.z * 0.25,
+      // When the whole repository already fits comfortably there is nothing to
+      // follow: keep it centred instead of drifting towards activity.
+      const wholeTreeFits = bounds.radius * 2 < this.viewHeight * 0.55
+      if (options.followActivity && focus && !wholeTreeFits) {
+        // Ease towards activity but keep some of the whole-repository context.
+        this.desiredCenter.set(
+          focus.x * 0.8 + bounds.center.x * 0.2,
+          focus.y * 0.8 + bounds.center.y * 0.2,
         )
-        this.panOffset.set(0, 0, 0)
       } else {
-        this.desiredTarget.set(bounds.center.x, bounds.center.y, bounds.center.z).add(this.panOffset)
+        this.desiredCenter.set(bounds.center.x, bounds.center.y)
       }
-      if (options.autoZoom) {
-        const target = options.followActivity && focus
-          ? clamp(bounds.radius * 1.05, 30, 260)
-          : clamp(bounds.radius * 1.9, 30, MAX_DISTANCE)
-        this.desiredDistance = target
-      }
-      if (options.autoRotate) this.desiredTheta += options.rotateSpeed * dt
+      if (options.autoZoom) this.desiredZoom = this.zoomForRadius(bounds.radius)
     }
 
-    const targetDamping = 1 - Math.exp(-dt * 1.1)
-    const distanceDamping = 1 - Math.exp(-dt * 0.85)
-    const rotateDamping = 1 - Math.exp(-dt * 6)
-
-    this.target.lerp(this.desiredTarget, this.dragging === 'pan' ? 1 - Math.exp(-dt * 14) : targetDamping)
-    this.distance += (this.desiredDistance - this.distance) * distanceDamping
-    this.theta += (this.desiredTheta - this.theta) * rotateDamping
-    this.phi += (this.desiredPhi - this.phi) * rotateDamping
-
-    const sinPhi = Math.sin(this.phi)
-    this.camera.position.set(
-      this.target.x + this.distance * sinPhi * Math.cos(this.theta),
-      this.target.y + this.distance * Math.cos(this.phi),
-      this.target.z + this.distance * sinPhi * Math.sin(this.theta),
-    )
-    this.camera.lookAt(this.target)
-  }
-
-  setAspect(aspect: number): void {
-    this.camera.aspect = aspect
-    this.camera.updateProjectionMatrix()
-  }
-
-  /** World position of the camera target (used for label priority). */
-  get focusPoint(): THREE.Vector3 {
-    return this.target
+    const damping = 1 - Math.exp(-dt * Math.max(0.2, options.smoothing))
+    if (this.dragging) {
+      this.center.copy(this.desiredCenter)
+      this.zoom += (this.desiredZoom - this.zoom) * (1 - Math.exp(-dt * 12))
+    } else {
+      this.center.lerp(this.desiredCenter, damping)
+      this.zoom += (this.desiredZoom - this.zoom) * (1 - Math.exp(-dt * 1.6))
+    }
+    this.applyFrustum()
   }
 
   dispose(): void {

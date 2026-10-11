@@ -275,3 +275,44 @@ describe('parseLastPage', () => {
     expect(parseLastPage('<https://api.github.com/x>; rel="next"')).toBeUndefined()
   })
 })
+
+describe('GitHubProvider file sizes', () => {
+  it('reads blob sizes from the recursive tree in a single request', async () => {
+    const { resolved, mock } = setup(simpleCommits, {
+      treeSizes: {
+        'src/renderer.ts': 4096,
+        'README.md': 512,
+        'src/index.ts': 20_000,
+      },
+    })
+    const provider = new GitHubProvider()
+    const result = await provider.fetchFileSizes(resolved.parsed, { ref: 'b'.repeat(40) })
+    expect(result).not.toBeNull()
+    expect(result?.source).toBe('git-tree')
+    expect(result?.truncated).toBe(false)
+    expect(result?.sizes.get('src/renderer.ts')).toBe(4096)
+    expect(result?.sizes.size).toBe(3)
+    // One request for the whole tree.
+    expect(mock.requests.filter((request) => request.url.includes('/git/trees/'))).toHaveLength(1)
+  })
+
+  it('flags a truncated tree and returns null when the host has no sizes', async () => {
+    const truncated = setup(simpleCommits, { treeSizes: { 'a.ts': 10 }, treeTruncated: true })
+    const provider = new GitHubProvider()
+    const result = await provider.fetchFileSizes(truncated.resolved.parsed, { ref: 'b'.repeat(40) })
+    expect(result?.truncated).toBe(true)
+
+    const unavailable = setup(simpleCommits)
+    const missing = await provider.fetchFileSizes(unavailable.resolved.parsed, { ref: 'b'.repeat(40) })
+    expect(missing).toBeNull()
+  })
+
+  it('caches sizes per ref and needs a ref to work', async () => {
+    const { resolved, mock } = setup(simpleCommits, { treeSizes: { 'a.ts': 10 } })
+    const provider = new GitHubProvider()
+    expect(await provider.fetchFileSizes(resolved.parsed, {})).toBeNull()
+    await provider.fetchFileSizes(resolved.parsed, { ref: 'sha-1' })
+    await provider.fetchFileSizes(resolved.parsed, { ref: 'sha-1' })
+    expect(mock.requests.filter((request) => request.url.includes('/git/trees/'))).toHaveLength(1)
+  })
+})

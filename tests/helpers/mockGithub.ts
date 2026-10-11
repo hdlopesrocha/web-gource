@@ -32,6 +32,10 @@ export interface MockGithubOptions {
   repo?: string
   /** Commits newest first, as GitHub returns them. */
   commits: MockCommit[]
+  /** Blob sizes returned by the recursive tree endpoint (path → bytes). */
+  treeSizes?: Record<string, number>
+  /** Mark the tree listing as truncated (very large repositories). */
+  treeTruncated?: boolean
   /** Remaining anonymous quota reported on every response. */
   rateRemaining?: number
   rateLimit?: number
@@ -130,6 +134,19 @@ export function createMockGithub(options: MockGithubOptions): MockApi {
         200,
         rateHeaders(),
       )
+    }
+
+    // Recursive tree (file sizes)
+    const treeMatch = new RegExp(`^/repos/${owner}/${repo}/git/trees/(.+)$`).exec(path)
+    if (treeMatch) {
+      if (!options.treeSizes) return json({ message: 'Not Found' }, 404, rateHeaders())
+      const tree = Object.entries(options.treeSizes).map(([entryPath, size]) => ({
+        path: entryPath,
+        mode: '100644',
+        type: 'blob',
+        size,
+      }))
+      return json({ sha: treeMatch[1], truncated: Boolean(options.treeTruncated), tree }, 200, rateHeaders())
     }
 
     // Commit detail

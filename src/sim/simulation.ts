@@ -23,8 +23,14 @@ export interface SimNode {
   parent: number
   children: number[]
   position: Vec3
-  /** Visual radius scale. */
+  /** Visual radius in world units (derived from the size mode). */
   radius: number
+  /** File size in bytes as reported by the host (0 when unknown). */
+  sizeBytes: number
+  /** True when `sizeBytes` came from the host instead of being estimated. */
+  sizeKnown: boolean
+  /** Accumulated added + removed lines (the fallback size proxy). */
+  activity: number
   /** Timeline index of the first appearance. */
   bornIndex: number
   /** Index and kind of the most recent change to this node. */
@@ -75,6 +81,14 @@ export interface SimulationStats {
   deletions: number
 }
 
+/**
+ * How file circles are sized.
+ *  - `bytes`    : real file size from the host (falls back to line activity)
+ *  - `activity` : accumulated added + removed lines
+ *  - `uniform`  : every file the same size
+ */
+export type SizeMode = 'bytes' | 'activity' | 'uniform'
+
 export interface SimulationOptions {
   /** Seconds of inactivity before an avatar fades out. */
   idleTimeout: number
@@ -117,6 +131,14 @@ export class Simulation {
   private visibleFiles = 0
   private totalAdditions = 0
   private totalDeletions = 0
+  private sizeMode: SizeMode = 'bytes'
+  /** Largest file size seen (bytes) and largest line activity, for scaling. */
+  private maxBytes = 0
+  private maxActivity = 0
+  /** Host-reported sizes for the whole snapshot (path → bytes). */
+  private fileSizes = new Map<string, number>()
+  /** Reference size for the circle scale (95th percentile of the snapshot). */
+  private sizeReferenceBytes = 1024
   private activitySamples: { position: Vec3; time: number }[] = []
   private time = 0
 
@@ -185,6 +207,8 @@ export class Simulation {
     this.visibleFiles = 0
     this.totalAdditions = 0
     this.totalDeletions = 0
+    this.maxBytes = 0
+    this.maxActivity = 0
     this.activitySamples = []
     this.time = 0
     this.maxAppliedIndex = -1
@@ -200,6 +224,9 @@ export class Simulation {
       children: [],
       position: { ...ORIGIN },
       radius: LAYOUT.dirRadius * LAYOUT.rootRadius,
+      sizeBytes: 0,
+      sizeKnown: false,
+      activity: 0,
       bornIndex: 0,
       lastChangeIndex: -1,
       lastKind: null,
@@ -211,6 +238,116 @@ export class Simulation {
     this.nodeList.push(root)
     this.nodeByPath.set('', root)
     this.firstToggle[0] = 0
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Sizing
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Radius of a file circle.
+   *
+   * The mapping is logarithmic so that a few huge files do not flatten the
+   * scale of everything else; it is documented in the UI legend.
+   */
+  private fileRadiusFor(sizeBytes: number, activity: number, sizeKnown: boolean): number {
+    if (this.sizeMode === 'uniform') return LAYOUT.fileRadius
+    if (this.sizeMode === 'bytes' && sizeKnown && sizeBytes > 0) {
+      return fileRadiusForBytes(sizeBytes, this.sizeReferenceBytes)
+    }
+    // Unknown sizes (or activity mode): fall back to line activity.
+    return fileRadiusForActivity(activity, Math.max(8, this.maxActivity))
+  }
+
+  /** Switch how file circles are sized and rewrite every radius. */
+  setSizeMode(mode: SizeMode): void {
+    if (mode === this.sizeMode) return
+    this.sizeMode = mode
+    for (const node of this.nodeList) {
+      if (node.kind !== 'file') continue
+      node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+    }
+    this.needsFullSync = true
+  }
+
+  get currentSizeMode(): SizeMode {
+    return this.sizeMode
+  }
+
+  /**
+   * Attach host-reported file sizes (path → bytes).
+   * Files that are not in the map keep their activity-based fallback.
+   */
+  setFileSizes(sizes: Map<string, number>): void {
+    if (sizes.size === 0) return
+    // Keep the map: files created later (or re-added after a delete) must pick
+    // up their size too, not just the nodes that already exist.
+    let scaleChanged = false
+    for (const [path, bytes] of sizes) {
+      if (!this.fileSizes.has(path)) scaleChanged = true
+      this.fileSizes.set(path, bytes)
+      if (bytes > this.maxBytes) this.maxBytes = bytes
+    }
+    if (scaleChanged) {
+      const reference = sizeReferenceFrom(this.fileSizes.values())
+      if (reference !== this.sizeReferenceBytes) {
+        this.sizeReferenceBytes = reference
+        scaleChanged = true
+      }
+    }
+
+    let touched = 0
+    for (const node of this.nodeList) {
+      if (node.kind !== 'file') continue
+      const bytes = this.fileSizes.get(node.path)
+      if (bytes === undefined) continue
+      if (node.sizeKnown && node.sizeBytes === bytes) continue
+      node.sizeBytes = bytes
+      node.sizeKnown = true
+      touched += 1
+    }
+
+    // Recompute every radius when the reference changed, otherwise only the
+    // nodes that actually received a size.
+    if (scaleChanged) {
+      for (const node of this.nodeList) {
+        if (node.kind !== 'file') continue
+        node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+      }
+    } else if (touched > 0) {
+      for (const node of this.nodeList) {
+        if (node.kind !== 'file') continue
+        const bytes = this.fileSizes.get(node.path)
+        if (bytes === undefined) continue
+        node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+      }
+    }
+    if (scaleChanged || touched > 0) this.needsFullSync = true
+  }
+
+  /** Reference values used by the size legend in the UI. */
+  get sizeReference(): { bytes: number; activity: number; mode: SizeMode } {
+    return {
+      bytes: this.sizeReferenceBytes,
+      activity: Math.max(8, this.maxActivity),
+      mode: this.sizeMode,
+    }
+  }
+
+  /** Number of file nodes whose size is known, and the total file count. */
+  sizeCoverage(): { known: number; total: number; bytes: number } {
+    let known = 0
+    let total = 0
+    let bytes = 0
+    for (const node of this.nodeList) {
+      if (node.kind !== 'file') continue
+      total += 1
+      if (node.sizeKnown) {
+        known += 1
+        bytes += node.sizeBytes
+      }
+    }
+    return { known, total, bytes }
   }
 
   /* ------------------------------------------------------------------ *
@@ -399,8 +536,11 @@ export class Simulation {
       node.changes += 1
       node.additions += change.additions
       node.deletions += change.deletions
+      node.activity += change.additions + change.deletions
+      this.maxActivity = Math.max(this.maxActivity, node.activity)
       this.totalAdditions += change.additions
       this.totalDeletions += change.deletions
+      node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
     }
     this.pushEvent({ type: 'node-changed', node, kind })
     this.pushEvent({ type: 'activity', node, kind, strength: change.additions + change.deletions + 1 })
@@ -432,6 +572,13 @@ export class Simulation {
     node.path = newPath
     node.name = name
     node.position = addVec(parent.position, fileOffset(newPath))
+    // Sizes belong to paths: a renamed file takes its new path's size.
+    const renamedSize = this.fileSizes.get(newPath)
+    if (renamedSize !== undefined) {
+      node.sizeBytes = renamedSize
+      node.sizeKnown = true
+      this.maxBytes = Math.max(this.maxBytes, renamedSize)
+    }
     if (fresh) {
       node.lastKind = 'rename'
       node.lastChangeIndex = index
@@ -469,6 +616,9 @@ export class Simulation {
       children: [],
       position: addVec(parent.position, fileOffset(path)),
       radius: LAYOUT.fileRadius,
+      sizeBytes: 0,
+      sizeKnown: false,
+      activity: 0,
       bornIndex: index,
       lastChangeIndex: index,
       lastKind: null,
@@ -477,6 +627,13 @@ export class Simulation {
       deletions: 0,
       visible: true,
     }
+    const knownSize = this.fileSizes.get(path)
+    if (knownSize !== undefined) {
+      node.sizeBytes = knownSize
+      node.sizeKnown = true
+      this.maxBytes = Math.max(this.maxBytes, knownSize)
+    }
+    node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
     this.nodeList.push(node)
     this.nodeByPath.set(path, node)
     parent.children.push(node.id)
@@ -503,6 +660,9 @@ export class Simulation {
       children: [],
       position: addVec(parent.position, directoryOffset(path, depth)),
       radius: LAYOUT.dirRadius * (1 + Math.min(0.6, hashUnit(path, 7) * 0.6)),
+      sizeBytes: 0,
+      sizeKnown: false,
+      activity: 0,
       bornIndex: index,
       lastChangeIndex: index,
       lastKind: null,
@@ -619,23 +779,19 @@ export class Simulation {
   bounds(): { center: Vec3; radius: number } {
     let minX = Infinity
     let minY = Infinity
-    let minZ = Infinity
     let maxX = -Infinity
     let maxY = -Infinity
-    let maxZ = -Infinity
     for (const node of this.nodeList) {
       if (!node.visible) continue
       const { position } = node
       if (position.x < minX) minX = position.x
       if (position.y < minY) minY = position.y
-      if (position.z < minZ) minZ = position.z
       if (position.x > maxX) maxX = position.x
       if (position.y > maxY) maxY = position.y
-      if (position.z > maxZ) maxZ = position.z
     }
     if (!Number.isFinite(minX)) return { center: { ...ORIGIN }, radius: 10 }
-    const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 }
-    const radius = Math.max(6, Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2)
+    const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: 0 }
+    const radius = Math.max(6, Math.hypot(maxX - minX, maxY - minY) / 2)
     return { center, radius }
   }
 
@@ -667,4 +823,42 @@ export class Simulation {
     this.events = []
     return events
   }
+}
+
+function clampRadius(value: number): number {
+  return Math.min(LAYOUT.maxFileRadius, Math.max(LAYOUT.minFileRadius, value))
+}
+
+/** Exponent applied to the normalised size; >1 spreads the mid range apart. */
+const SIZE_CURVE = 1.35
+
+/**
+ * Circle radius for a file of `bytes` bytes, given the reference size (the
+ * 95th percentile of the repository, so a single generated file cannot squash
+ * everything else).
+ *
+ * The mapping is logarithmic with a mild power curve: circle sizes stay
+ * readable across four orders of magnitude while differences between ordinary
+ * files remain clearly visible. The UI legend uses the same function.
+ */
+export function fileRadiusForBytes(bytes: number, referenceBytes: number): number {
+  const reference = Math.max(1024, referenceBytes)
+  const normalised = Math.log1p(Math.max(0, bytes)) / Math.log1p(reference)
+  const shaped = Math.pow(Math.min(1, Math.max(0, normalised)), SIZE_CURVE)
+  return clampRadius(LAYOUT.minFileRadius + (LAYOUT.maxFileRadius - LAYOUT.minFileRadius) * shaped)
+}
+
+/** 95th percentile of a list of sizes, used as the size reference. */
+export function sizeReferenceFrom(sizes: Iterable<number>): number {
+  const values = [...sizes].filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)
+  if (values.length === 0) return 1024
+  const index = Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * 0.95) - 1))
+  return Math.max(1024, values[index])
+}
+
+/** Circle radius used when only line activity is known. */
+export function fileRadiusForActivity(activity: number, referenceActivity: number): number {
+  const reference = Math.max(8, referenceActivity)
+  const ratio = Math.log1p(Math.max(0, activity)) / Math.log1p(reference)
+  return clampRadius(LAYOUT.fileRadius * (0.7 + 0.9 * ratio))
 }

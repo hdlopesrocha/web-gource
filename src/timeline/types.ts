@@ -76,6 +76,13 @@ export interface TimelineStats {
   files: number
   /** Distinct file and directory paths, used to size GPU buffers up front. */
   uniquePaths: { files: number; dirs: number }
+  /** Files whose size is known from the host, and the total size of those. */
+  filesWithSize: number
+  totalBytes: number
+  /** Largest file size in the loaded window (bytes), 0 when unknown. */
+  largestFileBytes: number
+  /** Where the sizes came from (`git-tree`, `synthetic`, or `unavailable`). */
+  sizeSource: string
   /** Merge commits in the window. */
   merges: number
   /** Commits that arrived without file-level data. */
@@ -100,6 +107,10 @@ export interface Timeline {
   authors: TimelineAuthor[]
   authorById: Map<string, TimelineAuthor>
   stats: TimelineStats
+  /** Host-reported file sizes for this snapshot (path → bytes). */
+  fileSizes: Map<string, number>
+  /** True when the host truncated the size listing. */
+  sizesTruncated: boolean
   /** Non-fatal issues to show in the UI (quota, truncated history, ...). */
   warnings: string[]
   /** True when the history window is incomplete. */

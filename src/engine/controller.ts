@@ -3,6 +3,7 @@ import { loadHistory, type LoadStage } from '../git/loader'
 import { resolveRepoInput, demoProvider } from '../git/providers'
 import type { RawCommit, RepoInfo } from '../git/types'
 import { buildTimeline, bucketActivity } from '../timeline/builder'
+import type { SizeMode } from '../sim/simulation'
 import type { ActivityBucket, Timeline } from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
 import { buildSchedule, type ScheduleOptions } from '../timeline/schedule'
@@ -39,6 +40,10 @@ export class VisualizerController {
   private canvas: HTMLCanvasElement | null = null
   private container: HTMLElement | null = null
   private rawCommits: RawCommit[] = []
+  /** Host-reported file sizes for the current snapshot. */
+  private fileSizes = new Map<string, number>()
+  private sizesTruncated = false
+  private sizeSource = 'unavailable'
   private repoInfo: RepoInfo | null = null
   private abort: AbortController | null = null
   private progressTimer: number | null = null
@@ -74,6 +79,11 @@ export class VisualizerController {
       instances: info.nodeStats,
       particles: info.liveParticles,
       nodes: this.simulation?.nodes.length ?? 0,
+      sizes: {
+        mapSize: this.fileSizes.size,
+        truncated: this.sizesTruncated,
+        source: this.sizeSource,
+      },
       timeline: {
         commits: this.timeline?.commits.length ?? 0,
         authors: this.timeline?.authors.length ?? 0,
@@ -133,6 +143,9 @@ export class VisualizerController {
     this.cancelLoad()
     this.resetEngine()
     this.rawCommits = []
+    this.fileSizes = new Map()
+    this.sizesTruncated = false
+    this.sizeSource = 'unavailable'
     this.repoInfo = null
     this.timeline = null
     resetRunState()
@@ -170,9 +183,20 @@ export class VisualizerController {
           this.repoInfo = repo
           store.repo = repo
         },
+        onFileSizes: ({ fileSizes, truncated, source }) => {
+          // Sizes arrive before the file changes: hand them to the running
+          // visualization so circles are right from the first batch.
+          this.fileSizes = fileSizes
+          this.sizesTruncated = truncated
+          this.sizeSource = source
+          this.engine?.extendSizes(fileSizes)
+        },
         onCommits: (batch) => this.appendBatch(batch),
       })
       this.repoInfo = result.repo
+      this.fileSizes = result.fileSizes
+      this.sizesTruncated = result.sizesTruncated
+      this.sizeSource = result.sizeSource
       store.repo = result.repo
       store.timelineTruncated = result.truncated
       store.warnings = dedupe([...store.warnings, ...result.warnings])
@@ -249,6 +273,9 @@ export class VisualizerController {
       filter,
       truncated: store.timelineTruncated,
       warnings: store.warnings,
+      fileSizes: this.fileSizes,
+      sizesTruncated: this.sizesTruncated,
+      sizeSource: this.sizeSource,
     })
     if (timeline.commits.length === 0) {
       store.warnings = dedupe([...store.warnings, 'The current filters exclude every commit. Widen the filters to see activity.'])
@@ -419,24 +446,25 @@ export class VisualizerController {
       showEdges: settings.showEdges,
       edgeOpacity: settings.edgeOpacity,
       showDirs: settings.showDirs,
-      fileSize: settings.fileSize,
+      radiusScale: settings.radiusScale,
       particleIntensity: settings.particleIntensity,
       showLabels: settings.showLabels,
       showDirectoryLabels: settings.showDirectoryLabels,
       showFileLabels: settings.showFileLabels,
+      showFileSizes: settings.showFileSizes,
       showAuthorNames: settings.showAuthorNames,
       showAuthorGlow: settings.showAuthorGlow,
       authorScale: settings.authorScale,
-      showStars: settings.showStars,
-      fogDensity: settings.fogDensity,
+      showGrid: settings.showGrid,
+      gridSpacing: settings.gridSpacing,
     }
   }
 
-  private cameraOptions(): { followActivity: boolean; autoRotate: boolean; autoZoom: boolean } {
+  private cameraOptions(): { followActivity: boolean; autoZoom: boolean; smoothing: number } {
     return {
       followActivity: store.settings.followActivity,
-      autoRotate: store.settings.autoRotate,
       autoZoom: store.settings.autoZoom,
+      smoothing: 1.4,
     }
   }
 
@@ -461,6 +489,7 @@ export class VisualizerController {
     if (!this.engine) return
     this.engine.applyRendererSettings(this.rendererSettings())
     this.engine.applyCameraOptions(this.cameraOptions())
+    if (patch.sizeMode) this.engine.setSizeMode(patch.sizeMode)
     if (patch.pacing) this.engine.setScheduleOptions(this.scheduleOptions())
   }
 
@@ -496,6 +525,28 @@ export class VisualizerController {
     if (schedule && schedule.count > 0) return { start: schedule.realStart, end: schedule.realEnd }
     const stats = this.timeline?.stats
     return { start: stats?.start ?? 0, end: stats?.end ?? 0 }
+  }
+
+  /** Circle-size reference values (95th percentile bytes, max activity). */
+  sizeReference(): { bytes: number; activity: number; mode: SizeMode } {
+    if (this.engine) return this.engine.sizeReference()
+    const stats = this.timeline?.stats
+    return {
+      bytes: Math.max(1024, stats?.largestFileBytes ?? 0),
+      activity: 8,
+      mode: store.settings.sizeMode,
+    }
+  }
+
+  /** How many file circles use a host-reported size. */
+  sizeCoverage(): { known: number; total: number; bytes: number } {
+    if (this.engine) return this.engine.sizeCoverage()
+    const stats = this.timeline?.stats
+    return {
+      known: stats?.filesWithSize ?? 0,
+      total: stats?.files ?? 0,
+      bytes: stats?.totalBytes ?? 0,
+    }
   }
 
   /** Activity histogram in simulated time (falls back to real-time bucketing). */
