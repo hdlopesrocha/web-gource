@@ -205,12 +205,26 @@ onMounted(() => {
         </section>
 
         <section class="group">
-          <h3>Auteurs</h3>
+          <h3>Authors</h3>
           <label class="switch"><input type="checkbox" :checked="settings.showAuthorGlow" @change="update({ showAuthorGlow: ($event.target as HTMLInputElement).checked })" /> Author halo</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showBeams" @change="update({ showBeams: ($event.target as HTMLInputElement).checked })" /> Beams to changed files</label>
+          <div class="field">
+            <label>Beam brightness · {{ settings.beamIntensity.toFixed(2) }}×</label>
+            <input type="range" min="0.2" max="2" step="0.05" :value="settings.beamIntensity" @input="update({ beamIntensity: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Beam width · {{ settings.beamWidth.toFixed(1) }} px</label>
+            <input type="range" min="1" max="8" step="0.2" :value="settings.beamWidth" @input="update({ beamWidth: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
           <div class="field">
             <label>Avatar size · {{ settings.authorScale.toFixed(2) }}×</label>
             <input type="range" min="0.6" max="2" step="0.05" :value="settings.authorScale" @input="update({ authorScale: Number(($event.target as HTMLInputElement).value) })" />
           </div>
+          <p class="faint note">
+            Each commit lights up the files it changed: the node pulses in the change colour and a beam connects it to
+            the author for about 1.6 seconds. Authors travel between files with a spring, so movement stays smooth
+            even at high playback speeds.
+          </p>
         </section>
       </template>
 

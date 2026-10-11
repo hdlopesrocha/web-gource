@@ -250,6 +250,18 @@ export class NodeField {
     mesh.setColorAt(instance, scratchColor)
   }
 
+  /** Scale a recently touched node up while its highlight lasts. */
+  private applyPulse(node: SimNode, instance: number, isFile: boolean, amount: number): void {
+    if (!node.visible) return
+    const mesh = isFile ? this.fileMesh : this.dirMesh
+    const pulse = 1 + 0.45 * amount
+    const radius = Math.max(0.02, node.radius * (isFile ? this.radiusScale : 1) * pulse)
+    this.position.set(node.position.x, node.position.y, 0)
+    this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, 1))
+    mesh.setMatrixAt(instance, this.matrix)
+    mesh.instanceMatrix.needsUpdate = true
+  }
+
   /** Mark a node as recently touched so it pulses with the change colour. */
   touch(nodeId: number, kind: ChangeKind, now: number, duration = 1.1): void {
     this.recent.set(nodeId, { kind, until: now + duration, start: now })
@@ -281,6 +293,8 @@ export class NodeField {
         continue
       }
       const amount = Math.min(1, Math.max(0, remaining)) ** 0.7
+      // Briefly grow the node so the changed file is unmistakable.
+      this.applyPulse(node, instance, isFile, amount)
       const base = isFile ? this.baseFileColors : this.baseDirColors
       const change = colorForChange(touch.kind)
       const r = base[instance * 3] + (change.r - base[instance * 3]) * amount * HIGHLIGHT_THRESHOLD

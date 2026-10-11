@@ -46,11 +46,26 @@ export interface SimNode {
   movedFrom?: Vec3
 }
 
+/**
+ * A short lived link between an author and a file it just changed, drawn as a
+ * beam from the avatar to the node (the Gource "tether").
+ */
+export interface SimTether {
+  nodeId: number
+  kind: ChangeKind
+  /** Simulated time the tether appeared. */
+  start: number
+  /** Simulated time it disappears. */
+  until: number
+}
+
 /** An author currently present in the scene. */
 export interface SimAuthor {
   author: TimelineAuthor
-  /** Smoothed position and the point it is heading to. */
+  /** Current position, and the point it is heading to. */
   position: Vec3
+  /** Velocity used by the spring that moves the avatar. */
+  velocity: Vec3
   target: Vec3
   targetNodeId: number
   lastActiveAt: number
@@ -58,6 +73,8 @@ export interface SimAuthor {
   appliedCommits: number
   lastKind: ChangeKind | null
   visible: boolean
+  /** Active beams from this author to recently changed files. */
+  tethers: SimTether[]
 }
 
 /** Events produced by applying timeline commits; consumed by the renderer. */
@@ -94,11 +111,24 @@ export interface SimulationOptions {
   idleTimeout: number
   /** How many recent commits define the author set after a seek. */
   seekAuthorWindow: number
+  /** Spring stiffness of avatar motion (higher = snappier). */
+  motionStiffness: number
+  /** Upper bound on avatar speed in world units per second. */
+  maxSpeed: number
+  /** Seconds a tether stays visible after a file change. */
+  tetherDuration: number
+  /** Maximum number of simultaneous tethers per author. */
+  maxTethers: number
 }
 
 export const DEFAULT_SIMULATION_OPTIONS: SimulationOptions = {
   idleTimeout: 2.6,
   seekAuthorWindow: 14,
+  // Critically damped spring: ~0.4 s to travel between files, never a teleport.
+  motionStiffness: 34,
+  maxSpeed: 220,
+  tetherDuration: 1.6,
+  maxTethers: 12,
 }
 
 /**
@@ -437,7 +467,10 @@ export class Simulation {
       if (node) {
         author.targetNodeId = node.id
         author.target = { ...node.position }
-        if (author.appliedCommits === 1) author.position = { ...node.position }
+        if (author.appliedCommits === 1) {
+          author.position = { ...node.position }
+          author.velocity = { x: 0, y: 0, z: 0 }
+        }
       }
     }
 
@@ -482,6 +515,17 @@ export class Simulation {
       } else {
         author.target = { ...focus.position }
       }
+
+      // A brand new avatar flies in from outside the tree instead of appearing
+      // on top of the file it is about to touch.
+      if (author.appliedCommits <= 1 && this.currentIndex > 0) {
+        author.position = spawnPositionFor(author, focus.position)
+        author.velocity = { x: 0, y: 0, z: 0 }
+      }
+
+      // Tether the author to every file this commit touched.
+      this.attachTethers(author, touched, focus)
+
       this.pushEvent({
         type: 'author',
         author,
@@ -687,6 +731,7 @@ export class Simulation {
     const state: SimAuthor = {
       author,
       position: { ...ORIGIN },
+      velocity: { x: 0, y: 0, z: 0 },
       target: { ...ORIGIN },
       targetNodeId: this.root.id,
       lastActiveAt: this.time,
@@ -694,9 +739,8 @@ export class Simulation {
       appliedCommits: 0,
       lastKind: null,
       visible: true,
+      tethers: [],
     }
-    // First sighting during a seek should not snap the avatar to the origin.
-    if (this.currentIndex >= 0) state.position = { ...ORIGIN }
     this.authorList.set(author.id, state)
     return state
   }
@@ -709,20 +753,80 @@ export class Simulation {
     return null
   }
 
-  /** Advance avatar motion and fade idle authors. Called once per frame. */
-  update(dt: number, time: number): void {
-    const smoothing = 1 - Math.exp(-dt / 0.055)
-    for (const author of this.authorList.values()) {
-      author.position = {
-        x: author.position.x + (author.target.x - author.position.x) * smoothing,
-        y: author.position.y + (author.target.y - author.position.y) * smoothing,
-        z: author.position.z + (author.target.z - author.position.z) * smoothing,
+  /** Remember which files a commit touched so beams can be drawn to them. */
+  private attachTethers(author: SimAuthor, touched: SimNode[], fallback: SimNode): void {
+    const until = this.time + this.options.tetherDuration
+    const targets = touched.length > 0 ? touched : [fallback]
+    for (const node of targets) {
+      const kind = node.lastKind ?? 'modify'
+      const existing = author.tethers.find((tether) => tether.nodeId === node.id)
+      if (existing) {
+        existing.kind = kind
+        existing.start = this.time
+        existing.until = until
+        continue
       }
+      author.tethers.push({ nodeId: node.id, kind, start: this.time, until })
+    }
+    if (author.tethers.length > this.options.maxTethers) {
+      author.tethers.splice(0, author.tethers.length - this.options.maxTethers)
+    }
+  }
+
+  /**
+   * Advance avatar motion and fade idle authors. Called once per frame.
+   *
+   * Motion is a critically damped spring with a speed limit: avatars travel
+   * visibly between files (like Gource) instead of teleporting, and they settle
+   * without oscillating.
+   */
+  update(dt: number, time: number): void {
+    // Track the playback clock: tethers and highlights are timed in simulated
+    // seconds, so they scale with the playback speed like the commits do.
+    this.time = time
+    const step = Math.min(Math.max(dt, 0), 0.1)
+    const stiffness = this.options.motionStiffness
+    const damping = 2 * Math.sqrt(stiffness)
+    for (const author of this.authorList.values()) {
+      const dx = author.target.x - author.position.x
+      const dy = author.target.y - author.position.y
+      const dz = author.target.z - author.position.z
+      // Spring acceleration towards the target, with damping.
+      let vx = author.velocity.x + (dx * stiffness - author.velocity.x * damping) * step
+      let vy = author.velocity.y + (dy * stiffness - author.velocity.y * damping) * step
+      let vz = author.velocity.z + (dz * stiffness - author.velocity.z * damping) * step
+
+      // Clamp the speed so a far away target cannot cause a jump.
+      const speed = Math.hypot(vx, vy, vz)
+      const limit = this.options.maxSpeed
+      if (speed > limit) {
+        const scale = limit / speed
+        vx *= scale
+        vy *= scale
+        vz *= scale
+      }
+
+      author.velocity = { x: vx, y: vy, z: vz }
+      author.position = {
+        x: author.position.x + vx * step,
+        y: author.position.y + vy * step,
+        z: author.position.z + vz * step,
+      }
+
+      if (author.tethers.length > 0) {
+        author.tethers = author.tethers.filter((tether) => tether.until > time)
+      }
+
       if (author.visible && time - author.lastActiveAt > this.options.idleTimeout) {
         author.visible = false
         this.pushEvent({ type: 'author', author, node: null, kind: author.lastKind ?? 'modify', strength: 0 })
       }
     }
+  }
+
+  /** True while the author is travelling (used for trails). */
+  authorSpeed(author: SimAuthor): number {
+    return Math.hypot(author.velocity.x, author.velocity.y)
   }
 
   /** Drop long-idle authors so memory stays bounded on huge histories. */
@@ -861,4 +965,20 @@ export function fileRadiusForActivity(activity: number, referenceActivity: numbe
   const reference = Math.max(8, referenceActivity)
   const ratio = Math.log1p(Math.max(0, activity)) / Math.log1p(reference)
   return clampRadius(LAYOUT.fileRadius * (0.7 + 0.9 * ratio))
+}
+
+/**
+ * Deterministic "fly in" start position: outside the tree, in the direction of
+ * the node the author is heading to, so the avatar enters from the edge.
+ */
+function spawnPositionFor(author: SimAuthor, target: Vec3): Vec3 {
+  const length = Math.hypot(target.x, target.y)
+  if (length < 0.001) return { x: target.x + 30, y: target.y + 18, z: 0 }
+  const scale = 1.55
+  const jitter = (hashUnit(author.author.id, 5) - 0.5) * 12
+  return {
+    x: target.x * scale + jitter,
+    y: target.y * scale + jitter * 0.6,
+    z: 0,
+  }
 }

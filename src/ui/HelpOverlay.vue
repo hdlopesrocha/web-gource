@@ -41,6 +41,16 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Reading the activity</h3>
+        <p class="muted small">
+          Every commit is shown while it happens: the changed files pulse in the colour of the change (green added,
+          amber modified, red deleted, violet renamed) and a beam connects each of them to the author who made the
+          change. Avatars move with a spring rather than jumping, so you can follow a contributor across the tree,
+          and the file labels name what was just touched.
+        </p>
+      </section>
+
+      <section>
         <h3>Circle sizes</h3>
         <p class="muted small">
           File circles grow with the file size. Sizes come from the host's own file listing for the newest commit in

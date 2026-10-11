@@ -192,12 +192,33 @@ Given the same history and settings, the same sequence of events is produced:
 * Activity effects and author trails come from a single additive `Points` pool with a free-list (no
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
   at any zoom level.
+* Author→file beams are one dynamic mesh rebuilt per frame (two quads per beam: glow + core), so a
+  commit touching twenty files still costs a single draw call.
 * Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
   dense repositories stay readable. File labels can include the host-reported size.
 * A camera-following background gradient and grid keep panning and zooming readable, and the
   minimap shows the whole tree with the current view position.
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
+
+### Reading the activity
+
+![A beam connecting an author to the file it just changed](docs/screenshot-beams.png)
+
+Every commit is visible while it happens:
+
+* the files it touched **pulse** in the colour of the change (green added, amber modified, red
+  deleted, violet renamed) and briefly grow, so a one-line edit in a large tree is still findable;
+* a **beam** (the Gource tether) connects each changed file to the author who made the change: a
+  bright core with a soft glow, drawn as camera-facing quads so the width is controllable, fading
+  out after about 1.6 simulated seconds;
+* avatars travel between files with a critically damped spring and a speed limit instead of
+  jumping, so you can follow a contributor across the tree; new contributors fly in from outside
+  the tree;
+* timings are in *simulated* seconds, so the highlight and the beams stay in step with the commits
+  at any playback speed.
+
+Beams can be switched off or restyled (brightness, width) in Settings → Visual.
 
 ### File sizes on screen
 
@@ -244,6 +265,9 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * schedule: monotonicity, idle compression bounds, append stability, time ↔ date mapping;
 * simulation: directory creation, delete + re-add visibility, renames, unknown-path modifications,
   merge commits, seek ≡ replay, no double counting on replay, author behaviour, bounds;
+* activity: avatar motion is continuous and bounded by the speed limit, tethers are created per
+  changed file, refreshed, expired and capped, beams fade, follow both endpoints, scale with zoom
+  and respect their capacity;
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
   pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,

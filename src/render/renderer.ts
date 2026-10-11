@@ -5,6 +5,7 @@ import { NodeField, type FileColorMode } from './nodes'
 import { EdgeField } from './edges'
 import { ParticleField } from './particles'
 import { AuthorField } from './authors'
+import { BeamField } from './beams'
 import { LabelField } from './labels'
 import { Camera2D } from './camera'
 import { backgroundColor, DIR_COLOR, GRID_COLOR } from './palette'
@@ -29,6 +30,11 @@ export interface RendererSettings {
   /** Faint background grid (helps with panning/zooming in 2D). */
   showGrid: boolean
   gridSpacing: number
+  /** Beams from an author to the files it just changed (Gource tethers). */
+  showBeams: boolean
+  beamIntensity: number
+  /** Beam width in CSS pixels. */
+  beamWidth: number
 }
 
 export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
@@ -47,6 +53,9 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   authorScale: 1,
   showGrid: true,
   gridSpacing: 40,
+  showBeams: true,
+  beamIntensity: 1.15,
+  beamWidth: 3.2,
 }
 
 const MAX_PARTICLES = 9000
@@ -80,6 +89,7 @@ export class SceneRenderer {
   private edges: EdgeField
   private particles: ParticleField
   private authors: AuthorField
+  private beams: BeamField
   private labels: LabelField
   private background: THREE.Mesh
   private grid: THREE.Mesh
@@ -125,8 +135,10 @@ export class SceneRenderer {
       scale: this.settings.authorScale,
     })
     this.labels = new LabelField(MAX_LABELS)
+    this.beams = new BeamField()
 
     this.scene.add(this.edges.lines)
+    this.scene.add(this.beams.mesh)
     this.scene.add(this.nodes.group)
     this.scene.add(this.particles.points)
     this.scene.add(this.authors.group)
@@ -139,8 +151,12 @@ export class SceneRenderer {
     return this.canvas
   }
 
-  get info(): { liveParticles: number; nodeStats: { files: number; dirs: number } } {
-    return { liveParticles: this.particles.liveCount, nodeStats: this.nodes.stats }
+  get info(): { liveParticles: number; nodeStats: { files: number; dirs: number }; beams: number } {
+    return {
+      liveParticles: this.particles.liveCount,
+      nodeStats: this.nodes.stats,
+      beams: this.beams.segmentCount,
+    }
   }
 
   /** Flat vertical gradient, sized to the viewport every frame. */
@@ -232,6 +248,9 @@ export class SceneRenderer {
       scale: this.settings.authorScale,
     })
     this.grid.visible = this.settings.showGrid
+    this.beams.setEnabled(this.settings.showBeams)
+    this.beams.setIntensity(this.settings.beamIntensity)
+    this.beams.setWidthPixels(this.settings.beamWidth)
     const gridMaterial = this.grid.material as THREE.ShaderMaterial
     gridMaterial.uniforms.uSpacing.value = this.settings.gridSpacing
 
@@ -274,7 +293,9 @@ export class SceneRenderer {
 
   /** React to simulation events: update instances and spawn effects. */
   consumeEvents(sim: Simulation, now: number): void {
+    void now
     const nodes = sim.nodes
+    const simTime = sim.currentTime
     this.pendingNodes = nodes
     const events = sim.drainEvents()
     const full = sim.needsFullSync || this.fullSyncPending
@@ -289,8 +310,8 @@ export class SceneRenderer {
           break
         case 'activity': {
           this.dirtyNodes.add(event.node.id)
-          this.nodes.touch(event.node.id, event.kind, now)
-          this.edges.touch(event.node.id, event.kind, now)
+          this.nodes.touch(event.node.id, event.kind, simTime)
+          this.edges.touch(event.node.id, event.kind, simTime)
           this.particles.burst(event.node.position, event.kind, event.strength, event.node.radius)
           break
         }
@@ -317,9 +338,10 @@ export class SceneRenderer {
   /** Advance animations. The camera drives the projection-dependent sizes. */
   update(dt: number, now: number, sim: Simulation, camera: Camera2D): void {
     const nodes = sim.nodes
+    const simTime = sim.currentTime
     this.pendingNodes = nodes
-    this.nodes.update(now, nodes)
-    this.edges.update(now, nodes)
+    this.nodes.update(simTime, nodes)
+    this.edges.update(simTime, nodes)
     this.particles.update(dt)
 
     // Keep the background and grid covering the visible area.
@@ -333,6 +355,9 @@ export class SceneRenderer {
     const authors = [...sim.authors]
     const worldPerPixel = camera.worldPerPixel(this.size.height)
     this.authors.sync(authors, worldPerPixel * MIN_AVATAR_PIXELS)
+
+    // Beams from each author to the files of the current commit.
+    this.beams.update(simTime, authors, nodes, worldPerPixel)
 
     // Trail particles for avatars that are travelling.
     for (const { author, color } of this.authors.movingAvatars(authors)) {
@@ -368,6 +393,11 @@ export class SceneRenderer {
     this.gl.render(this.scene, camera)
   }
 
+  /** Diagnostics for the beam layer. */
+  beamSample(): Record<string, number> | null {
+    return this.beams.sample()
+  }
+
   /** Clear transient effects (seeking). */
   clearEffects(): void {
     this.particles.clear()
@@ -379,6 +409,7 @@ export class SceneRenderer {
     this.edges.dispose()
     this.particles.dispose()
     this.authors.dispose()
+    this.beams.dispose()
     this.labels.dispose()
     this.background.geometry.dispose()
     ;(this.background.material as THREE.Material).dispose()

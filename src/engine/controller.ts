@@ -78,6 +78,8 @@ export class VisualizerController {
       viewport: this.engine.renderer.viewport,
       instances: info.nodeStats,
       particles: info.liveParticles,
+      beams: info.beams,
+      beamSample: this.engine.renderer.beamSample(),
       nodes: this.simulation?.nodes.length ?? 0,
       sizes: {
         mapSize: this.fileSizes.size,
@@ -457,6 +459,9 @@ export class VisualizerController {
       authorScale: settings.authorScale,
       showGrid: settings.showGrid,
       gridSpacing: settings.gridSpacing,
+      showBeams: settings.showBeams,
+      beamIntensity: settings.beamIntensity,
+      beamWidth: settings.beamWidth,
     }
   }
 
