@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vite
+coverage
+*.log
+
+# Local tooling/session data (not part of the project)
+data/

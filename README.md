@@ -1,0 +1,234 @@
+# Web Gource
+
+A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste a public
+Git repository URL and watch its history grow into an animated 3D scene — directories branching
+like a tree, files appearing as leaves, authors flying between the files they touch, and activity
+bursts coloured by add / modify / delete / rename.
+
+Nothing is cloned, uploaded, or built on a server. Commit history is read straight from the
+hosting provider's REST API in the browser, normalized into a timeline, and rendered with an
+independently written Three.js renderer.
+
+![Web Gource visualizing a repository](docs/screenshot.png)
+
+```
+https://github.com/owner/repository   →   animated 3D repository history
+```
+
+## Quick start
+
+```bash
+npm install
+npm run dev          # http://127.0.0.1:5173
+```
+
+Other scripts:
+
+```bash
+npm run build        # type-check + production bundle (dist/)
+npm run preview      # serve the production build
+npm test             # unit + component tests (mocked APIs, no network)
+npm run test:api     # opt-in integration tests against the real GitHub API
+npm run typecheck    # vue-tsc only
+```
+
+`npm run test:api` spends API quota; set `GITHUB_TOKEN` to use an authenticated quota and
+`WEB_GOURCE_TEST_REPO` to test against another repository.
+
+## Using it
+
+1. Paste a repository URL — `https://github.com/owner/repository`, `owner/repository`,
+   `git@github.com:owner/repository.git` and GitHub Enterprise / GitLab URLs all work.
+2. Optionally add a token (Settings on the landing card) for a much larger quota and private repos.
+3. Press **Load Repository**. Commit metadata is fetched first, then file changes are hydrated in
+   small batches; the visualization starts as soon as the first batch is ready.
+4. Play with it: scrub, seek, filter, and export a video.
+
+### Keyboard and mouse
+
+| Input | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `←` / `→` | Previous / next commit |
+| `Shift` + `←` / `→` | Seek 5 seconds |
+| `Home` / `End` | Jump to the start / end |
+| `+` / `-` | Faster / slower |
+| `R` | Restart playback |
+| `C` | Recentre the camera |
+| `L` | Toggle labels |
+| `M` | Toggle the minimap |
+| `A` | Toggle the authors panel |
+| `S` | Toggle settings |
+| `F` | Fullscreen |
+| `?` | Help |
+
+Drag to orbit, right-drag (or shift-drag) to pan, scroll to zoom. Manual input pauses the automatic
+camera for a few seconds.
+
+## How it works
+
+```
+src/
+  git/                      data acquisition
+    url.ts                  URL parsing / normalization (bare, SCP-like, UI routes, .git)
+    http.ts                 fetch with retries, backoff, abort and rate-limit classification
+    cache.ts                two-level cache (memory + IndexedDB); payloads are immutable by SHA
+    pool.ts                 bounded concurrency for per-commit requests
+    errors.ts               typed errors + actionable messages
+    loader.ts               staged loading: metadata → commit list → batched file hydration
+    providers/
+      types.ts              GitProvider interface (parse, repo info, commit pages, hydrate, URL)
+      github.ts             GitHub.com + GitHub Enterprise
+      gitlab.ts             GitLab.com + self-managed (beta)
+      demo.ts               deterministic synthetic history for offline demos and load testing
+      index.ts              provider registry, URL → provider resolution, token plumbing
+  timeline/                 normalized history
+    types.ts                Timeline, TimelineCommit, TimelineAuthor, change kinds
+    builder.ts              raw commits → timeline (+ author aggregation, stats, filters)
+    schedule.ts             deterministic playback schedule and date ↔ time mapping
+  sim/                      repository state, independent of rendering
+    layout.ts               deterministic path → position mapping (stable under filtering/seeking)
+    simulation.ts           path tree, visibility over time, authors, activity events
+  render/                   WebGL layers (Three.js)
+    renderer.ts             scene composition, event consumption, settings, sizing
+    nodes.ts                instanced file/directory nodes with capacity growth
+    edges.ts                branch edges as a single growable line buffer
+    particles.ts            additive particle pool for activity effects and author trails
+    authors.ts              pooled avatar sprites with a texture cache
+    labels.ts               world-space labels, constant screen size, LRU texture cache
+    camera.ts               orbit camera with Gource-style automatic framing
+    minimap.ts              2D overview of the tree, authors and camera position
+    palette.ts              extension/author/change colours
+    textures.ts             canvas texture caches (labels, avatars, glows)
+  engine/
+    engine.ts               playback clock, simulation driving, camera, HUD, recording hooks
+    controller.ts           app orchestration: load, filters, seek, settings, recording
+    recorder.ts             MediaRecorder + canvas.captureStream export
+  state/store.ts            reactive app state, settings persistence, token storage
+  ui/*.vue                  landing view, stage, playback bar, scrubber, panels, help
+tests/                      unit, component and (opt-in) live API tests
+```
+
+The boundaries are deliberate: providers only translate API payloads, the timeline knows nothing
+about rendering, the simulation is pure logic, and the renderer reacts to simulation events. That
+is what makes seeking, filtering and deterministic replay cheap.
+
+### Data model and honesty about gaps
+
+Every provider returns the same normalized structures (`RawCommit`, `RawFileChange`, `RepoInfo`).
+Commits keep their SHA, author identity, timestamps and message verbatim; file changes keep path,
+previous path (renames), change type and line counts.
+
+When something cannot be fetched it is **marked, never invented**:
+
+* `filesMissing: 'rate-limit'` — the API quota ran out before file data was fetched.
+* `filesMissing: 'merge-parents'` — a merge commit the host reports without a changed-file list.
+* `filesMissing: 'error'` — the detail request failed (the commit itself is still shown).
+* `filesMissing: 'not-requested'` — the commit list was loaded without file hydration.
+* `filesTruncated: true` — the host capped the file list (GitHub: 300 files).
+
+The UI shows these as badges, counts them in the Data tab, and explains them in the notes strip.
+Directories, files and authors are only ever created from real commit data.
+
+### Rate limits, caching and incremental loading
+
+GitHub allows **60 requests/hour** anonymously; a token raises this to 5,000. Because file changes
+cost one request per commit, the app budgets requests instead of pretending:
+
+* the commit list is cheap (1 request per 100 commits) and always fetched first;
+* file hydration runs in batches of 10, oldest first, with bounded concurrency (6 requests), so
+  the visualization starts as soon as the first batch arrives and grows while loading;
+* commits with detail requests still pending or skipped are rendered without file activity;
+* when the quota drops to the reserve, hydration stops, the commits already fetched are kept, and
+  a warning explains how to continue (token, smaller snapshot, reload — cached data is reused);
+* every fetched repository, commit and hydrated commit is cached (memory + IndexedDB), so reloads
+  and re-filters cost almost no quota;
+* loading can be cancelled at any time and cleans up in-flight requests.
+
+Snapshot size (50 → 4,000 commits) and range (newest commits, or from the first commit of the
+repository) are user choices, because the full history of a large repository cannot fit in any
+quota. The app states which window it loaded and why.
+
+### Determinism
+
+Given the same history and settings, the same sequence of events is produced:
+
+* the schedule is a pure function of commit timestamps with a fixed, documented compression curve
+  (`gapTime = perGapCap · (1 − e^(−gap/gapTau))`, with a global idle budget);
+* node positions derive from the *path* hash, not from arrival order, so the layout is identical
+  under filtering, seeking or incremental loading;
+* visibility over time is stored as per-node toggle indexes, so `seek(i)` is an exact
+  re-evaluation instead of an approximation;
+* nothing in the simulation depends on wall-clock time or randomness.
+
+### Rendering
+
+* Files and directories are two `InstancedMesh` objects (one icosahedron, one octahedron) with
+  per-instance colour and matrix updates only for changed nodes; both grow by reallocating and
+  copying instance buffers when a repository turns out to be larger than expected.
+* Branch edges share one `LineSegments` buffer with two vertices per node.
+* Activity effects and author trails come from a single additive `Points` pool with a free-list
+  (no allocations per commit), with point sizes converted from world units to device pixels.
+* Avatars and labels are pooled sprites with LRU canvas-texture caches, so hundreds of authors and
+  thousands of labels stay bounded in memory.
+* The camera follows recent activity, adapts its distance to the repository size and orbits slowly;
+  manual input takes over immediately.
+* Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
+  handled in one place (`SceneRenderer`).
+
+### Video export
+
+Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everything stays local.
+
+* Formats are probed at runtime: WebM (VP9/VP8) where supported, MP4 (H.264) where the browser can
+  produce it. Unsupported codecs are shown as disabled rather than offered.
+* Resolution presets (720p → 1440p, square, vertical), frame rate (15–60) and playback speed during
+  recording (0.25× → 16×) are configurable, and the estimated recording time is shown.
+* While recording, the renderer switches to the chosen resolution and the clock advances by exactly
+  one frame step per captured frame, so the video is a faithful, deterministic sampling of the
+  timeline.
+* Progress (percent, frames, elapsed, size) is reported live; recording can be stopped manually,
+  stops automatically at the end of the timeline, and has a safety time limit.
+* Keep the tab focused while recording: background tabs throttle rendering.
+
+## Testing
+
+`npm test` runs 119 tests with mocked provider payloads — no network access:
+
+* URL parsing (bare input, SCP syntax, `.git`, UI routes, nested GitLab groups, Enterprise hosts);
+* GitHub provider: pagination, cache reuse, rename/delete/copy mapping, 300-file truncation,
+  merge commits, failing detail requests, quota exhaustion, empty repositories, 404/403/401;
+* timeline builder: ordering, dedupe, author aggregation, rename normalization, missing file data,
+  filters, extension/path statistics;
+* schedule: monotonicity, idle compression bounds, append stability, time ↔ date mapping;
+* simulation: directory creation, delete + re-add visibility, renames, unknown-path modifications,
+  merge commits, seek ≡ replay, no double counting on replay, author behaviour, bounds;
+* rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
+  pool limits and decay, camera framing/orbit;
+* controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
+  WebGL-unavailable degradation;
+* component smoke tests (jsdom) for the landing view, playback bar, stage, panels and help overlay;
+* scale checks: 5,000 commits and ~3,600 files build in ~0.1 s and seek in well under a frame.
+
+`npm run test:api` additionally validates the parsers against the real API (field names, pagination
+headers, file change shapes) and skips gracefully when the quota is exhausted.
+
+## Limitations
+
+* **GitHub and GitLab only.** Other hosts need a new `GitProvider`; the registry is one entry plus
+  a `parse` method.
+* **No GraphQL batching.** GitHub's REST API is the only way to get per-commit file paths, so cost
+  is one request per commit. Token-authenticated loads make this practical.
+* **Windows of history, not full histories.** A very large repository cannot be fully fetched in a
+  browser without a token; the UI is explicit about the loaded window.
+* **File contents are not fetched.** Only paths, change kinds and line counts.
+* **Synthetic avatars.** Profile pictures from the host are not fetched: generated initials keep the
+  scene deterministic and avoid third-party requests.
+* **No audio.** Gource's background music has no browser equivalent here.
+
+## Legal
+
+Inspired by the original [Gource](https://gource.io/) by Andrew Caudwell. This is an independent
+implementation with its own renderer and shares no code with, and is not affiliated with, the
+original project. Repository data belongs to the respective projects and is fetched from their
+hosting provider's public API.
