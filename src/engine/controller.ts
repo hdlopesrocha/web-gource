@@ -14,7 +14,15 @@ import {
   isRecordingSupported,
   preferredFormat,
 } from './recorder'
-import { persistLoadOptions, persistSettings, resetRunState, resolvePacing, store, tokenFor } from '../state/store'
+import {
+  persistLoadOptions,
+  persistSettings,
+  resetRunState,
+  resolvePacing,
+  setLastUrl,
+  store,
+  tokenFor,
+} from '../state/store'
 import type { RendererSettings } from '../render/renderer'
 
 /**
@@ -131,6 +139,7 @@ export class VisualizerController {
     store.url = input
     store.forcedProvider = options.providerId ?? null
     store.view = 'landing'
+    setLastUrl(input)
 
     let resolved
     try {
@@ -631,6 +640,17 @@ export class VisualizerController {
     const parsed = demoProvider.parse(url)
     if (!parsed) return
     await this.load('demo/synthetic-repository', { providerId: 'demo' })
+  }
+
+  /**
+   * Re-run the load for the current repository with the current settings and
+   * token. Cached payloads are reused, so this mostly spends quota on the file
+   * changes that were skipped earlier.
+   */
+  async reload(): Promise<void> {
+    const url = store.url
+    if (!url || store.loading.active) return
+    await this.load(url, { providerId: store.forcedProvider ?? undefined })
   }
 
   backToLanding(): void {

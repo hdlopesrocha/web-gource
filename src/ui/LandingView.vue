@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { controller } from '../engine/controller'
-import { loadingPercent, providerDescriptors, setToken, store, tokenFor } from '../state/store'
+import { loadingPercent, providerDescriptors, store } from '../state/store'
+import TokenField from './TokenField.vue'
 
 const SNAPSHOT_CHOICES = [
   { value: 50, label: '50 commits', hint: 'Works with the anonymous GitHub quota.' },
@@ -19,14 +20,14 @@ const activeProviderId = computed(() => detection.value?.providerId ?? null)
 const activeDescriptor = computed(() =>
   providerDescriptors.find((descriptor) => descriptor.id === activeProviderId.value) ?? null,
 )
-const token = computed({
-  get: () => (activeProviderId.value ? tokenFor(activeProviderId.value) : ''),
-  set: (value: string) => {
-    if (activeProviderId.value) setToken(activeProviderId.value, value)
-  },
-})
-const showAdvanced = ref(false)
-const tokenVisible = ref(false)
+
+const tokenSaved = computed(
+  () => Boolean(store.loadOptions.draftToken) || Object.keys(store.loadOptions.tokens).length > 0,
+)
+const tokenStatus = ref<string | null>(null)
+// Reopen the token section when a token is already stored.
+const showAdvanced = ref(tokenSaved.value)
+
 const error = computed(() => store.loading.error)
 const busy = computed(() => store.loading.active)
 
@@ -165,36 +166,19 @@ const examples = [
 
         <div class="card-footer">
           <button class="btn ghost small" type="button" @click="showAdvanced = !showAdvanced">
-            {{ showAdvanced ? 'Hide' : 'Advanced' }} · token & rate limits
+            {{ showAdvanced ? 'Hide' : 'Advanced' }} · token &amp; rate limits{{ tokenSaved ? ' ✓' : '' }}
           </button>
           <button class="btn ghost small" type="button" @click="loadDemo">Try the synthetic demo</button>
         </div>
 
         <div v-if="showAdvanced" class="advanced">
-          <div class="field">
-            <label :for="'token-' + activeProviderId">
-              Personal access token ({{ activeDescriptor?.name ?? 'provider' }}) — optional, stored locally
-            </label>
-            <div class="token-row">
-              <input
-                :id="'token-' + activeProviderId"
-                v-model="token"
-                :type="tokenVisible ? 'text' : 'password'"
-                :disabled="!activeProviderId"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="Only needed for private repos or a higher quota"
-              />
-              <button class="btn small" type="button" @click="tokenVisible = !tokenVisible">
-                {{ tokenVisible ? 'Hide' : 'Show' }}
-              </button>
-            </div>
-          </div>
+          <TokenField :provider-id="activeProviderId" @saved="tokenStatus = null" />
           <p class="hint muted">
-            Tokens are kept in your browser's local storage and sent directly to the host API — there is no backend.
+            Create a token:
             <a v-if="activeDescriptor?.tokenUrl" :href="activeDescriptor.tokenUrl" target="_blank" rel="noreferrer noopener">
-              Create one
+              {{ activeDescriptor.name }} token settings
             </a>
+            <span v-else>GitHub: Settings → Developer settings → Personal access tokens; GitLab: User settings → Access tokens.</span>
           </p>
           <p class="hint muted">
             GitHub allows 60 requests/hour anonymously. Since file changes cost one request per commit, anonymous
@@ -425,6 +409,14 @@ const examples = [
   margin: 0;
 }
 
+.hint.ok {
+  color: var(--add);
+}
+
+.hint.warn {
+  color: var(--modify);
+}
+
 .card-footer {
   display: flex;
   gap: 8px;
@@ -446,6 +438,14 @@ const examples = [
 .token-row {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.token-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
 }
 
 .examples {

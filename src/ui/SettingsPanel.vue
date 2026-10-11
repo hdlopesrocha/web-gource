@@ -4,10 +4,18 @@ import { controller } from '../engine/controller'
 import { PACING_PRESETS, resolvePacing, store } from '../state/store'
 import { RESOLUTION_PRESETS, formatBytes } from '../engine/recorder'
 import { formatDuration } from '../timeline/schedule'
+import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
 const tab = ref<'visual' | 'camera' | 'recording' | 'data'>('visual')
+const tokenSavedMessage = ref<string | null>(null)
+
+function onTokenSaved(providerId: string | null): void {
+  tokenSavedMessage.value = providerId
+    ? 'Token stored. Reload to use it for the commits that were skipped.'
+    : 'Token stored.'
+}
 const support = computed(() => controller.recordingSupport())
 const recording = computed(() => store.recording)
 const settings = computed(() => store.settings)
@@ -260,6 +268,21 @@ onMounted(() => {
 
       <template v-else>
         <section class="group">
+          <h3>Access token</h3>
+          <TokenField :provider-id="store.repo?.provider ?? null" compact @saved="onTokenSaved" />
+          <div class="row">
+            <button class="btn small" type="button" :disabled="!store.url || store.loading.active" @click="controller.reload()">
+              Reload repository with this token
+            </button>
+          </div>
+          <p class="faint note">
+            Reloading re-fetches the same window; already cached commits cost no quota, so it mainly fills in the file
+            changes that were skipped when the limit was reached.
+          </p>
+          <p v-if="tokenSavedMessage" class="faint note ok">{{ tokenSavedMessage }}</p>
+        </section>
+
+        <section class="group">
           <h3>Loaded data</h3>
           <ul class="facts">
             <li><span class="faint">Repository</span><span>{{ store.repo?.fullName ?? '—' }}</span></li>
@@ -356,6 +379,10 @@ onMounted(() => {
 .note {
   font-size: 11.5px;
   margin: 0;
+}
+
+.note.ok {
+  color: var(--add);
 }
 
 .warn-box {

@@ -39,10 +39,31 @@ npm run typecheck    # vue-tsc only
 
 1. Paste a repository URL — `https://github.com/owner/repository`, `owner/repository`,
    `git@github.com:owner/repository.git` and GitHub Enterprise / GitLab URLs all work.
-2. Optionally add a token (Settings on the landing card) for a much larger quota and private repos.
+2. Optionally add a token (see below) for a much larger quota and private repos.
 3. Press **Load Repository**. Commit metadata is fetched first, then file changes are hydrated in
    small batches; the visualization starts as soon as the first batch is ready.
 4. Play with it: scrub, seek, filter, and export a video.
+
+### Personal access tokens
+
+Tokens are optional, never required for public repositories, and always stored locally in the
+browser — there is no backend.
+
+* The field is **always editable**, including before a repository URL is known: type or paste a
+  token, then paste the URL, and the token is attached to the matching host automatically.
+* A **Paste** button reads the clipboard directly where the browser allows it; native
+  `Ctrl`/`Cmd`+`V` works too (nothing in the app intercepts paste).
+* Pasted values are cleaned up: spaces, line breaks, zero-width characters and an accidental
+  `Bearer ` prefix are removed.
+* Host attribution uses the token prefix — `ghp_…` / `github_pat_…` for GitHub,
+  `glpat-…` / `glrt_…` for GitLab — and a token is **never** sent to a different
+  host. Unrecognised tokens are kept until the URL identifies the host.
+* Tokens are committed on blur, on Enter, or shortly after typing stops, so a half-typed token is
+  never stored. Focusing the field selects the existing value, so one paste replaces it.
+* The last repository URL and every token are restored after a page reload.
+* A token added mid-session (Settings → Data → Access token) can be applied with
+  **Reload repository with this token**: cached commits cost no quota, so this mainly fills in the
+  file changes that were skipped when the limit was reached.
 
 ### Keyboard and mouse
 
@@ -198,6 +219,8 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * URL parsing (bare input, SCP syntax, `.git`, UI routes, nested GitLab groups, Enterprise hosts);
 * GitHub provider: pagination, cache reuse, rename/delete/copy mapping, 300-file truncation,
   merge commits, failing detail requests, quota exhaustion, empty repositories, 404/403/401;
+* token handling: sanitising pasted values, host detection from prefixes, drafts attached once the
+  host is known, no cross-host leakage, clearing, and persistence across reloads;
 * timeline builder: ordering, dedupe, author aggregation, rename normalization, missing file data,
   filters, extension/path statistics;
 * schedule: monotonicity, idle compression bounds, append stability, time ↔ date mapping;

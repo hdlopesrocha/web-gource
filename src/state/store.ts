@@ -95,6 +95,12 @@ export interface LoadOptions {
   branch: string
   /** Per-provider personal access tokens. */
   tokens: Record<string, string>
+  /** Token typed or pasted before a provider could be resolved. */
+  draftToken: string
+  /** Provider that received the most recent token (keeps the field populated). */
+  lastTokenProvider: string | null
+  /** Last repository URL, so a reload does not start from an empty field. */
+  lastUrl: string
 }
 
 export interface RecordingSettings {
@@ -218,6 +224,9 @@ const defaultLoadOptions: LoadOptions = {
   range: 'latest',
   branch: '',
   tokens: {},
+  draftToken: '',
+  lastTokenProvider: null,
+  lastUrl: '',
 }
 
 const defaultRecording: RecordingSettings = {
@@ -230,11 +239,13 @@ const defaultRecording: RecordingSettings = {
   maxWallSeconds: 1800,
 }
 
+const initialLoadOptions = { ...defaultLoadOptions, ...readJson(LOAD_KEY, defaultLoadOptions) }
+
 export const store = reactive<AppState>({
   view: 'landing',
-  url: '',
+  url: initialLoadOptions.lastUrl,
   forcedProvider: null,
-  loadOptions: readJson(LOAD_KEY, defaultLoadOptions),
+  loadOptions: initialLoadOptions,
   loading: {
     active: false,
     status: '',
@@ -282,17 +293,177 @@ export function persistLoadOptions(): void {
     range: store.loadOptions.range,
     branch: store.loadOptions.branch,
     tokens: store.loadOptions.tokens,
+    draftToken: store.loadOptions.draftToken,
+    lastTokenProvider: store.loadOptions.lastTokenProvider,
+    lastUrl: store.loadOptions.lastUrl,
   })
 }
 
+/** Remember the URL that was loaded, so a page reload can pre-fill it. */
+export function setLastUrl(url: string): void {
+  store.loadOptions.lastUrl = url
+  persistLoadOptions()
+}
+
+/* -------------------------------------------------------------------------- *
+ * Personal access tokens
+ *
+ * Tokens can be typed or pasted at any time — including before a repository URL
+ * is known. Such a token is kept as a *draft* and is attached to a provider as
+ * soon as one can be identified (from the URL, or from the token's own prefix).
+ * A draft that is clearly meant for another host is never sent to a different
+ * one, so a GitHub token can never leak to GitLab.
+ * -------------------------------------------------------------------------- */
+
+/** Token prefixes used by the supported hosts. */
+const TOKEN_PREFIXES: { prefix: string; providerId: string }[] = [
+  { prefix: 'ghp_', providerId: 'github' },
+  { prefix: 'github_pat_', providerId: 'github' },
+  { prefix: 'gho_', providerId: 'github' },
+  { prefix: 'ghu_', providerId: 'github' },
+  { prefix: 'ghs_', providerId: 'github' },
+  { prefix: 'ghr_', providerId: 'github' },
+  { prefix: 'glpat-', providerId: 'gitlab' },
+  { prefix: 'gldt-', providerId: 'gitlab' },
+  { prefix: 'glrt-', providerId: 'gitlab' },
+  { prefix: 'glcbt-', providerId: 'gitlab' },
+]
+
+/** Strip whitespace, newlines and an accidental `Bearer `/`token ` prefix. */
+export function sanitizeToken(value: string): string {
+  return value
+    .trim()
+    .replace(/^(?:bearer|token)\s*[:|]?\s*/i, '')
+    .replace(/[\s\u200b]+/g, '')
+}
+
+/** Identify the host a token belongs to from its prefix, when possible. */
+export function detectTokenProvider(token: string): string | null {
+  const clean = sanitizeToken(token).toLowerCase()
+  if (!clean) return null
+  for (const entry of TOKEN_PREFIXES) {
+    if (clean.startsWith(entry.prefix)) return entry.providerId
+  }
+  return null
+}
+
+/**
+ * Token to use for a provider: the saved token, or a draft token that either
+ * has no recognisable prefix or belongs to this provider.
+ */
 export function tokenFor(providerId: string): string {
-  return store.loadOptions.tokens[providerId] ?? ''
+  const saved = store.loadOptions.tokens[providerId]
+  if (saved) return saved
+  const draft = store.loadOptions.draftToken
+  if (!draft) return ''
+  const owner = detectTokenProvider(draft)
+  if (owner && owner !== providerId) return ''
+  return draft
+}
+
+/** True when a usable token exists for the provider. */
+export function hasToken(providerId: string): boolean {
+  return tokenFor(providerId).length > 0
 }
 
 export function setToken(providerId: string, token: string): void {
-  if (token) store.loadOptions.tokens[providerId] = token
-  else delete store.loadOptions.tokens[providerId]
+  const clean = sanitizeToken(token)
+  if (clean) {
+    store.loadOptions.tokens[providerId] = clean
+    store.loadOptions.lastTokenProvider = providerId
+  } else {
+    delete store.loadOptions.tokens[providerId]
+    if (store.loadOptions.lastTokenProvider === providerId) store.loadOptions.lastTokenProvider = null
+  }
   persistLoadOptions()
+}
+
+/** Store a token whose provider is not known yet. */
+export function setDraftToken(token: string): void {
+  store.loadOptions.draftToken = sanitizeToken(token)
+  persistLoadOptions()
+}
+
+export function clearToken(providerId: string): void {
+  delete store.loadOptions.tokens[providerId]
+  if (store.loadOptions.lastTokenProvider === providerId) store.loadOptions.lastTokenProvider = null
+  persistLoadOptions()
+}
+
+/**
+ * Current value to display in a token field.
+ *
+ * With a known host: that host's token, else the pending draft. Without one: the
+ * draft, else the token that was stored most recently — so a token that was
+ * pasted before a URL never disappears from the field.
+ */
+export function displayToken(providerId: string | null): string {
+  if (providerId) {
+    const stored = store.loadOptions.tokens[providerId]
+    if (stored) return stored
+    return store.loadOptions.draftToken
+  }
+  if (store.loadOptions.draftToken) return store.loadOptions.draftToken
+  const last = store.loadOptions.lastTokenProvider
+  if (last) return store.loadOptions.tokens[last] ?? ''
+  return ''
+}
+
+/** Every provider id whose stored token matches the given value (plus the draft). */
+export function tokenHoldersFor(providerId: string | null, currentValue: string): string[] {
+  const holders = new Set<string>()
+  const clean = sanitizeToken(currentValue)
+  if (providerId) holders.add(providerId)
+  const owner = detectTokenProvider(clean)
+  if (owner) holders.add(owner)
+  if (clean) {
+    for (const [id, token] of Object.entries(store.loadOptions.tokens)) {
+      if (token === clean) holders.add(id)
+    }
+  }
+  // The displayed value is usually the most recently touched provider's token.
+  const last = store.loadOptions.lastTokenProvider
+  if (last) holders.add(last)
+  return [...holders]
+}
+
+/**
+ * Attach a pending draft token to a provider once it is known.
+ * Returns true when the draft was moved.
+ */
+export function applyDraftToken(providerId: string): boolean {
+  const draft = store.loadOptions.draftToken
+  if (!draft) return false
+  const owner = detectTokenProvider(draft)
+  if (owner && owner !== providerId) return false
+  store.loadOptions.tokens[providerId] = draft
+  store.loadOptions.draftToken = ''
+  store.loadOptions.lastTokenProvider = providerId
+  persistLoadOptions()
+  return true
+}
+
+/**
+ * Record a token that was typed or pasted, attaching it to `providerId` when
+ * known and keeping it as a draft otherwise.
+ */
+export function acceptToken(value: string, providerId: string | null): { providerId: string | null; draft: boolean } {
+  const clean = sanitizeToken(value)
+  if (!clean) {
+    setDraftToken('')
+    if (providerId) clearToken(providerId)
+    return { providerId: null, draft: false }
+  }
+  const target = providerId ?? detectTokenProvider(clean)
+  if (target) {
+    setToken(target, clean)
+    // A new, attributable token supersedes a pending draft: the latest input is
+    // what the field represents.
+    if (store.loadOptions.draftToken) setDraftToken('')
+    return { providerId: target, draft: false }
+  }
+  setDraftToken(clean)
+  return { providerId: null, draft: true }
 }
 
 export const providerDescriptors = listProviderDescriptors()
