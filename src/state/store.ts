@@ -151,6 +151,11 @@ export interface AppState {
   hud: HudState | null
   /** Author ids excluded from the visualization. */
   hiddenAuthors: string[]
+  /**
+   * Folder names to ignore (vendored dependencies, generated output...). Each
+   * entry hides that folder at any depth; see `timeline/ignore.ts`.
+   */
+  ignoredFolders: string[]
   /** Date range filter (epoch ms), null means unbounded. */
   dateRange: { from: number | null; to: number | null }
   settings: RendererSettings & {
@@ -181,6 +186,7 @@ export interface AppState {
 
 const SETTINGS_KEY = 'web-gource:settings:v1'
 const LOAD_KEY = 'web-gource:load-options:v1'
+const FILTER_KEY = 'web-gource:filters:v1'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -272,6 +278,7 @@ export const store = reactive<AppState>({
   timelineTruncated: false,
   hud: null,
   hiddenAuthors: [],
+  ignoredFolders: readJson(FILTER_KEY, { ignoredFolders: [] as string[] }).ignoredFolders,
   dateRange: { from: null, to: null },
   settings: readJson(SETTINGS_KEY, defaultSettings),
   recording: {
@@ -296,6 +303,11 @@ export const store = reactive<AppState>({
 
 export function persistSettings(): void {
   persist(SETTINGS_KEY, store.settings)
+}
+
+/** The ignore list is a preference, so it survives a reload. */
+export function persistFilters(): void {
+  persist(FILTER_KEY, { ignoredFolders: store.ignoredFolders })
 }
 
 export function persistLoadOptions(): void {
@@ -480,7 +492,11 @@ export function acceptToken(value: string, providerId: string | null): { provide
 export const providerDescriptors = listProviderDescriptors()
 
 export const isFiltered = computed(
-  () => store.hiddenAuthors.length > 0 || store.dateRange.from !== null || store.dateRange.to !== null,
+  () =>
+    store.hiddenAuthors.length > 0 ||
+    store.ignoredFolders.length > 0 ||
+    store.dateRange.from !== null ||
+    store.dateRange.to !== null,
 )
 
 export const loadingPercent = computed(() => {

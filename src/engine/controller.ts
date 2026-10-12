@@ -3,6 +3,7 @@ import { loadHistory, type LoadStage } from '../git/loader'
 import { resolveRepoInput, demoProvider } from '../git/providers'
 import type { RawCommit, RepoInfo } from '../git/types'
 import { buildTimeline, bucketActivity } from '../timeline/builder'
+import { compileIgnoredFolders, normaliseIgnoredFolders } from '../timeline/ignore'
 import type { SizeMode } from '../sim/simulation'
 import type { ActivityBucket, Timeline } from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
@@ -17,6 +18,7 @@ import {
 } from './recorder'
 import {
   persistLoadOptions,
+  persistFilters,
   persistSettings,
   resetRunState,
   resolvePacing,
@@ -273,8 +275,10 @@ export class VisualizerController {
     const repo = this.repoInfo ?? store.repo
     if (!repo || this.rawCommits.length === 0) return
     const filter = this.buildFilter()
+    const fileFilter = this.buildFileFilter()
     const timeline = buildTimeline(repo, this.rawCommits, {
       filter,
+      fileFilter,
       truncated: store.timelineTruncated,
       warnings: store.warnings,
       fileSizes: this.fileSizes,
@@ -347,6 +351,13 @@ export class VisualizerController {
    * Filters
    * ------------------------------------------------------------------ */
 
+  /** Folder ignore list as a path predicate, or undefined when it is empty. */
+  private buildFileFilter(): ((path: string) => boolean) | undefined {
+    const matcher = compileIgnoredFolders(store.ignoredFolders)
+    if (!matcher.active) return undefined
+    return (path: string) => matcher.matches(path)
+  }
+
   private buildFilter(): ((commit: RawCommit) => boolean) | undefined {
     const hidden = new Set(store.hiddenAuthors)
     const { from, to } = store.dateRange
@@ -366,8 +377,17 @@ export class VisualizerController {
     }
   }
 
-  applyFilters(filters: { hiddenAuthors?: string[]; from?: number | null; to?: number | null }): void {
+  applyFilters(filters: {
+    hiddenAuthors?: string[]
+    ignoredFolders?: string[]
+    from?: number | null
+    to?: number | null
+  }): void {
     if (filters.hiddenAuthors) store.hiddenAuthors = [...filters.hiddenAuthors]
+    if (filters.ignoredFolders) {
+      store.ignoredFolders = normaliseIgnoredFolders(filters.ignoredFolders)
+      persistFilters()
+    }
     if (filters.from !== undefined) store.dateRange.from = filters.from
     if (filters.to !== undefined) store.dateRange.to = filters.to
     this.rebuildTimeline({ keepPosition: true })
@@ -375,7 +395,9 @@ export class VisualizerController {
 
   clearFilters(): void {
     store.hiddenAuthors = []
+    store.ignoredFolders = []
     store.dateRange = { from: null, to: null }
+    persistFilters()
     this.rebuildTimeline({ keepPosition: true })
   }
 

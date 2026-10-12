@@ -111,6 +111,35 @@ describe('VisualizerController', () => {
     expect(store.timelineStats?.commits).toBe(total)
   })
 
+  it('ignores folders by name without dropping their commits', async () => {
+    const { url } = mockApi(generateCommits(40))
+    await controller.load(url)
+    const timeline = controller.currentTimeline
+    expect(timeline).not.toBeNull()
+    const before = timeline!.commits.flatMap((commit) => commit.changes.map((change) => change.path))
+    expect(before.some((path) => path.startsWith('src/module-3/'))).toBe(true)
+
+    controller.applyFilters({ ignoredFolders: ['module-3'] })
+
+    const after = controller.currentTimeline!.commits
+    // No path inside the ignored folder survives...
+    const paths = after.flatMap((commit) => commit.changes.map((change) => change.path))
+    expect(paths.filter((path) => path.startsWith('src/module-3/'))).toEqual([])
+    // ...but the commits themselves stay: the history did not shrink.
+    expect(store.timelineStats?.commits).toBe(40)
+    expect(store.timelineStats?.ignoredFiles).toBeGreaterThan(0)
+    // Other modules are untouched.
+    expect(paths.some((path) => path.startsWith('src/module-4/'))).toBe(true)
+
+    // The list is a preference and round-trips through the normalisation.
+    expect(store.ignoredFolders).toEqual(['module-3'])
+
+    controller.clearFilters()
+    expect(store.ignoredFolders).toEqual([])
+    expect(controller.currentTimeline!.commits.flatMap((commit) => commit.changes.map((change) => change.path)))
+      .toHaveLength(before.length)
+  })
+
   it('toggles a single author', async () => {
     const { url } = mockApi(generateCommits(16))
     await controller.load(url)
