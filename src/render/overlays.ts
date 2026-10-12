@@ -111,6 +111,30 @@ export function calendarLayout(width: number, height: number, columns: number): 
   return { cellWidth, cellHeight, gap, labelWidth, labelHeight }
 }
 
+/**
+ * Natural height of the weekday × hour chart at a given width.
+ *
+ * The panels on screen size themselves with this (the export overlay picks its
+ * own), so the cells stay legible instead of filling an arbitrary height.
+ */
+export function weekdayHourChartHeight(
+  width: number,
+  cellSize = Math.max(10, Math.min(18, Math.round(width / 26))),
+): number {
+  const { gap, labelHeight } = weekdayHourLayout(width, 0)
+  return labelHeight + 7 * (cellSize + gap)
+}
+
+/** Natural height of the contribution calendar at a given width. */
+export function calendarChartHeight(
+  width: number,
+  columns: number,
+  cellSize = Math.max(4, Math.min(12, Math.floor((width - 20) / Math.max(1, columns)) - 2)),
+): number {
+  const { gap, labelHeight } = calendarLayout(width, 0, columns)
+  return labelHeight + 7 * (cellSize + gap)
+}
+
 export interface WeekdayHourOptions {
   width: number
   height: number

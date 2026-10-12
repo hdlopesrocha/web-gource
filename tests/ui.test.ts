@@ -455,6 +455,24 @@ describe('panels', () => {
     vi.restoreAllMocks()
   })
 
+  it('activity panel sizes its canvases to the chart, not to a probe height', async () => {
+    const timeline = buildTimeline(repo, [rawCommit(0), rawCommit(1)])
+    vi.spyOn(controller, 'currentTimeline', 'get').mockReturnValue(timeline)
+    store.hud = hudAt(Date.UTC(2024, 2, 8, 12, 0))
+    const wrapper = mount(ActivityPanel)
+    await wrapper.vm.$nextTick()
+
+    const canvases = wrapper.findAll('canvas')
+    expect(canvases).toHaveLength(2)
+    for (const canvas of canvases) {
+      const element = canvas.element as HTMLCanvasElement
+      // The bug: a probe height made the cells (and the canvas) ~1000px tall.
+      expect(element.height).toBeGreaterThan(40)
+      expect(element.height).toBeLessThan(220)
+    }
+    vi.restoreAllMocks()
+  })
+
   it('activity panel draws both heatmaps from the timeline', () => {
     const at = (index: number, timestamp: number): RawCommit => ({ ...rawCommit(index), timestamp })
     const timeline = buildTimeline(repo, [

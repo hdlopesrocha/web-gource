@@ -11,10 +11,12 @@ import {
   WEEKDAY_LABELS,
 } from '../timeline/activity'
 import {
+  calendarChartHeight,
   calendarLayout,
   drawContributionCalendar,
   drawWeekdayHour,
   SHADES,
+  weekdayHourChartHeight,
   weekdayHourLayout,
 } from '../render/overlays'
 import { formatDate } from '../timeline/schedule'
@@ -80,8 +82,9 @@ function drawGrid(): void {
   const canvas = gridCanvas.value
   if (!canvas) return
   const width = canvas.clientWidth || 360
-  const probe = weekdayHourLayout(width, 999)
-  const height = probe.labelHeight + 7 * (probe.cellHeight + probe.gap)
+  // Size the canvas to the chart's natural height: a probe height would make the
+  // cells (and the panel) absurdly tall.
+  const height = weekdayHourChartHeight(width)
   const ctx = prepare(canvas, width, height)
   if (!ctx) return
   gridSize.width = width
@@ -95,8 +98,7 @@ function drawCalendar(): void {
   if (!canvas) return
   const width = canvas.clientWidth || 360
   const columns = calendar.value.weeks.length
-  const probe = calendarLayout(width, 999, columns)
-  const height = probe.labelHeight + 7 * (probe.cellHeight + probe.gap) + 4
+  const height = calendarChartHeight(width, columns) + 4
   const ctx = prepare(canvas, width, height)
   if (!ctx) return
   calendarSize.width = width
