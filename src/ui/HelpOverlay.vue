@@ -63,6 +63,17 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Activity</h3>
+        <p class="muted small">
+          The Activity panel (<kbd>H</kbd>) shows when the work happened. The first chart is a density heatmap of
+          commits per weekday and hour of day (UTC) — horizontal is the hour, vertical the weekday. The second is a
+          GitHub-style contribution calendar for the last 53 weeks, where the rightmost column is the week of the
+          current commit date, so it slides as the animation plays and days that have not happened yet stay empty.
+          Both charts follow the active filters, so hiding authors, folders or a date range changes what they count.
+        </p>
+      </section>
+
+      <section>
         <h3>Video export</h3>
         <p class="muted small">
           The default export renders the animation frame by frame from the beginning at exactly 30 frames per
@@ -158,6 +169,17 @@ const shortcuts: { keys: string; action: string }[] = [
           visibility are derived purely from commit data (idle gaps are compressed with a fixed, documented curve).
           Seeking re-evaluates the scene from the timeline rather than replaying it, so scrubbing is instant and still
           exact.
+        </p>
+      </section>
+
+      <section>
+        <h3>Activity</h3>
+        <p class="muted small">
+          The Activity panel (<kbd>H</kbd>) shows when the work happened. The first chart is a density heatmap of
+          commits per weekday and hour of day (UTC) — horizontal is the hour, vertical the weekday. The second is a
+          GitHub-style contribution calendar for the last 53 weeks, where the rightmost column is the week of the
+          current commit date, so it slides as the animation plays and days that have not happened yet stay empty.
+          Both charts follow the active filters, so hiding authors, folders or a date range changes what they count.
         </p>
       </section>
 

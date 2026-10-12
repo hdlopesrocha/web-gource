@@ -149,6 +149,7 @@ export interface ExportCodecInfo {
 export interface UiState {
   settingsOpen: boolean
   helpOpen: boolean
+  activityOpen: boolean
   authorsOpen: boolean
   minimapVisible: boolean
   timelineOpen: boolean
@@ -370,6 +371,7 @@ export const store = reactive<AppState>({
   ui: {
     settingsOpen: false,
     helpOpen: false,
+    activityOpen: false,
     authorsOpen: false,
     minimapVisible: true,
     timelineOpen: true,

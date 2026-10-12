@@ -5,6 +5,7 @@ import { store } from '../state/store'
 import PlaybackBar from './PlaybackBar.vue'
 import InfoOverlay from './InfoOverlay.vue'
 import SettingsPanel from './SettingsPanel.vue'
+import ActivityPanel from './ActivityPanel.vue'
 import AuthorsPanel from './AuthorsPanel.vue'
 import MinimapPanel from './MinimapPanel.vue'
 import { loadingPercent } from '../state/store'
@@ -105,6 +106,12 @@ function onKeydown(event: KeyboardEvent): void {
     case 's':
     case 'S':
       store.ui.settingsOpen = !store.ui.settingsOpen
+      if (store.ui.settingsOpen) store.ui.activityOpen = false
+      break
+    case 'h':
+    case 'H':
+      store.ui.activityOpen = !store.ui.activityOpen
+      if (store.ui.activityOpen) store.ui.settingsOpen = false
       break
     case 'f':
     case 'F':
@@ -162,6 +169,15 @@ onBeforeUnmount(() => {
         >
           <span class="rec-dot" /> Stop recording
         </button>
+        <button
+          class="btn ghost small"
+          :class="{ active: store.ui.activityOpen }"
+          type="button"
+          title="Commit activity heatmaps (H)"
+          @click="store.ui.activityOpen = !store.ui.activityOpen; if (store.ui.activityOpen) store.ui.settingsOpen = false"
+        >
+          Activity
+        </button>
         <button class="btn ghost small" type="button" title="Authors (A)" @click="store.ui.authorsOpen = !store.ui.authorsOpen">
           Authors
         </button>
@@ -174,7 +190,12 @@ onBeforeUnmount(() => {
         >
           Map
         </button>
-        <button class="btn ghost small" type="button" title="Settings (S)" @click="store.ui.settingsOpen = !store.ui.settingsOpen">
+        <button
+          class="btn ghost small"
+          type="button"
+          title="Settings (S)"
+          @click="store.ui.settingsOpen = !store.ui.settingsOpen; if (store.ui.settingsOpen) store.ui.activityOpen = false"
+        >
           Settings
         </button>
         <button class="btn ghost small" type="button" title="Help (?)" @click="store.ui.helpOpen = true">?</button>
@@ -226,6 +247,7 @@ onBeforeUnmount(() => {
 
     <AuthorsPanel v-if="store.ui.authorsOpen" @close="store.ui.authorsOpen = false" />
     <SettingsPanel v-if="store.ui.settingsOpen" @close="store.ui.settingsOpen = false" />
+    <ActivityPanel v-if="store.ui.activityOpen" @close="store.ui.activityOpen = false" />
 
     <Transition name="fade">
       <div v-if="store.recording.active" class="recording-overlay">

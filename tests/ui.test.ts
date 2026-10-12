@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import LandingView from '../src/ui/LandingView.vue'
 import PlaybackBar from '../src/ui/PlaybackBar.vue'
 import AuthorsPanel from '../src/ui/AuthorsPanel.vue'
+import ActivityPanel from '../src/ui/ActivityPanel.vue'
 import SettingsPanel from '../src/ui/SettingsPanel.vue'
 import HelpOverlay from '../src/ui/HelpOverlay.vue'
 import StageView from '../src/ui/StageView.vue'
@@ -399,6 +400,30 @@ describe('panels', () => {
     expect(store.hideHiddenFolders).toBe(false)
     await box.setValue(true)
     expect(store.hideHiddenFolders).toBe(true)
+  })
+
+  it('activity panel draws both heatmaps from the timeline', () => {
+    const at = (index: number, timestamp: number): RawCommit => ({ ...rawCommit(index), timestamp })
+    const timeline = buildTimeline(repo, [
+      at(0, Date.UTC(2024, 2, 6, 14, 30)), // Wednesday
+      at(1, Date.UTC(2024, 2, 6, 14, 50)), // Wednesday, same hour
+      at(2, Date.UTC(2024, 2, 8, 9, 0)), // Friday
+    ])
+    vi.spyOn(controller, 'currentTimeline', 'get').mockReturnValue(timeline)
+    store.hud = { ...(store.hud ?? {}), date: Date.UTC(2024, 2, 8, 12, 0) } as typeof store.hud
+    const wrapper = mount(ActivityPanel)
+
+    // Both charts are present, with their axes and summaries.
+    expect(wrapper.findAll('canvas')).toHaveLength(2)
+    expect(wrapper.text()).toContain('Commits per weekday and hour')
+    expect(wrapper.text()).toContain('Contributions · last 53 weeks')
+    expect(wrapper.text()).toContain('3 commits')
+    expect(wrapper.text()).toContain('Wed 14:00')
+    expect(wrapper.text()).toContain('busiest Wed 14:00 (2)')
+    // The window ends with the Saturday of the current week.
+    expect(wrapper.text()).toContain('→ 2024-03-09')
+    expect(wrapper.text()).toContain('Right column is the current week')
+    vi.restoreAllMocks()
   })
 
   it('settings panel exposes visualization, camera, filter and data tabs', async () => {

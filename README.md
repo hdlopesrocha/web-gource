@@ -371,6 +371,19 @@ and after a seek.
 * Positions remain a pure function of the applied commits, so seeking forward to
   a point in history produces exactly the layout that playing to it would.
 
+### Activity heatmaps
+
+The Activity panel (`H`, or the button in the header) answers "when did this work happen":
+
+* **commits per weekday and hour** — a 7 × 24 density grid in UTC, with a hover readout per cell and the busiest
+  slot in the header;
+* **contributions over the last 53 weeks** — a GitHub-style calendar of per-day commit counts, five shade steps
+  and month labels. The rightmost column is always the week of the *current* commit date, so the calendar slides
+  as playback advances (and days that have not happened yet stay empty).
+
+Both charts aggregate the filtered timeline, so hiding authors, ignoring folders or narrowing the date range
+changes what they count, and both are drawn on canvas at device pixel ratio with a hover readout per cell.
+
 ### Reading the activity
 
 ![A beam connecting an author to the file it just changed](docs/screenshot-beams.png)
