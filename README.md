@@ -44,6 +44,46 @@ npm run typecheck    # vue-tsc only
    small batches; the visualization starts as soon as the first batch is ready.
 4. Play with it: scrub, seek, filter, and export a video.
 
+### Exporting video
+
+Two export modes live in Settings → Recording:
+
+**Deterministic render (default).** The animation is rendered frame by frame from
+simulated time `t = 0` to the end of the timeline at **exactly 30 frames per
+simulated second**, so the file does not depend on how fast the machine is:
+
+* the simulation advances by exactly `1/30 s` per frame and the commit index is
+  derived from that time, so every frame is the same on every machine — a slow
+  machine just takes longer (a 51 s animation rendered in software here took
+  ~170 s of wall clock and produced the same 1,530 frames as a fast one);
+* frames are drawn by the existing WebGL pipeline (`Engine.renderExportFrame`),
+  at the resolution you pick, with the camera stepping on a fixed frame cadence
+  rather than a wall clock;
+* each frame is wrapped in a `VideoFrame` and handed to the browser's
+  **WebCodecs** encoder, which is asked for a hardware implementation first and
+  falls back to software (`prefer-hardware` → `no-preference` → `prefer-software`);
+* frames are never accumulated: each one is encoded and released before the next
+  is drawn, and the encoder queue is kept under a few frames, so memory stays
+  flat for long exports. Only the compressed stream is retained;
+* **WebM (VP9)** is the default output; **MP4 (H.264)** is offered when the
+  browser has an AVC encoder. Containers are written in this repository
+  (`src/engine/export/webm.ts`, `mp4.ts`) — no muxer dependency;
+* progress reports frames rendered, the total frame count, and the simulated
+  time reached; cancelling stops cleanly and leaves the session where it was;
+* at the end the encoder is flushed and the container is finalised (cluster
+  flush, duration patched, MP4 durations patched), so the file is playable and
+  contains every frame. `ffprobe` on a 51 s export reports `vp9`/`h264`,
+  `640x360`, `30/1`, `1530` frames, `duration=51.000000`.
+
+The *rendering* is deterministic; the encoder itself is not required to be
+bit-exact (parallel VP9/H.264 encoders may vary by a few bytes), so two runs
+produce the same frames and duration, not necessarily identical files.
+
+**Live capture.** The older `MediaRecorder` + `captureStream` path samples the
+canvas in real time. It can capture manual panning and zooming, but the wall
+clock decides how many frames reach the file — use the deterministic render when
+the result has to be reproducible.
+
 ### Ignoring folders
 
 Repositories contain trees nobody wants to watch — `node_modules`, `vendor`, `third_party`,
@@ -148,7 +188,13 @@ src/
   engine/
     engine.ts               playback clock, simulation driving, camera, HUD, recording hooks
     controller.ts           app orchestration: load, filters, seek, settings, recording
-    recorder.ts             MediaRecorder + canvas.captureStream export
+    recorder.ts             MediaRecorder + canvas.captureStream export (live capture)
+    export/                 deterministic frame-by-frame export
+      frames.ts             30 fps frame plan: time, timestamps, keyframes, progress
+      encoder.ts            WebCodecs encoders (hardware first, software fallback)
+      exporter.ts           frame loop, backpressure, cancellation, finalisation
+      webm.ts               WebM/Matroska muxer (VP9/VP8/AV1)
+      mp4.ts                fragmented MP4 muxer (H.264)
   state/store.ts            reactive app state, settings persistence, token storage
   ui/*.vue                  landing view, stage, playback bar, scrubber, panels, help
 tests/                      unit, component and (opt-in) live API tests
@@ -380,6 +426,10 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   clusters (including nested ones) never overlap and stay inside their parent's cluster, growing a
   folder pushes its siblings outwards, seek and playback produce identical layouts, and the static
   mode pins nodes to their path-derived positions;
+* export containers: EBML/box structure written back and parsed (clusters per keyframe, simple
+  block payloads, patched durations, `avcC`, fragment data offsets, byte-exact sample payloads),
+  and the export loop (30 fps frame plan, keyframe cadence, frame release, queue bounds, progress,
+  cancellation, encoder errors, MP4 initialisation from the encoder metadata);
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes, folder glow (one halo
   per directory sized from the cluster radius, intensity baked into the instance colours), edge
   buffers, particle
