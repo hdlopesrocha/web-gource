@@ -333,6 +333,20 @@ export class SceneRenderer {
     this.fullSyncPending = true
   }
 
+  /**
+   * Forget every instance of the current simulation.
+   *
+   * Called when the history is rebuilt: node ids are per simulation, so the
+   * layers must start from nothing or the previous tree would stay drawn.
+   */
+  resetLayers(): void {
+    this.nodes.reset()
+    this.edges.reset()
+    this.glow.reset()
+    this.particles.clear()
+    this.fullSyncPending = true
+  }
+
   /** React to simulation events: update instances and spawn effects. */
   consumeEvents(sim: Simulation, now: number): void {
     void now

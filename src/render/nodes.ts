@@ -123,6 +123,26 @@ export class NodeField {
     return drawn
   }
 
+  /**
+   * Drop every instance.
+   *
+   * Node ids are per simulation, so a rebuilt history (filters, a new
+   * repository) reuses ids for different nodes: without this the instances of
+   * the previous simulation would stay on screen, still drawn, because nothing
+   * ever writes them again.
+   */
+  reset(): void {
+    this.fileIds = []
+    this.dirIds = []
+    this.fileInstanceOf = []
+    this.dirInstanceOf = []
+    this.recent.clear()
+    this.fileMesh.count = 0
+    this.dirMesh.count = 0
+    this.fileMesh.instanceMatrix.needsUpdate = true
+    this.dirMesh.instanceMatrix.needsUpdate = true
+  }
+
   setColorMode(mode: FileColorMode, nodes: readonly SimNode[]): void {
     if (mode === this.colorMode) return
     this.colorMode = mode

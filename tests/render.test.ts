@@ -98,6 +98,25 @@ describe('NodeField', () => {
     field.dispose()
   })
 
+  it('drops every instance when the history is rebuilt', () => {
+    // Node ids are per simulation: a filter change rebuilds it, so the layers
+    // must forget the previous instances or the old tree keeps rendering.
+    const field = new NodeField({ maxFiles: 8, maxDirs: 4, colorMode: 'extension' })
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1), node(2, { kind: 'dir', path: 'src', name: 'src' })]
+    field.sync(nodes, true)
+    expect(field.stats).toEqual({ files: 1, dirs: 2 })
+    field.reset()
+    expect(field.stats).toEqual({ files: 0, dirs: 0 })
+    expect(field.drawn).toEqual({ files: 0, dirs: 0 })
+
+    // The next sync allocates fresh instances for the new simulation.
+    const rebuilt = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'lib', name: 'lib' })]
+    field.sync(rebuilt, true)
+    expect(field.stats).toEqual({ files: 0, dirs: 2 })
+    expect(field.drawn).toEqual({ files: 0, dirs: 2 })
+    field.dispose()
+  })
+
   it('grows instance capacity when more nodes stream in', () => {
     const field = new NodeField({ maxFiles: 4, maxDirs: 2, colorMode: 'extension' })
     const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
@@ -165,6 +184,17 @@ describe('GlowField', () => {
     field.sync(nodes, false, [2])
     mesh.getMatrixAt(1, matrix)
     expect(matrix.elements[0]).toBe(0)
+    field.dispose()
+  })
+
+  it('drops every halo when the history is rebuilt', () => {
+    const field = new GlowField(8)
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
+    field.sync(nodes, true)
+    expect(field.drawn).toBe(2)
+    field.reset()
+    expect(field.stats).toBe(0)
+    expect(field.drawn).toBe(0)
     field.dispose()
   })
 
@@ -236,6 +266,17 @@ describe('EdgeField', () => {
     child.visible = false
     field.sync(nodes, false, [1])
     expect((geometry.getAttribute('position') as THREE.BufferAttribute).getX(3)).toBe(0)
+    field.dispose()
+  })
+
+  it('drops every branch when the history is rebuilt', () => {
+    const field = new EdgeField(8)
+    const parent = node(0, { kind: 'root', path: '', radius: 0.5 })
+    const child = node(1, { parent: 0, radius: 0.2, position: { x: 6, y: 0, z: 0 } })
+    field.sync([parent, child], true)
+    expect(field.lines.geometry.drawRange.count).toBe(4)
+    field.reset()
+    expect(field.lines.geometry.drawRange.count).toBe(0)
     field.dispose()
   })
 

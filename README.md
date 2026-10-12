@@ -485,9 +485,10 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   and the export loop (30 fps frame plan, keyframe cadence, frame release, queue bounds, progress,
   cancellation, encoder errors, MP4 initialisation from the encoder metadata);
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes collapsing on both dirty
-  *and* full syncs (a seek or restart must not leave the previous frame on screen), folder glow (one
-  halo per directory sized from the cluster radius, intensity baked into the instance colours), edge
-  buffers, particle
+  *and* full syncs (a seek or restart must not leave the previous frame on screen), every layer
+  dropping its instances when the history is rebuilt (node ids are per simulation, so a filter change
+  must not keep rendering the old tree), folder glow (one halo per directory sized from the cluster
+  radius, intensity baked into the instance colours), edge buffers, particle
   pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
   WebGL-unavailable degradation;

@@ -213,6 +213,9 @@ export class Engine {
     this.sim.scheduleTime = (index) => this.scheduleTime(index)
     this.sim.setSizeMode(this.sizeMode)
     this.sim.setFileSizes(timeline.fileSizes)
+    // The new simulation allocates its own node ids, so every layer drops the
+    // instances of the previous one (otherwise hidden folders keep rendering).
+    this.renderer.resetLayers()
     this.renderer.setNodes(this.sim.nodes)
     const target = options.keepPosition ? ratio * this.schedule.duration : 0
     if (options.frameCamera) this.rig.frame(this.sim.bounds(), true)

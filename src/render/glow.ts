@@ -82,6 +82,14 @@ export class GlowField {
   }
 
   /** Bloom intensity (Gource's `bloom_intensity`); 0 hides the layer entirely. */
+  /** Drop every halo (see `NodeField.reset`). */
+  reset(): void {
+    this.ids = []
+    this.instanceOf = []
+    this.mesh.count = 0
+    this.mesh.instanceMatrix.needsUpdate = true
+  }
+
   setIntensity(intensity: number, nodes: readonly SimNode[] = []): void {
     const next = Math.max(0, intensity)
     if (next === this.intensity) return

@@ -84,6 +84,12 @@ export class EdgeField {
   }
 
   /** Rewrite edges, either fully or only for the dirty node ids. */
+  /** Drop every segment (see `NodeField.reset`). */
+  reset(): void {
+    this.count = 0
+    this.lines.geometry.setDrawRange(0, 0)
+  }
+
   sync(nodes: readonly SimNode[], full: boolean, dirty?: readonly number[]): void {
     this.ensureCapacity(nodes.length)
     if (full) {
