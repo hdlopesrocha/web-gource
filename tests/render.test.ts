@@ -71,6 +71,33 @@ describe('NodeField', () => {
     expect(matrix.elements[0]).toBeGreaterThan(0)
   })
 
+  it('collapses hidden nodes on a full sync, not just on a dirty one', () => {
+    // Regression: a full sync used to skip invisible nodes, so a seek or a
+    // restart left the previous frame's circles on screen.
+    const field = new NodeField({ maxFiles: 8, maxDirs: 4, colorMode: 'extension' })
+    const nodes = [
+      node(0, { kind: 'root', path: '' }),
+      node(1),
+      node(2),
+      node(3, { kind: 'dir', path: 'src', name: 'src' }),
+    ]
+    field.sync(nodes, true)
+    expect(field.drawn).toEqual({ files: 2, dirs: 2 })
+
+    // Everything hidden (a restart seeks before the first commit).
+    for (const entry of nodes) entry.visible = false
+    field.sync(nodes, true)
+    expect(field.drawn).toEqual({ files: 0, dirs: 0 })
+
+    // A backward seek that hides a single node collapses only that one.
+    for (const entry of nodes) entry.visible = true
+    field.sync(nodes, true)
+    nodes[1].visible = false
+    field.sync(nodes, true)
+    expect(field.drawn).toEqual({ files: 1, dirs: 2 })
+    field.dispose()
+  })
+
   it('grows instance capacity when more nodes stream in', () => {
     const field = new NodeField({ maxFiles: 4, maxDirs: 2, colorMode: 'extension' })
     const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
@@ -141,6 +168,20 @@ describe('GlowField', () => {
     field.dispose()
   })
 
+  it('collapses hidden halos on a full sync', () => {
+    const field = new GlowField(8)
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
+    field.sync(nodes, true)
+    expect(field.drawn).toBe(2)
+    nodes[1].visible = false
+    field.sync(nodes, true)
+    expect(field.drawn).toBe(1)
+    for (const entry of nodes) entry.visible = false
+    field.sync(nodes, true)
+    expect(field.drawn).toBe(0)
+    field.dispose()
+  })
+
   it('bakes the intensity into the instance colours and hides at zero', () => {
     const field = new GlowField(8)
     const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
@@ -195,6 +236,20 @@ describe('EdgeField', () => {
     child.visible = false
     field.sync(nodes, false, [1])
     expect((geometry.getAttribute('position') as THREE.BufferAttribute).getX(3)).toBe(0)
+    field.dispose()
+  })
+
+  it('collapses hidden branches on a full sync', () => {
+    const field = new EdgeField(8)
+    const parent = node(0, { kind: 'root', path: '', radius: 0.5 })
+    const child = node(1, { parent: 0, radius: 0.2, position: { x: 6, y: 0, z: 0 } })
+    const nodes = [parent, child]
+    field.sync(nodes, true)
+    const positions = field.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+    expect(positions.getX(3)).toBeGreaterThan(0)
+    child.visible = false
+    field.sync(nodes, true)
+    expect(positions.getX(3)).toBe(0)
     field.dispose()
   })
 

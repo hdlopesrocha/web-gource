@@ -483,6 +483,29 @@ export class SceneRenderer {
     }
   }
 
+  /**
+   * Instances that are actually drawn, per layer.
+   *
+   * Diagnostics for the "a seek must not leave the previous state on screen"
+   * contract: after any seek (or a restart) these must match the visible nodes.
+   */
+  drawnInstances(): { files: number; dirs: number; glow: number; edges: number } {
+    const nodes = this.pendingNodes
+    const drawn = this.nodes.drawn
+    let edges = 0
+    if (nodes) {
+      const positions = this.edges.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+      const array = positions.array as Float32Array
+      for (const node of nodes) {
+        if (node.parent < 0) continue
+        const index = node.id * 6
+        if (array[index] === 0 && array[index + 1] === 0 && array[index + 3] === 0 && array[index + 4] === 0) continue
+        edges += 1
+      }
+    }
+    return { files: drawn.files, dirs: drawn.dirs, glow: this.glow.drawn, edges }
+  }
+
   /** Diagnostics for the beam layer. */
   beamSample(): Record<string, number> | null {
     return this.beams.sample()

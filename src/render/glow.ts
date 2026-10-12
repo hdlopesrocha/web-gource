@@ -71,6 +71,16 @@ export class GlowField {
     return this.ids.length
   }
 
+  /** Halos actually drawn (non-zero scale). */
+  get drawn(): number {
+    let drawn = 0
+    for (let instance = 0; instance < this.ids.length; instance += 1) {
+      this.mesh.getMatrixAt(instance, this.matrix)
+      if (this.matrix.elements[0] > 0) drawn += 1
+    }
+    return drawn
+  }
+
   /** Bloom intensity (Gource's `bloom_intensity`); 0 hides the layer entirely. */
   setIntensity(intensity: number, nodes: readonly SimNode[] = []): void {
     const next = Math.max(0, intensity)
@@ -98,8 +108,10 @@ export class GlowField {
         if (node.kind === 'file') continue
         this.allocate(node)
       }
+      // Hidden directories are written too, so their halo collapses instead of
+      // lingering from the previous frame.
       for (const node of nodes) {
-        if (node.kind === 'file' || !node.visible) continue
+        if (node.kind === 'file') continue
         this.writeNode(node)
       }
     } else if (dirty) {

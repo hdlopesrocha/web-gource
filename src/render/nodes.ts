@@ -106,6 +106,23 @@ export class NodeField {
     return { files: this.fileIds.length, dirs: this.dirIds.length }
   }
 
+  /** Instances actually drawn (non-zero scale). Must match the visible nodes. */
+  get drawn(): { files: number; dirs: number } {
+    return {
+      files: this.countDrawn(this.fileMesh, this.fileIds.length),
+      dirs: this.countDrawn(this.dirMesh, this.dirIds.length),
+    }
+  }
+
+  private countDrawn(mesh: THREE.InstancedMesh, count: number): number {
+    let drawn = 0
+    for (let instance = 0; instance < count; instance += 1) {
+      mesh.getMatrixAt(instance, this.matrix)
+      if (this.matrix.elements[0] > 0) drawn += 1
+    }
+    return drawn
+  }
+
   setColorMode(mode: FileColorMode, nodes: readonly SimNode[]): void {
     if (mode === this.colorMode) return
     this.colorMode = mode
@@ -135,10 +152,10 @@ export class NodeField {
         if (node.kind === 'file') this.allocateFile(node)
         else this.allocateDir(node)
       }
-      for (const node of nodes) {
-        if (!node.visible) continue
-        this.writeNode(node, true)
-      }
+      // Every allocated node is written, hidden ones included: `writeNode`
+      // collapses an invisible node to a zero scale. Skipping them would leave
+      // the previous frame's circles on screen after a seek or a restart.
+      for (const node of nodes) this.writeNode(node, true)
     } else if (dirty) {
       for (const id of dirty) {
         const node = nodes[id]
