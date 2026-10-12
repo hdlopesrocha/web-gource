@@ -55,7 +55,7 @@ export class LabelField {
     if (existing) return existing
     const material = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, depthTest: false, toneMapped: false })
     const sprite = new THREE.Sprite(material)
-    sprite.renderOrder = 5
+    sprite.renderOrder = 30
     const slot: LabelSlot = { sprite, material, textureKey: null, nodeId: -1 }
     this.group.add(sprite)
     this.slots[index] = slot

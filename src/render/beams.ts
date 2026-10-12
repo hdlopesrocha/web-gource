@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { ChangeKind } from '../timeline/types'
-import type { SimAuthor, SimNode } from '../sim/simulation'
+import type { SimAuthor, SimNode, SimTether } from '../sim/simulation'
 import { colorForChange } from './palette'
 
 /**
@@ -50,7 +50,7 @@ export class BeamField {
     })
     this.mesh = new THREE.Mesh(this.geometry, this.material)
     this.mesh.frustumCulled = false
-    this.mesh.renderOrder = 4
+    this.mesh.renderOrder = 12
   }
 
   setEnabled(enabled: boolean): void {
@@ -62,9 +62,21 @@ export class BeamField {
     this.intensity = Math.max(0, intensity)
   }
 
-  /** Beam width in CSS pixels. */
+  /** Beam width in CSS pixels (for an average change). */
   setWidthPixels(pixels: number): void {
     this.widthPixels = Math.max(0.5, pixels)
+  }
+
+  /**
+   * Strength multiplier for a tether: a commit that changed a file a lot gets a
+   * wider, brighter beam than a one-line tweak. Normalised against the largest
+   * change in the loaded window, so it stays meaningful across repositories.
+   */
+  private strengthScale(tether: SimTether): number {
+    const reference = Math.max(1, tether.reference)
+    const ratio = Math.min(1, Math.max(0, tether.strength / reference))
+    // A gentle curve: small changes stay visible, big ones stand out.
+    return 0.55 + 0.85 * Math.pow(ratio, 0.6)
   }
 
   /** Number of beams drawn in the last update (diagnostics). */
@@ -135,14 +147,16 @@ export class BeamField {
         const bx = node.position.x
         const by = node.position.y
 
+        // Stronger changes get a wider, brighter beam.
+        const scale = this.strengthScale(tether)
         const dx = bx - ax
         const dy = by - ay
         const length = Math.hypot(dx, dy)
         if (length < 0.001) continue
         // Perpendicular offset: the quad faces the camera because the scene is
         // flat, so this is a simple 2D perpendicular.
-        const nx = (-dy / length) * halfWidth
-        const ny = (dx / length) * halfWidth
+        const nx = (-dy / length) * halfWidth * scale
+        const ny = (dx / length) * halfWidth * scale
         // Slightly narrower at the file end.
         const taper = 0.62
 
@@ -164,20 +178,20 @@ export class BeamField {
         //    busy background.
         const glowX = nx * 2.6
         const glowY = ny * 2.6
-        put(0, ax + glowX, ay + glowY, 0.5)
-        put(1, ax - glowX, ay - glowY, 0.5)
-        put(2, bx + glowX * taper, by + glowY * taper, 0.22)
-        put(3, ax - glowX, ay - glowY, 0.5)
-        put(4, bx + glowX * taper, by + glowY * taper, 0.22)
-        put(5, bx - glowX * taper, by - glowY * taper, 0.22)
+        put(0, ax + glowX, ay + glowY, 0.5 * scale)
+        put(1, ax - glowX, ay - glowY, 0.5 * scale)
+        put(2, bx + glowX * taper, by + glowY * taper, 0.22 * scale)
+        put(3, ax - glowX, ay - glowY, 0.5 * scale)
+        put(4, bx + glowX * taper, by + glowY * taper, 0.22 * scale)
+        put(5, bx - glowX * taper, by - glowY * taper, 0.22 * scale)
 
         // 2. Core: the bright line from the avatar to the file.
-        put(6, ax + nx, ay + ny, 2.1)
-        put(7, ax - nx, ay - ny, 2.1)
-        put(8, bx + nx * taper, by + ny * taper, 0.95)
-        put(9, ax - nx, ay - ny, 2.1)
-        put(10, bx + nx * taper, by + ny * taper, 0.95)
-        put(11, bx - nx * taper, by - ny * taper, 0.95)
+        put(6, ax + nx, ay + ny, 2.1 * scale)
+        put(7, ax - nx, ay - ny, 2.1 * scale)
+        put(8, bx + nx * taper, by + ny * taper, 0.95 * scale)
+        put(9, ax - nx, ay - ny, 2.1 * scale)
+        put(10, bx + nx * taper, by + ny * taper, 0.95 * scale)
+        put(11, bx - nx * taper, by - ny * taper, 0.95 * scale)
         segment += 1
       }
     }

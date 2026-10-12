@@ -6,6 +6,7 @@ import { ParticleField, pointSizePixels } from '../src/render/particles'
 import { Camera2D } from '../src/render/camera'
 import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
+import { BeamField } from '../src/render/beams'
 import type { SimNode } from '../src/sim/simulation'
 
 /**
@@ -347,6 +348,26 @@ describe('palette', () => {
     expect(ts1).not.toBe(colorForExtension('md').getHexString())
     expect(colorForAuthor(0).getHexString()).not.toBe(colorForAuthor(3).getHexString())
     expect(colorForChange('add').getHexString()).not.toBe(colorForChange('delete').getHexString())
+  })
+})
+
+describe('layer ordering', () => {
+  it('draws branches behind the circles and effects above them', () => {
+    const edges = new EdgeField(4)
+    const nodes = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const particles = new ParticleField(8)
+    const beams = new BeamField(4)
+
+    // Branches render before the opaque circles (negative renderOrder).
+    expect(edges.lines.renderOrder).toBeLessThan(0)
+    // Effects and beams sit above the circles, beams above particles.
+    expect(particles.points.renderOrder).toBeGreaterThan(3)
+    expect(beams.mesh.renderOrder).toBeGreaterThan(particles.points.renderOrder)
+
+    edges.dispose()
+    nodes.dispose()
+    particles.dispose()
+    beams.dispose()
   })
 })
 

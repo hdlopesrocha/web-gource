@@ -11,6 +11,11 @@ export interface TimelineFileChange {
   kind: ChangeKind
   additions: number
   deletions: number
+  /**
+   * Size of the file after this change, when the host reported a size for it.
+   * Used to draw stronger beams for bigger files and to show sizes in the UI.
+   */
+  sizeBytes?: number
 }
 
 /** An author identity as used by the visualization. */

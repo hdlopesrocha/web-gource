@@ -70,6 +70,13 @@ export interface SimTether {
   start: number
   /** Simulated time it disappears. */
   until: number
+  /**
+   * Size of the change in this file (added + removed lines, or the bytes it
+   * gained). Drives how strong the beam is drawn.
+   */
+  strength: number
+  /** Largest change seen in the loaded window, used to normalise `strength`. */
+  reference: number
 }
 
 /** An author currently present in the scene. */
@@ -180,6 +187,8 @@ export class Simulation {
   private maxActivity = 0
   /** Host-reported sizes for the whole snapshot (path → bytes). */
   private fileSizes = new Map<string, number>()
+  /** Largest change strength seen, used to normalise beam brightness. */
+  private maxChangeStrength = 1
   /**
    * Placement cache per directory: existing files keep their spot so an
    * incremental reflow is cheap (only new or resized circles are placed).
@@ -265,6 +274,7 @@ export class Simulation {
     this.totalDeletions = 0
     this.maxBytes = 0
     this.maxActivity = 0
+    this.maxChangeStrength = 1
     this.movingNodes.clear()
     this.movedNodes = []
     this.discCache.clear()
@@ -856,7 +866,7 @@ export class Simulation {
       }
 
       // Tether the author to every file this commit touched.
-      this.attachTethers(author, touched, focus)
+      this.attachTethers(author, touched, focus, commit.changes)
 
       this.pushEvent({
         type: 'author',
@@ -1108,19 +1118,43 @@ export class Simulation {
   }
 
   /** Remember which files a commit touched so beams can be drawn to them. */
-  private attachTethers(author: SimAuthor, touched: SimNode[], fallback: SimNode): void {
+  private attachTethers(author: SimAuthor, touched: SimNode[], fallback: SimNode, changes: TimelineFileChange[]): void {
+    // Strength per file: how much this particular file changed.
+    const strengthOf = (path: string): number => {
+      let lines = 0
+      let bytes = 0
+      for (const change of changes) {
+        if (change.path !== path) continue
+        lines += change.additions + change.deletions
+        // A big file changing at all is a bigger event than a tiny one.
+        if (change.sizeBytes !== undefined) bytes = Math.max(bytes, change.sizeBytes)
+      }
+      // Line churn dominates, with the file's size as a secondary factor.
+      return Math.max(lines, bytes / 200, 1)
+    }
     const until = this.time + this.options.tetherDuration
     const targets = touched.length > 0 ? touched : [fallback]
     for (const node of targets) {
       const kind = node.lastKind ?? 'modify'
+      const strength = strengthOf(node.path)
+      this.maxChangeStrength = Math.max(this.maxChangeStrength, strength)
       const existing = author.tethers.find((tether) => tether.nodeId === node.id)
       if (existing) {
         existing.kind = kind
         existing.start = this.time
         existing.until = until
+        existing.strength = strength
+        existing.reference = this.maxChangeStrength
         continue
       }
-      author.tethers.push({ nodeId: node.id, kind, start: this.time, until })
+      author.tethers.push({
+        nodeId: node.id,
+        kind,
+        start: this.time,
+        until,
+        strength,
+        reference: this.maxChangeStrength,
+      })
     }
     if (author.tethers.length > this.options.maxTethers) {
       author.tethers.splice(0, author.tethers.length - this.options.maxTethers)

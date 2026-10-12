@@ -186,7 +186,8 @@ Given the same history and settings, the same sequence of events is produced:
 
 * Files and directories are two `InstancedMesh` objects — flat discs for files, rings for
   directories — viewed through an orthographic camera, with per-instance colour and matrix updates
-  only for changed nodes. Both grow by reallocating and copying instance buffers when a repository
+  only for changed nodes. Layer order: branches (behind), circles, activity particles, rays,
+  authors, labels (front). Both grow by reallocating and copying instance buffers when a repository
   turns out to be larger than expected.
 * Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
   depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
@@ -260,7 +261,11 @@ Every commit is visible while it happens:
   deleted, violet renamed) and briefly grow, so a one-line edit in a large tree is still findable;
 * a **beam** (the Gource tether) connects each changed file to the author who made the change: a
   bright core with a soft glow, drawn as camera-facing quads so the width is controllable, fading
-  out after about 1.6 simulated seconds;
+  out after about 1.6 simulated seconds. Its **width and brightness follow the size of that
+  change** (line churn, with the file's size as a secondary factor, normalised against the largest
+  change in the window), so a 1200-line commit draws a much stronger ray than a one-line tweak;
+* authors are drawn **above** everything else — branches, circles, particles and rays — so the
+  avatars are never hidden while they work;
 * avatars travel between files with a critically damped spring and a speed limit instead of
   jumping, so you can follow a contributor across the tree; new contributors fly in from outside
   the tree;
@@ -320,6 +325,8 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * branch lines: endpoints stay outside both circles, a branch between touching circles is dropped,
   the material stays opaque so the node pass occludes it, and the dimming is baked into the vertex
   colours;
+* activity beams: brightness and width scale with the size of the change, endpoints follow both
+  the avatar and the node, and the author layer renders above the rays;
 * dynamic layout: ring packing never overlaps circles, grows with item count and radius, uses
   concentric rings for crowds without the rings colliding, is deterministic and order independent;
   in the simulation, adding, deleting or growing a file moves its siblings smoothly, folder

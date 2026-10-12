@@ -8,6 +8,7 @@ import SettingsPanel from '../src/ui/SettingsPanel.vue'
 import HelpOverlay from '../src/ui/HelpOverlay.vue'
 import StageView from '../src/ui/StageView.vue'
 import { store, setToken, tokenFor, resetRunState } from '../src/state/store'
+import { AuthorField } from '../src/render/authors'
 import { controller } from '../src/engine/controller'
 import { buildTimeline } from '../src/timeline/builder'
 import type { RawCommit, RepoInfo } from '../src/git/types'
@@ -385,6 +386,63 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('Space')
     expect(wrapper.text()).toContain('60 requests/hour')
     expect(wrapper.text()).toContain('MediaRecorder')
+  })
+})
+
+describe('author layer', () => {
+  it('draws authors above rays, particles and circles', () => {
+    // jsdom has no 2D canvas: stub just enough for the avatar texture cache.
+    const stub = {
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 0,
+      textAlign: '',
+      textBaseline: '',
+      beginPath() {},
+      arc() {},
+      fill() {},
+      stroke() {},
+      fillRect() {},
+      clearRect() {},
+      fillText() {},
+      measureText: () => ({ width: 12, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }),
+      createRadialGradient: () => ({ addColorStop() {} }),
+      moveTo() {},
+      arcTo() {},
+      closePath() {},
+      save() {},
+      restore() {},
+      translate() {},
+      scale() {},
+      setTransform() {},
+      drawImage() {},
+    }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(stub as never)
+    const authors = new AuthorField(2)
+    authors.sync([
+      {
+        author: { id: 'x', name: 'Ada', commits: 1, first: 0, last: 0, additions: 0, deletions: 0, colorIndex: 0, unattributed: false },
+        position: { x: 0, y: 0, z: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+        target: { x: 0, y: 0, z: 0 },
+        targetNodeId: 0,
+        lastActiveAt: 0,
+        appearedAt: 0,
+        appliedCommits: 1,
+        lastKind: 'modify',
+        visible: true,
+        tethers: [],
+      },
+    ])
+    // Both the halo and the avatar itself render above the beams (12) and the
+    // labels stay on top of everything.
+    expect(authors.group.children.length).toBeGreaterThan(0)
+    for (const child of authors.group.children) {
+      expect(child.renderOrder).toBeGreaterThan(12)
+      expect(child.renderOrder).toBeLessThan(30)
+    }
+    authors.dispose()
   })
 })
 

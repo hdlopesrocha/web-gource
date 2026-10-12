@@ -247,7 +247,9 @@ describe('BeamField', () => {
     }
   }
 
-  function author(tethers: { nodeId: number; kind: 'add' | 'modify' | 'delete' | 'rename'; start: number; until: number }[]) {
+  function author(
+    tethers: { nodeId: number; kind: 'add' | 'modify' | 'delete' | 'rename'; start: number; until: number; strength?: number; reference?: number }[],
+  ) {
     return {
       author: { id: 'login:ada', name: 'Ada', commits: 1, first: 0, last: 0, additions: 0, deletions: 0, colorIndex: 0, unattributed: false },
       position: { x: 10, y: 10, z: 0 },
@@ -259,7 +261,7 @@ describe('BeamField', () => {
       appliedCommits: 1,
       lastKind: 'modify' as const,
       visible: true,
-      tethers,
+      tethers: tethers.map((tether) => ({ strength: 5, reference: 20, ...tether })),
     }
   }
 
@@ -332,6 +334,52 @@ describe('BeamField', () => {
     field.update(0.5, [sim], nodes, 0.25)
     expect(field.segmentCount).toBe(0)
     field.dispose()
+  })
+
+  it('draws stronger beams for bigger changes', () => {
+    const field = new BeamField(4)
+    const nodes = [node(0, 0, 0), node(1, 0, 0)]
+    const small = author([{ nodeId: 0, kind: 'modify', start: 0, until: 5, strength: 2, reference: 400 }])
+    const big = author([{ nodeId: 0, kind: 'modify', start: 0, until: 5, strength: 400, reference: 400 }])
+    const read = (target: ReturnType<typeof author>) => {
+      field.update(0.5, [target], nodes, 0.2)
+      const colors = field.mesh.geometry.getAttribute('color') as import('three').BufferAttribute
+      const positions = field.mesh.geometry.getAttribute('position') as import('three').BufferAttribute
+      // Brightness of the beam core.
+      const brightness = colors.getX(6) + colors.getY(6) + colors.getZ(6)
+      // Width: distance from the beam axis to the first vertex.
+      const width = Math.hypot(positions.getX(6) - 10, positions.getY(6) - 12.5)
+      return { brightness, width }
+    }
+    const weak = read(small)
+    const strong = read(big)
+    expect(strong.brightness).toBeGreaterThan(weak.brightness * 1.4)
+    expect(strong.width).toBeGreaterThan(weak.width * 1.4)
+    field.dispose()
+  })
+
+  it('records the change size on each tether', () => {
+    const commits = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        files: [
+          { path: 'src/big.ts', kind: 'add', additions: 400, deletions: 0 },
+          { path: 'src/tiny.ts', kind: 'add', additions: 1, deletions: 0 },
+        ],
+      }),
+    ]
+    const { sim } = makeSimulation(commits)
+    sim.applyUpTo(0)
+    const author = [...sim.authors][0]
+    const big = author.tethers.find((tether) => sim.get(tether.nodeId)?.path === 'src/big.ts')
+    const tiny = author.tethers.find((tether) => sim.get(tether.nodeId)?.path === 'src/tiny.ts')
+    expect(big).toBeDefined()
+    expect(tiny).toBeDefined()
+    // The tether of the bigger change is stronger, and both know the reference
+    // they are normalised against.
+    expect(big!.strength).toBeGreaterThan(tiny!.strength)
+    expect(big!.reference).toBeGreaterThanOrEqual(big!.strength)
   })
 
   it('respects its capacity', () => {

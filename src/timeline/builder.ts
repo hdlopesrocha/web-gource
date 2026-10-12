@@ -254,6 +254,14 @@ export function buildTimeline(repo: RepoInfo, commits: readonly RawCommit[], opt
   const timeline = builder.build(options.activity)
   const fileSizes = options.fileSizes ?? new Map<string, number>()
   timeline.fileSizes = fileSizes
+  if (fileSizes.size > 0) {
+    for (const commit of timeline.commits) {
+      for (const change of commit.changes) {
+        const size = fileSizes.get(change.path)
+        if (size !== undefined) change.sizeBytes = size
+      }
+    }
+  }
   timeline.sizesTruncated = Boolean(options.sizesTruncated)
   timeline.stats.sizeSource = options.sizeSource ?? (fileSizes.size > 0 ? 'unknown' : 'unavailable')
 

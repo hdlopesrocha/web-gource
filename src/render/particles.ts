@@ -94,7 +94,7 @@ export class ParticleField {
 
     this.points = new THREE.Points(geometry, this.material)
     this.points.frustumCulled = false
-    this.points.renderOrder = 2
+    this.points.renderOrder = 10
     geometry.setDrawRange(0, capacity)
     for (let index = 0; index < capacity; index += 1) this.alphas[index] = 0
   }

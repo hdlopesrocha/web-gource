@@ -45,8 +45,10 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           Every commit is shown while it happens: the changed files pulse in the colour of the change (green added,
           amber modified, red deleted, violet renamed) and a beam connects each of them to the author who made the
-          change. Avatars move with a spring rather than jumping, so you can follow a contributor across the tree,
-          and the file labels name what was just touched.
+          change. The bigger the change in a file, the wider and brighter its beam — a 1000-line commit draws a
+          strong ray, a one-line tweak a thin one. Authors are drawn above the rays, circles and branches so they are
+          never hidden, and they move with a spring rather than jumping, so you can follow a contributor across the
+          tree.
         </p>
       </section>
 

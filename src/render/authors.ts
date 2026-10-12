@@ -61,6 +61,12 @@ export class AuthorField {
     })
     const sprite = new THREE.Sprite(material)
     const glow = new THREE.Sprite(glowMaterial)
+    // Authors are the focus of the scene: they are drawn above the branches,
+    // the circles and the activity beams.
+    glow.renderOrder = 20
+    sprite.renderOrder = 21
+    material.depthTest = false
+    glowMaterial.depthTest = false
     glow.scale.set(6.5, 6.5, 1)
     const slot: AvatarSlot = { sprite, glow, material, glowMaterial, key: null }
     this.group.add(glow)

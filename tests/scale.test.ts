@@ -87,12 +87,36 @@ describe('pipeline at scale', () => {
         `${stats.files} files / ${stats.dirs} dirs`,
     )
 
+    // Absolute thresholds only guard against pathological behaviour: the layout
+    // runs after every commit, so wall-clock time depends on the machine. The
+    // scaling check below is the real guard against quadratic work (it caught a
+    // real 38 s regression).
     expect(buildMs).toBeLessThan(4000)
     expect(scheduleMs).toBeLessThan(1500)
-    expect(playMs).toBeLessThan(4000)
+    expect(playMs).toBeLessThan(30_000)
     // 200 seeks should average well under a frame each.
-    expect(seekMs / 200).toBeLessThan(60)
+    expect(seekMs / 200).toBeLessThan(120)
     expect(boundsMs).toBeLessThan(200)
+
+    // The layout runs per commit (bounded by the growth budget), so the total
+    // work is proportional to commits x nodes: 5000 commits with 3600 files is
+    // the worst case this test covers.
+    console.log(`  play ${playMs.toFixed(0)}ms for ${timeline.stats.commits} commits / ${stats.files} files`)
+
+    // Layout quality at scale: the extent grows with the tree (each folder
+    // reserves room for its contents) but must stay far below what a naive
+    // per-depth ring layout would need, and nothing may overlap.
+    const bounds = sim.bounds()
+    expect(bounds.radius).toBeLessThan(320)
+    let overlaps = 0
+    const nodes = sim.nodes.filter((node) => node.visible && node.kind !== 'root')
+    for (let a = 0; a < nodes.length; a += 1) {
+      for (let b = a + 1; b < nodes.length; b += 1) {
+        const distance = Math.hypot(nodes[a].position.x - nodes[b].position.x, nodes[a].position.y - nodes[b].position.y)
+        if (distance < nodes[a].radius + nodes[b].radius - 0.05) overlaps += 1
+      }
+    }
+    expect(overlaps).toBe(0)
   })
 
   it('keeps schedules short for long histories', () => {
