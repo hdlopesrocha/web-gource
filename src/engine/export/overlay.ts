@@ -23,6 +23,7 @@ import {
   drawContributionCalendar,
   drawPanel,
   drawWeekdayHour,
+  SHADES,
   TEXT_COLOR,
   TEXT_STRONG,
 } from '../../render/overlays'
@@ -47,6 +48,16 @@ export interface OverlayFrame {
   timeline: { files: number; totalBytes: number; authors: number }
   /** Playback frame rate, shown in the info panel. */
   fps: number
+}
+
+/**
+ * Font size for the chart axis labels.
+ *
+ * Scaled with the panel rather than the frame: the labels are the point of the
+ * charts, and at 720p a fixed fraction of the frame made them unreadable.
+ */
+export function chartLabelSize(unit: number): number {
+  return Math.max(9, Math.round(unit * 0.9))
 }
 
 export interface OverlayOptions {
@@ -134,7 +145,8 @@ export class ExportOverlay {
     const { width, height } = frame
     const unit = Math.max(8, Math.round(Math.min(width, height) * 0.014))
     const font = `${unit}px "Inter", system-ui, sans-serif`
-    const smallFont = `${Math.max(7, Math.round(unit * 0.72))}px "Inter", system-ui, sans-serif`
+    const smallFont = `${chartLabelSize(unit)}px "Inter", system-ui, sans-serif`
+    const titleFont = `600 ${Math.round(unit * 1.1)}px "Inter", system-ui, sans-serif`
 
     // Only what has happened by this frame: the charts grow as the video plays.
     this.activity.advanceTo(frame.date)
@@ -265,13 +277,13 @@ export class ExportOverlay {
     let cursorY = padding
 
     if (this.options.heatmap !== false) {
-      const chartHeight = Math.round(columnWidth * 0.4)
-      const panelHeight = chartHeight + unit * 2.6
+      const chartHeight = Math.round(columnWidth * 0.46)
+      const panelHeight = chartHeight + unit * 3
       drawPanel(ctx, columnX, cursorY, columnWidth, panelHeight, { radius: Math.round(unit * 0.6) })
-      ctx.font = font
+      ctx.font = titleFont
       ctx.textAlign = 'left'
       ctx.fillStyle = TEXT_STRONG
-      ctx.fillText('Commits per weekday and hour', columnX + unit * 0.8, cursorY + unit * 1.1)
+      ctx.fillText('Commits per weekday and hour', columnX + unit * 0.8, cursorY + unit * 1.2)
       ctx.save()
       ctx.translate(columnX + unit * 0.8, cursorY + unit * 1.8)
       drawWeekdayHour(ctx, {
@@ -285,14 +297,14 @@ export class ExportOverlay {
     }
 
     if (this.options.contributions !== false) {
-      const chartHeight = Math.round(columnWidth * 0.34)
-      const panelHeight = chartHeight + unit * 3.4
+      const chartHeight = Math.round(columnWidth * 0.42)
+      const panelHeight = chartHeight + unit * 5.2
       const calendar = contributionCalendar(daily, frame.date)
       drawPanel(ctx, columnX, cursorY, columnWidth, panelHeight, { radius: Math.round(unit * 0.6) })
-      ctx.font = font
+      ctx.font = titleFont
       ctx.textAlign = 'left'
       ctx.fillStyle = TEXT_STRONG
-      ctx.fillText('Contributions · last 53 weeks', columnX + unit * 0.8, cursorY + unit * 1.1)
+      ctx.fillText('Contributions · last 53 weeks', columnX + unit * 0.8, cursorY + unit * 1.2)
       ctx.fillStyle = TEXT_COLOR
       ctx.fillText(
         `${calendar.total.toLocaleString()} commits · ${formatDate(dayStartMs(calendar.start))} → ${formatDate(dayStartMs(calendar.end))}`,
@@ -308,6 +320,22 @@ export class ExportOverlay {
         font: smallFont,
       })
       ctx.restore()
+
+      // Less / More legend, like the on-screen panel.
+      let legendX = columnX + unit * 0.8
+      const legendY = cursorY + unit * 3.2 + chartHeight + unit * 0.9
+      ctx.font = smallFont
+      ctx.fillStyle = TEXT_COLOR
+      ctx.textAlign = 'left'
+      ctx.fillText('Less', legendX, legendY)
+      legendX += ctx.measureText('Less').width + unit * 0.5
+      for (const shade of SHADES) {
+        ctx.fillStyle = shade
+        ctx.fillRect(legendX, legendY - unit * 0.55, unit * 0.9, unit * 0.9)
+        legendX += unit * 1.2
+      }
+      ctx.fillStyle = TEXT_COLOR
+      ctx.fillText('More', legendX, legendY)
     }
 
     ctx.restore()

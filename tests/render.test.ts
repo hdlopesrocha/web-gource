@@ -8,6 +8,7 @@ import { Camera2D } from '../src/render/camera'
 import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
 import { buildInfoPanelModel, fitText, wrapText } from '../src/render/info-panel'
+import { chartLabelSize } from '../src/engine/export/overlay'
 import { BeamField } from '../src/render/beams'
 import type { SimNode } from '../src/sim/simulation'
 
@@ -597,6 +598,15 @@ describe('info panel model', () => {
     const lines = wrapText(ctx, 'one two three four five six seven', 100, 2)
     expect(lines).toHaveLength(2)
     expect(lines[1].endsWith('…')).toBe(true)
+  })
+})
+
+describe('export overlay', () => {
+  it('keeps the chart labels legible at every export size', () => {
+    // The labels scale with the panel, so 720p is as readable as 1080p.
+    expect(chartLabelSize(15)).toBeGreaterThanOrEqual(13) // 1080p
+    expect(chartLabelSize(10)).toBeGreaterThanOrEqual(9) // 720p
+    expect(chartLabelSize(8)).toBeGreaterThanOrEqual(9) // 360p
   })
 })
 
