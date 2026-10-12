@@ -354,9 +354,12 @@ export class VisualizerController {
    * Filters
    * ------------------------------------------------------------------ */
 
-  /** Folder ignore list as a path predicate, or undefined when it is empty. */
+  /**
+   * Ignored folders plus hidden (dot-prefixed) folders, as a path predicate.
+   * Returns undefined when neither filter is active.
+   */
   private buildFileFilter(): ((path: string) => boolean) | undefined {
-    const matcher = compileIgnoredFolders(store.ignoredFolders)
+    const matcher = compileIgnoredFolders(store.ignoredFolders, { hiddenFolders: store.hideHiddenFolders })
     if (!matcher.active) return undefined
     return (path: string) => matcher.matches(path)
   }
@@ -383,14 +386,14 @@ export class VisualizerController {
   applyFilters(filters: {
     hiddenAuthors?: string[]
     ignoredFolders?: string[]
+    hideHiddenFolders?: boolean
     from?: number | null
     to?: number | null
   }): void {
     if (filters.hiddenAuthors) store.hiddenAuthors = [...filters.hiddenAuthors]
-    if (filters.ignoredFolders) {
-      store.ignoredFolders = normaliseIgnoredFolders(filters.ignoredFolders)
-      persistFilters()
-    }
+    if (filters.ignoredFolders) store.ignoredFolders = normaliseIgnoredFolders(filters.ignoredFolders)
+    if (filters.hideHiddenFolders !== undefined) store.hideHiddenFolders = filters.hideHiddenFolders
+    if (filters.ignoredFolders || filters.hideHiddenFolders !== undefined) persistFilters()
     if (filters.from !== undefined) store.dateRange.from = filters.from
     if (filters.to !== undefined) store.dateRange.to = filters.to
     this.rebuildTimeline({ keepPosition: true })
@@ -399,6 +402,7 @@ export class VisualizerController {
   clearFilters(): void {
     store.hiddenAuthors = []
     store.ignoredFolders = []
+    store.hideHiddenFolders = false
     store.dateRange = { from: null, to: null }
     persistFilters()
     this.rebuildTimeline({ keepPosition: true })

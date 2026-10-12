@@ -21,6 +21,8 @@ const FIRST_NAMES = [
 
 const AREAS = ['core', 'ui', 'api', 'docs', 'tests', 'build', 'vendor', 'plugins', 'net', 'storage']
 const LEAF_DIRS = ['src', 'lib', 'components', 'utils', 'models', 'hooks']
+/** Hidden folders, so the demo shows what the hidden-folder filter hides. */
+const HIDDEN_DIRS = ['.github/workflows', '.vscode', '.husky', '.config']
 const EXTENSIONS = ['ts', 'tsx', 'js', 'vue', 'css', 'md', 'json', 'py', 'go', 'rs', 'sh', 'yml']
 const TOPICS = ['parser', 'renderer', 'cache', 'client', 'server', 'schema', 'router', 'store', 'logger', 'config', 'auth', 'stream']
 
@@ -164,7 +166,15 @@ export class DemoProvider implements GitProvider {
       const topic = TOPICS[Math.floor(rand() * TOPICS.length)]
       const ext = EXTENSIONS[Math.floor(rand() * EXTENSIONS.length)]
       const depthRoll = rand()
-      const dirs = depthRoll > 0.65 ? `${area}/${leaf}` : depthRoll > 0.3 ? area : ''
+      const hiddenRoll = rand()
+      const dirs =
+        hiddenRoll > 0.94
+          ? HIDDEN_DIRS[Math.floor(rand() * HIDDEN_DIRS.length)]
+          : depthRoll > 0.65
+            ? `${area}/${leaf}`
+            : depthRoll > 0.3
+              ? area
+              : ''
       const path = `${dirs ? `${dirs}/` : ''}${topic}${rand() > 0.6 ? `-${Math.floor(rand() * 9)}` : ''}.${ext}`
       const roll = rand()
       const early = chronoIndex < total * 0.55

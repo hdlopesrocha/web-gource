@@ -185,6 +185,11 @@ export interface AppState {
    * entry hides that folder at any depth; see `timeline/ignore.ts`.
    */
   ignoredFolders: string[]
+  /**
+   * Hide hidden folders — any folder whose name starts with a dot (`.github`,
+   * `.vscode`, `.husky`, ...). On by default: they are tooling, not code.
+   */
+  hideHiddenFolders: boolean
   /** Date range filter (epoch ms), null means unbounded. */
   dateRange: { from: number | null; to: number | null }
   settings: RendererSettings & {
@@ -332,6 +337,7 @@ export const store = reactive<AppState>({
   hud: null,
   hiddenAuthors: [],
   ignoredFolders: readJson(FILTER_KEY, { ignoredFolders: [] as string[] }).ignoredFolders,
+  hideHiddenFolders: readJson(FILTER_KEY, { hideHiddenFolders: true }).hideHiddenFolders ?? true,
   dateRange: { from: null, to: null },
   settings: readJson(SETTINGS_KEY, defaultSettings),
   export: {
@@ -376,7 +382,7 @@ export function persistSettings(): void {
 
 /** The ignore list is a preference, so it survives a reload. */
 export function persistFilters(): void {
-  persist(FILTER_KEY, { ignoredFolders: store.ignoredFolders })
+  persist(FILTER_KEY, { ignoredFolders: store.ignoredFolders, hideHiddenFolders: store.hideHiddenFolders })
 }
 
 export function persistLoadOptions(): void {
@@ -564,6 +570,7 @@ export const isFiltered = computed(
   () =>
     store.hiddenAuthors.length > 0 ||
     store.ignoredFolders.length > 0 ||
+    store.hideHiddenFolders ||
     store.dateRange.from !== null ||
     store.dateRange.to !== null,
 )

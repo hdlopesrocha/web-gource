@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { controller } from '../engine/controller'
 import { store } from '../state/store'
 import { formatDate } from '../timeline/schedule'
-import { COMMON_IGNORED_FOLDERS, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
+import { COMMON_IGNORED_FOLDERS, HIDDEN_FOLDER_EXAMPLES, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
@@ -15,6 +15,7 @@ const authors = computed(() => {
 })
 const hidden = computed(() => new Set(store.hiddenAuthors))
 const ignoredInput = ref('')
+const hiddenExamples = HIDDEN_FOLDER_EXAMPLES.join(', ')
 const ignoredFolders = computed(() => store.ignoredFolders)
 /** Suggestions that are not already ignored. */
 const suggestedFolders = computed(() => {
@@ -94,6 +95,20 @@ function showAll(): void {
           <input v-model="dateTo" type="date" :min="rangeLimits.min" :max="rangeLimits.max" />
         </div>
         <span class="faint hint">Repository history spans {{ rangeLimits.min }} → {{ rangeLimits.max }}</span>
+      </div>
+      <div class="field">
+        <label class="switch">
+          <input
+            type="checkbox"
+            :checked="store.hideHiddenFolders"
+            @change="controller.applyFilters({ hideHiddenFolders: ($event.target as HTMLInputElement).checked })"
+          />
+          Hide hidden folders
+        </label>
+        <span class="faint hint">
+          Folders whose name starts with a dot ({{ hiddenExamples }}) are tooling, not code. Hidden
+          <em>files</em> such as <code>.gitignore</code> stay visible.
+        </span>
       </div>
       <div class="field">
         <label>Ignore folders</label>

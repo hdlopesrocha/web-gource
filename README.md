@@ -120,6 +120,12 @@ Folders only: a *file* named `third_party` is untouched, and the last segment of
 treated as the file. Entries are trimmed and deduplicated, so a pasted list works the same on every
 host.
 
+**Hidden folders** have a toggle of their own (on by default): any folder whose name starts with a dot —
+`.github`, `.vscode`, `.husky`, `.cache`, `.idea` — is tooling rather than code, so it stays out of the
+visualization. Hidden *files* are left alone: a root `.gitignore` or a `.eslintrc.json` still appears, because
+the filter only ever looks at directory segments. `.*` is not an ignore-list entry, precisely because it would
+read as a glob that matches every folder.
+
 Ignoring filters **file changes, not commits**: a commit that only touched ignored folders still
 plays (its author and message are history), it simply has no files to highlight, and its
 additions/deletions are recomputed from the changes that remain — the counters never include hidden

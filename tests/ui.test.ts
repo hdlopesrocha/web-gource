@@ -378,6 +378,20 @@ describe('panels', () => {
     expect(wrapper.find('.chips').exists()).toBe(false)
   })
 
+  it('authors panel toggles hidden folders', async () => {
+    store.hideHiddenFolders = true
+    const wrapper = mount(AuthorsPanel)
+    const box = wrapper.find('input[type="checkbox"]')
+    expect(box.exists()).toBe(true)
+    expect(wrapper.text()).toContain('Hide hidden folders')
+    expect(wrapper.text()).toContain('.github')
+
+    await box.setValue(false)
+    expect(store.hideHiddenFolders).toBe(false)
+    await box.setValue(true)
+    expect(store.hideHiddenFolders).toBe(true)
+  })
+
   it('settings panel exposes visualization, camera and recording tabs', async () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')

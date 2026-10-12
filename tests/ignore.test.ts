@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   COMMON_IGNORED_FOLDERS,
+  HIDDEN_FOLDER_EXAMPLES,
+  hasHiddenFolder,
   addIgnoredFolder,
   compileIgnoredFolders,
   directorySegments,
@@ -93,6 +95,47 @@ describe('compileIgnoredFolders', () => {
     const first = paths.map((path) => matcher.matches(path))
     const second = paths.map((path) => matcher.matches(path))
     expect(second).toEqual(first)
+  })
+})
+
+describe('hidden folders', () => {
+  it('detects dot-prefixed folders at any depth, but not dot-prefixed files', () => {
+    expect(hasHiddenFolder('.github/workflows/ci.yml')).toBe(true)
+    expect(hasHiddenFolder('packages/app/.cache/bundle.js')).toBe(true)
+    expect(hasHiddenFolder('.vscode')).toBe(false) // a *file* with that name
+    expect(hasHiddenFolder('.gitignore')).toBe(false)
+    expect(hasHiddenFolder('src/app.ts')).toBe(false)
+  })
+
+  it('hides hidden folders when asked, and nothing else', () => {
+    const matcher = compileIgnoredFolders([], { hiddenFolders: true })
+    expect(matcher.active).toBe(true)
+    expect(matcher.hiddenFolders).toBe(true)
+    expect(matcher.matches('.github/workflows/ci.yml')).toBe(true)
+    expect(matcher.matches('src/.cache/tmp.bin')).toBe(true)
+    expect(matcher.matches('src/app.ts')).toBe(false)
+    // A hidden *file* at the repository root stays visible.
+    expect(matcher.matches('.gitignore')).toBe(false)
+    expect(matcher.matches('docs/.eslintrc.json')).toBe(false)
+  })
+
+  it('leaves everything visible when the option is off', () => {
+    const matcher = compileIgnoredFolders([])
+    expect(matcher.active).toBe(false)
+    expect(matcher.hiddenFolders).toBe(false)
+    expect(matcher.matches('.github/workflows/ci.yml')).toBe(false)
+  })
+
+  it('combines with the ignore list', () => {
+    const matcher = compileIgnoredFolders(['vendor'], { hiddenFolders: true })
+    expect(matcher.matches('vendor/lib.js')).toBe(true)
+    expect(matcher.matches('.github/workflows/ci.yml')).toBe(true)
+    expect(matcher.matches('src/app.ts')).toBe(false)
+  })
+
+  it('lists the hidden folders used in hints', () => {
+    expect(HIDDEN_FOLDER_EXAMPLES).toContain('.github')
+    expect(HIDDEN_FOLDER_EXAMPLES.every((entry) => entry.startsWith('.'))).toBe(true)
   })
 })
 

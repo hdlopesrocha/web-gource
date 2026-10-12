@@ -12,7 +12,15 @@
  * Every entry is normalised (trimmed, forward slashes, no leading `./` or
  * slashes, no empty duplicates), so the same list behaves identically on every
  * host and both URL-style separators are accepted.
+ *
+ * The same matcher can also hide *hidden* folders — any folder whose name starts
+ * with a dot (`.git`, `.github`, `.vscode`, `.husky`, `.cache`, ...) — which is
+ * a filter of its own rather than a list entry, because `.*` would otherwise be
+ * read as a glob that matches everything.
  */
+
+/** Hidden folders commonly found in repositories, used in hints and examples. */
+export const HIDDEN_FOLDER_EXAMPLES = ['.git', '.github', '.vscode', '.husky', '.idea', '.cache']
 
 /** Names that are almost always vendored or generated, offered as suggestions. */
 export const COMMON_IGNORED_FOLDERS = [
@@ -66,13 +74,28 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`${source}$`, 'i')
 }
 
+export interface FolderIgnoreOptions {
+  /**
+   * Also hide folders whose name starts with a dot. Hidden *files* (for example
+   * a root `.gitignore`) are untouched: only directory segments are tested.
+   */
+  hiddenFolders?: boolean
+}
+
 export interface FolderIgnoreMatcher {
   /** Normalised entries, in the order they were given. */
   readonly entries: string[]
-  /** True when the list hides anything at all. */
+  /** True when the matcher hides anything at all. */
   readonly active: boolean
-  /** True when the path lives inside an ignored folder. */
+  /** True when hidden (dot-prefixed) folders are hidden too. */
+  readonly hiddenFolders: boolean
+  /** True when the path lives inside an ignored or hidden folder. */
   matches(path: string): boolean
+}
+
+/** True when any directory segment of the path starts with a dot. */
+export function hasHiddenFolder(path: string): boolean {
+  return directorySegments(path).some((segment) => segment.startsWith('.'))
 }
 
 /**
@@ -82,7 +105,11 @@ export interface FolderIgnoreMatcher {
  * can be applied while a timeline is rebuilt and gives the same result for the
  * same history and list.
  */
-export function compileIgnoredFolders(entries: readonly string[]): FolderIgnoreMatcher {
+export function compileIgnoredFolders(
+  entries: readonly string[],
+  options: FolderIgnoreOptions = {},
+): FolderIgnoreMatcher {
+  const hiddenFolders = Boolean(options.hiddenFolders)
   const normalised = normaliseIgnoredFolders(entries)
   const rules: ((path: string, segments: string[]) => boolean)[] = normalised.map((entry) => {
     if (entry.includes('/')) {
@@ -99,12 +126,14 @@ export function compileIgnoredFolders(entries: readonly string[]): FolderIgnoreM
 
   return {
     entries: normalised,
-    active: rules.length > 0,
+    active: rules.length > 0 || hiddenFolders,
+    hiddenFolders,
     matches(path: string): boolean {
-      if (rules.length === 0) return false
       const trimmed = path.trim()
       if (!trimmed) return false
       const segments = directorySegments(trimmed)
+      if (hiddenFolders && segments.some((segment) => segment.startsWith('.'))) return true
+      if (rules.length === 0) return false
       return rules.some((rule) => rule(trimmed, segments))
     },
   }

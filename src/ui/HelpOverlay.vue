@@ -81,7 +81,10 @@ const shortcuts: { keys: string; action: string }[] = [
           The Authors panel hides authors and commits by date, and the folder ignore list removes whole trees from
           the visualization — vendored dependencies, generated output, anything you do not want to watch. An entry
           such as <code>third_party</code> hides any folder with that name at any depth (case-insensitively);
-          <code>third*</code> is a glob and <code>src/vendor</code> matches one path. Commits are never dropped by
+          <code>third*</code> is a glob and <code>src/vendor</code> matches one path. Hidden folders — any folder
+          whose name starts with a dot, such as <code>.github</code> or <code>.vscode</code> — have their own
+          toggle, because they are tooling rather than code; hidden <em>files</em> like <code>.gitignore</code> are
+          left alone. Commits are never dropped by
           the ignore list: a commit that only touched ignored folders still plays, it just has no files to highlight,
           and the +/- counters only count what is left.
         </p>

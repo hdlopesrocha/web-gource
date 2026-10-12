@@ -156,6 +156,40 @@ describe('VisualizerController', () => {
     expect(store.export.active).toBe(false)
   })
 
+  it('hides hidden folders by default and brings them back on request', async () => {
+    const commits = generateCommits(24)
+    // Give the history a hidden folder plus a hidden file at the root.
+    const first = commits[0]!
+    const second = commits[1]!
+    first.files = [...(first.files ?? []), { filename: '.github/workflows/ci.yml', status: 'added', additions: 12, deletions: 0 }]
+    second.files = [...(second.files ?? []), { filename: '.gitignore', status: 'modified', additions: 2, deletions: 1 }]
+    const { url } = mockApi(commits)
+    // The filter is a persisted preference, so state it explicitly here.
+    store.hideHiddenFolders = true
+    await controller.load(url)
+
+    const paths = () => controller.currentTimeline!.commits.flatMap((commit) => commit.changes.map((change) => change.path))
+    // Hidden folders are filtered; hidden files are not.
+    expect(store.hideHiddenFolders).toBe(true)
+    expect(paths()).not.toContain('.github/workflows/ci.yml')
+    expect(paths()).toContain('.gitignore')
+    expect(store.timelineStats?.ignoredFiles).toBe(1)
+    // Commits are still there.
+    expect(store.timelineStats?.commits).toBe(24)
+
+    controller.applyFilters({ hideHiddenFolders: false })
+    expect(paths()).toContain('.github/workflows/ci.yml')
+    expect(store.hideHiddenFolders).toBe(false)
+
+    controller.applyFilters({ hideHiddenFolders: true })
+    expect(paths()).not.toContain('.github/workflows/ci.yml')
+
+    // "Clear every filter" turns the folder filters off.
+    controller.clearFilters()
+    expect(store.hideHiddenFolders).toBe(false)
+    expect(paths()).toContain('.github/workflows/ci.yml')
+  })
+
   it('toggles a single author', async () => {
     const { url } = mockApi(generateCommits(16))
     await controller.load(url)
