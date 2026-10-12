@@ -348,6 +348,31 @@ describe('StageView', () => {
 })
 
 describe('panels', () => {
+  /** A complete HUD: other tests leave components mounted that read every field. */
+  function hudAt(date: number): NonNullable<typeof store.hud> {
+    return {
+      time: 0,
+      duration: 1,
+      date,
+      index: 0,
+      total: 1,
+      playing: false,
+      speed: 1,
+      commit: null,
+      activeAuthors: [],
+      visibleFiles: 0,
+      visibleDirs: 0,
+      totalFiles: 0,
+      sizeMode: 'bytes',
+      filesWithSize: 0,
+      totalBytes: 0,
+      additions: 0,
+      deletions: 0,
+      fps: 0,
+      recording: false,
+    }
+  }
+
   /** Click a settings tab by its label (tab order is a UI detail). */
   async function openTab(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
     const button = wrapper.findAll('.tabs button').find((entry) => entry.text().trim() === label)
@@ -402,6 +427,34 @@ describe('panels', () => {
     expect(store.hideHiddenFolders).toBe(true)
   })
 
+  it('activity panel follows the playback position', async () => {
+    const at = (index: number, timestamp: number): RawCommit => ({ ...rawCommit(index), timestamp })
+    const timeline = buildTimeline(repo, [
+      at(0, Date.UTC(2024, 2, 6, 14, 30)), // Wednesday
+      at(1, Date.UTC(2024, 2, 6, 14, 50)), // Wednesday, same hour
+      at(2, Date.UTC(2024, 2, 8, 9, 0)), // Friday
+    ])
+    vi.spyOn(controller, 'currentTimeline', 'get').mockReturnValue(timeline)
+
+    // At the first commit only that one is counted.
+    store.hud = hudAt(Date.UTC(2024, 2, 6, 14, 30))
+    const wrapper = mount(ActivityPanel)
+    expect(wrapper.text()).toContain('1 commits · busiest Wed 14:00 (1)')
+    expect(wrapper.text()).toContain('→ 2024-03-09')
+
+    // Scrubbing forward adds the later commits, and the future appears only
+    // once it has happened.
+    store.hud = hudAt(Date.UTC(2024, 2, 8, 9, 0))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('3 commits · busiest Wed 14:00 (2)')
+
+    // And back again: the future is removed, not just left shaded.
+    store.hud = hudAt(Date.UTC(2024, 2, 6, 14, 30))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('1 commits · busiest Wed 14:00 (1)')
+    vi.restoreAllMocks()
+  })
+
   it('activity panel draws both heatmaps from the timeline', () => {
     const at = (index: number, timestamp: number): RawCommit => ({ ...rawCommit(index), timestamp })
     const timeline = buildTimeline(repo, [
@@ -410,7 +463,7 @@ describe('panels', () => {
       at(2, Date.UTC(2024, 2, 8, 9, 0)), // Friday
     ])
     vi.spyOn(controller, 'currentTimeline', 'get').mockReturnValue(timeline)
-    store.hud = { ...(store.hud ?? {}), date: Date.UTC(2024, 2, 8, 12, 0) } as typeof store.hud
+    store.hud = hudAt(Date.UTC(2024, 2, 8, 12, 0))
     const wrapper = mount(ActivityPanel)
 
     // Both charts are present, with their axes and summaries.

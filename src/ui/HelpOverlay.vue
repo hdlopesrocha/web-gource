@@ -69,7 +69,9 @@ const shortcuts: { keys: string; action: string }[] = [
           commits per weekday and hour of day (UTC) — horizontal is the hour, vertical the weekday. The second is a
           GitHub-style contribution calendar for the last 53 weeks, where the rightmost column is the week of the
           current commit date, so it slides as the animation plays and days that have not happened yet stay empty.
-          Both charts follow the active filters, so hiding authors, folders or a date range changes what they count.
+          Both charts count only what has already happened at the playback position — scrubbing backwards removes
+          the future — and both follow the active filters, so hiding authors, folders or a date range changes what
+          they count.
         </p>
       </section>
 
@@ -181,7 +183,9 @@ const shortcuts: { keys: string; action: string }[] = [
           commits per weekday and hour of day (UTC) — horizontal is the hour, vertical the weekday. The second is a
           GitHub-style contribution calendar for the last 53 weeks, where the rightmost column is the week of the
           current commit date, so it slides as the animation plays and days that have not happened yet stay empty.
-          Both charts follow the active filters, so hiding authors, folders or a date range changes what they count.
+          Both charts count only what has already happened at the playback position — scrubbing backwards removes
+          the future — and both follow the active filters, so hiding authors, folders or a date range changes what
+          they count.
         </p>
       </section>
 

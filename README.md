@@ -393,8 +393,12 @@ The Activity panel (`H`, or the button in the header) answers "when did this wor
   and month labels. The rightmost column is always the week of the *current* commit date, so the calendar slides
   as playback advances (and days that have not happened yet stay empty).
 
-Both charts aggregate the filtered timeline, so hiding authors, ignoring folders or narrowing the date range
-changes what they count, and both are drawn on canvas at device pixel ratio with a hover readout per cell.
+Both charts follow the **playback position**: they count only the commits that have already happened at the
+current commit date, so scrubbing backwards removes the future instead of showing the whole history at once, and
+the calendar's rightmost column always sits on the current week. They also aggregate the filtered timeline, so
+hiding authors, ignoring folders or narrowing the date range changes what they count. Both are drawn on canvas at
+device pixel ratio with a hover readout per cell, and the exported video draws the same charts from the same code,
+growing frame by frame as the animation plays.
 
 ### Reading the activity
 

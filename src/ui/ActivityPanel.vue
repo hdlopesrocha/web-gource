@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { controller } from '../engine/controller'
 import { store } from '../state/store'
 import {
@@ -9,8 +9,6 @@ import {
   dayStartMs,
   weekdayHourGrid,
   WEEKDAY_LABELS,
-  type DailyActivity,
-  type WeekdayHourGrid,
 } from '../timeline/activity'
 import {
   calendarLayout,
@@ -34,12 +32,14 @@ const commits = computed(() => {
   return controller.currentTimeline?.commits ?? []
 })
 
-// Reactive, so the summaries and the calendar follow filter changes.
-const gridData = shallowRef<WeekdayHourGrid>(weekdayHourGrid(commits.value))
-const daily = shallowRef<DailyActivity>(dailyActivity(commits.value))
-
-/** Simulated "now": the interpolated commit date, so the calendar slides. */
+/** Simulated "now": the interpolated commit date the charts must respect. */
 const currentMs = computed(() => store.hud?.date ?? 0)
+
+// Both charts only count what has already happened at the playback position,
+// so scrubbing backwards removes the future instead of showing the whole
+// history at once.
+const gridData = computed(() => weekdayHourGrid(commits.value, { until: currentMs.value }))
+const daily = computed(() => dailyActivity(commits.value, { until: currentMs.value }))
 const calendar = computed(() => contributionCalendar(daily.value, currentMs.value, CALENDAR_WEEKS))
 
 const summary = computed(() => {
@@ -151,12 +151,6 @@ function onCalendarMove(event: MouseEvent): void {
     : `${label} (${WEEKDAY_LABELS[hit.row]}) · ${value.count} commit${value.count === 1 ? '' : 's'}`
 }
 
-function refresh(): void {
-  gridData.value = weekdayHourGrid(commits.value)
-  daily.value = dailyActivity(commits.value)
-  draw()
-}
-
 let observer: ResizeObserver | null = null
 let frame = 0
 
@@ -169,7 +163,7 @@ function scheduleDraw(): void {
 }
 
 onMounted(() => {
-  refresh()
+  draw()
   if (typeof ResizeObserver !== 'undefined' && gridCanvas.value?.parentElement) {
     observer = new ResizeObserver(() => scheduleDraw())
     observer.observe(gridCanvas.value.parentElement)
@@ -183,8 +177,8 @@ onBeforeUnmount(() => {
   frame = 0
 })
 
-// Recompute when the history changes, redraw when the clock slides.
-watch(commits, () => refresh())
+// Redraw when the history, the aggregates or the clock change.
+watch([commits, gridData, daily], () => scheduleDraw())
 watch(currentMs, () => scheduleDraw())
 </script>
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ActivityCursor,
   CALENDAR_WEEKS,
   contributionCalendar,
   dailyActivity,
@@ -73,6 +74,25 @@ describe('weekdayHourGrid', () => {
     expect(grid.counts.flat().filter((value) => value > 0)).toHaveLength(3)
   })
 
+  it('only counts commits up to the current time', () => {
+    const commits = [
+      commit(WEDNESDAY_1430), // Wednesday 14:00
+      commit(WEDNESDAY_1430 + 3_600_000), // Wednesday 15:00
+      commit(WEDNESDAY_1430 + 2 * DAY_ONE), // Friday
+    ]
+    // At the first commit only that one exists; the future is not shown.
+    const early = weekdayHourGrid(commits, { until: WEDNESDAY_1430 })
+    expect(early.total).toBe(1)
+    expect(early.counts[3][14]).toBe(1)
+    expect(early.counts[3][15]).toBe(0)
+    expect(early.counts[5][14]).toBe(0)
+
+    // Midway, two; at the end, all three.
+    expect(weekdayHourGrid(commits, { until: WEDNESDAY_1430 + 3_600_000 }).total).toBe(2)
+    expect(weekdayHourGrid(commits, { until: WEDNESDAY_1430 + 3 * DAY_ONE }).total).toBe(3)
+    expect(weekdayHourGrid(commits).total).toBe(3)
+  })
+
   it('handles an empty history and unusable timestamps', () => {
     const empty = weekdayHourGrid([])
     expect(empty.total).toBe(0)
@@ -85,6 +105,18 @@ describe('weekdayHourGrid', () => {
 })
 
 describe('dailyActivity', () => {
+  it('counts only the days that have happened', () => {
+    const commits = [
+      commit(WEDNESDAY_1430),
+      commit(WEDNESDAY_1430 + 2 * DAY_ONE),
+    ]
+    const early = dailyActivity(commits, { until: WEDNESDAY_1430 })
+    expect(early.total).toBe(1)
+    expect(early.counts.get(dayNumber(WEDNESDAY_1430))).toBe(1)
+    expect(early.counts.get(dayNumber(WEDNESDAY_1430) + 2)).toBeUndefined()
+    expect(early.lastDay).toBe(dayNumber(WEDNESDAY_1430))
+  })
+
   it('counts commits per day and reports the range', () => {
     const daily = dailyActivity([
       commit(WEDNESDAY_1430),
@@ -164,6 +196,55 @@ describe('contributionCalendar', () => {
     expect(empty.total).toBe(0)
     expect(empty.max).toBe(0)
     expect(empty.weeks).toHaveLength(CALENDAR_WEEKS)
+  })
+})
+
+describe('ActivityCursor', () => {
+  it('grows with the clock and rebuilds when it jumps backwards', () => {
+    const commits = [
+      commit(WEDNESDAY_1430),
+      commit(WEDNESDAY_1430 + 3_600_000),
+      commit(WEDNESDAY_1430 + 2 * DAY_ONE),
+    ]
+    const cursor = new ActivityCursor(commits)
+
+    cursor.advanceTo(WEDNESDAY_1430)
+    expect(cursor.grid.total).toBe(1)
+    expect(cursor.daily.total).toBe(1)
+
+    cursor.advanceTo(WEDNESDAY_1430 + 2 * DAY_ONE)
+    expect(cursor.grid.total).toBe(3)
+    expect(cursor.daily.total).toBe(3)
+
+    // Rewinding must not keep the future in the totals.
+    cursor.advanceTo(WEDNESDAY_1430)
+    expect(cursor.grid.total).toBe(1)
+    expect(cursor.daily.total).toBe(1)
+
+    // A new timeline resets the cursor.
+    cursor.setCommits([commit(WEDNESDAY_1430 + 5 * DAY_ONE)])
+    cursor.advanceTo(WEDNESDAY_1430 + 6 * DAY_ONE)
+    expect(cursor.grid.total).toBe(1)
+  })
+
+  it('matches the pure aggregations', () => {
+    const commits = [
+      commit(WEDNESDAY_1430),
+      commit(WEDNESDAY_1430 + 3_600_000),
+      commit(WEDNESDAY_1430 + 2 * DAY_ONE),
+      commit(WEDNESDAY_1430 + 30 * DAY_ONE),
+    ]
+    const cursor = new ActivityCursor(commits)
+    for (const until of [WEDNESDAY_1430, WEDNESDAY_1430 + 3_600_000, WEDNESDAY_1430 + 31 * DAY_ONE]) {
+      cursor.advanceTo(until)
+      const grid = weekdayHourGrid(commits, { until })
+      const daily = dailyActivity(commits, { until })
+      expect(cursor.grid.total).toBe(grid.total)
+      expect(cursor.grid.max).toBe(grid.max)
+      expect(cursor.grid.counts).toEqual(grid.counts)
+      expect(cursor.daily.total).toBe(daily.total)
+      expect(cursor.daily.counts).toEqual(daily.counts)
+    }
   })
 })
 

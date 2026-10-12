@@ -14,14 +14,7 @@
 
 import type { Simulation } from '../../sim/simulation'
 import type { ActivityBucket, TimelineCommit } from '../../timeline/types'
-import {
-  contributionCalendar,
-  dailyActivity,
-  dayStartMs,
-  weekdayHourGrid,
-  type DailyActivity,
-  type WeekdayHourGrid,
-} from '../../timeline/activity'
+import { ActivityCursor, contributionCalendar, dayStartMs } from '../../timeline/activity'
 import { MinimapDrawer } from '../../render/minimap'
 import {
   drawActivityBars,
@@ -66,21 +59,18 @@ export interface OverlayOptions {
  */
 export class ExportOverlay {
   private minimap = new MinimapDrawer()
-  private daily: DailyActivity
-  private grid: WeekdayHourGrid
+  private activity: ActivityCursor
 
   constructor(
     commits: readonly TimelineCommit[],
     private readonly options: OverlayOptions = {},
   ) {
-    this.daily = dailyActivity(commits)
-    this.grid = weekdayHourGrid(commits)
+    this.activity = new ActivityCursor(commits)
   }
 
   /** Update the aggregates after the timeline changes. */
   setCommits(commits: readonly TimelineCommit[]): void {
-    this.daily = dailyActivity(commits)
-    this.grid = weekdayHourGrid(commits)
+    this.activity.setCommits(commits)
   }
 
   draw(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
@@ -88,6 +78,11 @@ export class ExportOverlay {
     const unit = Math.max(8, Math.round(Math.min(width, height) * 0.014))
     const font = `${unit}px "Inter", system-ui, sans-serif`
     const smallFont = `${Math.max(7, Math.round(unit * 0.72))}px "Inter", system-ui, sans-serif`
+
+    // Only what has happened by this frame: the charts grow as the video plays.
+    this.activity.advanceTo(frame.date)
+    const grid = this.activity.grid
+    const daily = this.activity.daily
 
     ctx.save()
     ctx.textBaseline = 'middle'
@@ -177,7 +172,7 @@ export class ExportOverlay {
       drawWeekdayHour(ctx, {
         width: columnWidth - unit * 1.6,
         height: chartHeight,
-        grid: this.grid,
+        grid,
         font: smallFont,
       })
       ctx.restore()
@@ -187,7 +182,7 @@ export class ExportOverlay {
     if (this.options.contributions !== false) {
       const chartHeight = Math.round(columnWidth * 0.34)
       const panelHeight = chartHeight + unit * 3.4
-      const calendar = contributionCalendar(this.daily, frame.date)
+      const calendar = contributionCalendar(daily, frame.date)
       drawPanel(ctx, columnX, cursorY, columnWidth, panelHeight, { radius: Math.round(unit * 0.6) })
       ctx.font = font
       ctx.textAlign = 'left'

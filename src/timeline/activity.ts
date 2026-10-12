@@ -43,14 +43,25 @@ export interface WeekdayHourGrid {
   busiest: { weekday: number; hour: number; count: number } | null
 }
 
-/** Commits per weekday and hour of day (UTC). */
-export function weekdayHourGrid(commits: readonly TimelineCommit[]): WeekdayHourGrid {
+export interface ActivityWindow {
+  /**
+   * Only count commits at or before this real-world timestamp (epoch ms).
+   * Used to keep the charts in step with the playback position: nothing from
+   * the future may be shown.
+   */
+  until?: number
+}
+
+/** Commits per weekday and hour of day (UTC), up to `until`. */
+export function weekdayHourGrid(commits: readonly TimelineCommit[], window: ActivityWindow = {}): WeekdayHourGrid {
   const counts: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0))
+  const until = Number.isFinite(window.until) ? (window.until as number) : Number.POSITIVE_INFINITY
   let total = 0
   let max = 0
   let busiest: WeekdayHourGrid['busiest'] = null
   for (const commit of commits) {
     if (!Number.isFinite(commit.timestamp) || commit.timestamp <= 0) continue
+    if (commit.timestamp > until) continue
     const date = new Date(commit.timestamp)
     const weekday = date.getUTCDay()
     const hour = date.getUTCHours()
@@ -75,15 +86,17 @@ export interface DailyActivity {
   lastDay: number
 }
 
-/** Commits per UTC day, keyed by day number. */
-export function dailyActivity(commits: readonly TimelineCommit[]): DailyActivity {
+/** Commits per UTC day, keyed by day number, up to `until`. */
+export function dailyActivity(commits: readonly TimelineCommit[], window: ActivityWindow = {}): DailyActivity {
   const counts = new Map<number, number>()
+  const until = Number.isFinite(window.until) ? (window.until as number) : Number.POSITIVE_INFINITY
   let total = 0
   let max = 0
   let firstDay = 0
   let lastDay = 0
   for (const commit of commits) {
     if (!Number.isFinite(commit.timestamp) || commit.timestamp <= 0) continue
+    if (commit.timestamp > until) continue
     const day = dayNumber(commit.timestamp)
     const next = (counts.get(day) ?? 0) + 1
     counts.set(day, next)
@@ -174,6 +187,103 @@ export function contributionCalendar(
   for (const [day, count] of daily.counts) if (day < start) before += count
 
   return { weeks: grid, max, total, months, start, end, before }
+}
+
+/**
+ * Incremental aggregation for the export overlay.
+ *
+ * The export walks the timeline forwards, so the charts can be built up commit
+ * by commit instead of re-counting the whole history per frame. Seeking
+ * backwards (or a rebuilt timeline) rebuilds from scratch.
+ */
+export class ActivityCursor {
+  private commits: readonly TimelineCommit[]
+  private cursor = 0
+  private until = Number.NEGATIVE_INFINITY
+  private gridCounts: number[][] = emptyGrid()
+  private dayCounts = new Map<number, number>()
+  private gridTotal = 0
+  private gridMax = 0
+  private gridBusiest: WeekdayHourGrid['busiest'] = null
+  private dayTotal = 0
+  private dayMax = 0
+  private firstDay = 0
+  private lastDay = 0
+
+  constructor(commits: readonly TimelineCommit[]) {
+    this.commits = commits
+  }
+
+  /** Point the aggregates at a new timeline (rebuilds on the next advance). */
+  setCommits(commits: readonly TimelineCommit[]): void {
+    this.commits = commits
+    this.cursor = 0
+    this.until = Number.NEGATIVE_INFINITY
+    this.gridCounts = emptyGrid()
+    this.dayCounts = new Map()
+    this.gridTotal = 0
+    this.gridMax = 0
+    this.gridBusiest = null
+    this.dayTotal = 0
+    this.dayMax = 0
+    this.firstDay = 0
+    this.lastDay = 0
+  }
+
+  /** Include every commit at or before `until` (epoch ms). */
+  advanceTo(until: number): void {
+    const target = Number.isFinite(until) ? until : Number.POSITIVE_INFINITY
+    if (target < this.until) {
+      // Jumped backwards: rebuild rather than rewind the running totals.
+      const commits = this.commits
+      this.setCommits(commits)
+    }
+    while (this.cursor < this.commits.length) {
+      const commit = this.commits[this.cursor]
+      if (!commit || commit.timestamp > target) break
+      this.cursor += 1
+      if (!Number.isFinite(commit.timestamp) || commit.timestamp <= 0) continue
+      const date = new Date(commit.timestamp)
+      const weekday = date.getUTCDay()
+      const hour = date.getUTCHours()
+      const row = this.gridCounts[weekday]
+      if (row) {
+        const next = (row[hour] ?? 0) + 1
+        row[hour] = next
+        this.gridTotal += 1
+        if (next > this.gridMax) {
+          this.gridMax = next
+          this.gridBusiest = { weekday, hour, count: next }
+        }
+      }
+      const day = dayNumber(commit.timestamp)
+      const dayNext = (this.dayCounts.get(day) ?? 0) + 1
+      this.dayCounts.set(day, dayNext)
+      this.dayTotal += 1
+      if (dayNext > this.dayMax) this.dayMax = dayNext
+      if (this.firstDay === 0 || day < this.firstDay) this.firstDay = day
+      if (day > this.lastDay) this.lastDay = day
+    }
+    this.until = target
+  }
+
+  get grid(): WeekdayHourGrid {
+    return { counts: this.gridCounts, max: this.gridMax, total: this.gridTotal, busiest: this.gridBusiest }
+  }
+
+  get daily(): DailyActivity {
+    return {
+      counts: this.dayCounts,
+      max: this.dayMax,
+      total: this.dayTotal,
+      firstDay: this.firstDay,
+      lastDay: this.lastDay,
+    }
+  }
+}
+
+function emptyGrid(): number[][] {
+  return Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0))
 }
 
 /** Five-step shade index (0 = empty) for a count, GitHub style. */
