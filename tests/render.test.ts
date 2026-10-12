@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { NODE_Z, NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
+import { GlowField, GLOW_Z } from '../src/render/glow'
 import { ParticleField, pointSizePixels } from '../src/render/particles'
 import { Camera2D } from '../src/render/camera'
 import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
@@ -108,6 +109,66 @@ describe('NodeField', () => {
     field.touch(1, 'delete', 0)
     field.update(0.5, nodes)
     field.update(2, nodes)
+    field.dispose()
+  })
+})
+
+describe('GlowField', () => {
+  it('draws one halo per directory, sized from the cluster radius', () => {
+    const field = new GlowField(8)
+    const nodes = [
+      node(0, { kind: 'root', path: '', radius: 0.5, clusterRadius: 12 }),
+      node(1),
+      node(2, { kind: 'dir', path: 'src', name: 'src', clusterRadius: 4 }),
+    ]
+    field.sync(nodes, true)
+    // Only the root and the directory get a halo: Gource blooms directories.
+    expect(field.stats).toBe(2)
+
+    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const matrix = new THREE.Matrix4()
+    mesh.getMatrixAt(1, matrix)
+    // Gource: bloom_radius = dir_radius * 2.0 * bloom_multiplier.
+    expect(matrix.elements[0]).toBeCloseTo(8, 5)
+    // Halos sit in front of the circles (z) but behind the beams and avatars.
+    expect(matrix.elements[14]).toBeCloseTo(GLOW_Z, 5)
+
+    // A hidden directory collapses its halo.
+    nodes[2].visible = false
+    field.sync(nodes, false, [2])
+    mesh.getMatrixAt(1, matrix)
+    expect(matrix.elements[0]).toBe(0)
+    field.dispose()
+  })
+
+  it('bakes the intensity into the instance colours and hides at zero', () => {
+    const field = new GlowField(8)
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
+    field.setIntensity(0.75, nodes)
+    field.sync(nodes, true)
+    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const color = new THREE.Color()
+    mesh.getColorAt(1, color)
+    const full = color.r
+
+    field.setIntensity(0.375, nodes)
+    mesh.getColorAt(1, color)
+    expect(color.r).toBeCloseTo(full / 2, 5)
+
+    field.setIntensity(0, nodes)
+    expect(mesh.visible).toBe(false)
+    field.dispose()
+  })
+
+  it('allocates halos introduced by incremental playback and grows capacity', () => {
+    const field = new GlowField(2)
+    const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
+    field.sync(nodes, true)
+    for (let index = 1; index <= 8; index += 1) {
+      nodes.push(node(index, { kind: 'dir', path: `dir-${index}`, name: `dir-${index}` }))
+      field.sync(nodes, false, [index])
+    }
+    expect(field.stats).toBe(9)
     field.dispose()
   })
 })
