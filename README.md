@@ -78,12 +78,15 @@ fast the machine is:
   derived from that time, so every frame is the same on every machine — a slow
   machine just takes longer (a 51 s animation at 4× rendered in software here
   took ~105 s of wall clock and produced the same 765 frames as a fast one);
-* the video **contains the panels**: the timeline histogram along the bottom, the
-  overview (minimap) in the bottom-right corner, and the activity charts — commits
-  per weekday and hour, plus the sliding contribution calendar — in the right
-  column. They are drawn with the same canvas routines the on-screen panels use
-  (`render/overlays.ts`), composited into each frame, and laid out from the frame
-  size so 720p, 1080p and portrait exports all work;
+* the video **contains the panels**: the info panel (date, commit subject, author,
+  the files it changed with sizes, tree statistics, who is working now) in the
+  bottom-left, the timeline histogram along the bottom, the overview (minimap) in
+  the bottom-right corner, and the activity charts — commits per weekday and hour,
+  plus the sliding contribution calendar — in the right column. They are drawn with
+  the same code the on-screen panels use (`render/overlays.ts` and
+  `render/info-panel.ts`; the info panel's *content* is a shared model, so the card
+  and the frame cannot drift apart), composited into each frame, and laid out from
+  the frame size so 720p, 1080p and portrait exports all work;
 * frames are drawn by the existing WebGL pipeline (`Engine.renderExportFrame`),
   at the resolution you pick, with the camera stepping on a fixed frame cadence
   rather than a wall clock;

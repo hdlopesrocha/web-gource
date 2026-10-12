@@ -629,8 +629,12 @@ export class Engine {
       if (!ctx) return null
       this.composite = { canvas, ctx }
     }
-    if (!this.overlay) this.overlay = new ExportOverlay(this.timeline.commits, options)
-    else this.overlay.setCommits(this.timeline.commits)
+    if (!this.overlay) this.overlay = new ExportOverlay(this.timeline.commits, this.timeline.authors, options)
+    else {
+      this.overlay.setCommits(this.timeline.commits)
+      this.overlay.setAuthors(this.timeline.authors)
+      this.overlay.setFileSizes(this.timeline.fileSizes)
+    }
     return this.composite.ctx
   }
 
@@ -658,6 +662,12 @@ export class Engine {
       date: this.computeDate(),
       commit: this.timeline.commits[this.sim.currentIndex] ?? null,
       buckets: this.schedule.activity(240, this.timeline.commits),
+      timeline: {
+        files: this.timeline.stats.files,
+        totalBytes: this.timeline.stats.totalBytes,
+        authors: this.timeline.stats.authors,
+      },
+      fps: this.recording?.fps ?? EXPORT_FPS,
     })
     return canvas
   }

@@ -524,7 +524,8 @@ onMounted(() => {
                 The render is frame-driven, not clock-driven: every frame advances the simulation by exactly
                 {{ playbackSpeed }}/{{ EXPORT_FPS_LABEL }} s and is encoded as soon as it is drawn, so the result does not
                 depend on how fast this machine is. Frames are never buffered — only the compressed stream is kept.
-                The video includes the timeline, the overview, the weekday/hour heatmap and the contribution calendar.
+                The video includes the info panel, the timeline, the overview, the weekday/hour heatmap and the
+                contribution calendar.
               </p>
 
               <div class="record-row">

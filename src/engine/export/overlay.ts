@@ -13,7 +13,9 @@
  */
 
 import type { Simulation } from '../../sim/simulation'
-import type { ActivityBucket, TimelineCommit } from '../../timeline/types'
+import type { ActivityBucket, TimelineAuthor, TimelineCommit } from '../../timeline/types'
+import type { HudCommitInfo } from '../engine'
+import { authorCssColor as authorColorCss } from '../../render/palette'
 import { ActivityCursor, contributionCalendar, dayStartMs } from '../../timeline/activity'
 import { MinimapDrawer } from '../../render/minimap'
 import {
@@ -25,6 +27,7 @@ import {
   TEXT_STRONG,
 } from '../../render/overlays'
 import { formatDate, formatDateTime } from '../../timeline/schedule'
+import { buildInfoPanelModel, drawInfoPanel } from '../../render/info-panel'
 
 export interface OverlayFrame {
   /** Frame size in pixels. */
@@ -40,9 +43,15 @@ export interface OverlayFrame {
   commit: TimelineCommit | null
   /** Commits per activity bucket, for the timeline histogram. */
   buckets: ActivityBucket[]
+  /** Loaded-window statistics shown in the info panel. */
+  timeline: { files: number; totalBytes: number; authors: number }
+  /** Playback frame rate, shown in the info panel. */
+  fps: number
 }
 
 export interface OverlayOptions {
+  /** Draw the commit info panel. */
+  info?: boolean
   /** Draw the overview (minimap). */
   overview?: boolean
   /** Draw the timeline histogram. */
@@ -60,17 +69,65 @@ export interface OverlayOptions {
 export class ExportOverlay {
   private minimap = new MinimapDrawer()
   private activity: ActivityCursor
+  private authors: Map<string, { name: string; colorIndex: number }>
 
   constructor(
     commits: readonly TimelineCommit[],
+    authors: readonly TimelineAuthor[] = [],
     private readonly options: OverlayOptions = {},
   ) {
     this.activity = new ActivityCursor(commits)
+    this.authors = new Map(authors.map((author) => [author.id, { name: author.name, colorIndex: author.colorIndex }]))
+  }
+
+  /** Update the author lookup when the timeline changes. */
+  setAuthors(authors: readonly TimelineAuthor[]): void {
+    this.authors = new Map(authors.map((author) => [author.id, { name: author.name, colorIndex: author.colorIndex }]))
   }
 
   /** Update the aggregates after the timeline changes. */
   setCommits(commits: readonly TimelineCommit[]): void {
     this.activity.setCommits(commits)
+    this.fileSizes = new Map()
+  }
+
+  /** Host-reported file sizes, used for the change rows in the info panel. */
+  private fileSizes = new Map<string, number>()
+
+  setFileSizes(sizes: Map<string, number>): void {
+    this.fileSizes = sizes
+  }
+
+  /** The commit card's data, matching what the HUD shows on screen. */
+  private commitInfo(commit: TimelineCommit): HudCommitInfo {
+    const author = this.authorName(commit.authorId)
+    return {
+      sha: commit.sha,
+      shortSha: commit.shortSha,
+      subject: commit.subject,
+      author: author.name,
+      authorColor: author.color,
+      isMerge: commit.isMerge,
+      filesKnown: commit.filesKnown,
+      filesMissingReason: commit.filesMissingReason,
+      filesTruncated: commit.filesTruncated,
+      changes: commit.changes.slice(0, 40).map((change) => {
+        const size = this.fileSizes.get(change.path)
+        return size === undefined
+          ? { path: change.path, kind: change.kind }
+          : { path: change.path, kind: change.kind, size }
+      }),
+      additions: commit.additions,
+      deletions: commit.deletions,
+      filesTotal: commit.filesTotal,
+      timestamp: commit.timestamp,
+    }
+  }
+
+  private authorName(authorId: string): { name: string; color: string } {
+    const author = this.authors.get(authorId)
+    if (!author) return { name: 'Unknown author', color: '#ffffff' }
+    return { name: author.name, color: authorColorCss(author.colorIndex) }
   }
 
   draw(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
@@ -153,6 +210,54 @@ export class ExportOverlay {
       ctx.textAlign = 'left'
       ctx.fillStyle = TEXT_COLOR
       ctx.fillText('Overview', x + unit * 0.6, overviewY - unit * 0.7)
+    }
+
+    // ---- info panel (bottom-left, above the timeline) -------------------
+    if (this.options.info !== false) {
+      const infoWidth = columnWidth
+      const infoHeight = Math.round(Math.min(height * 0.46, unit * 17))
+      const infoY = Math.max(padding, timelineY - infoHeight - padding)
+      const stats = frame.sim.stats()
+      const activeAuthors = [...frame.sim.authors]
+        .filter((author) => author.visible)
+        .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+        .slice(0, 4)
+        .map((author) => ({
+          id: author.author.id,
+          name: author.author.name,
+          color: authorColorCss(author.author.colorIndex),
+          commits: author.appliedCommits,
+        }))
+      const model = buildInfoPanelModel({
+        date: frame.date,
+        time: frame.simTime,
+        duration: frame.duration,
+        fps: frame.fps,
+        commit: frame.commit ? this.commitInfo(frame.commit) : null,
+        visibleFiles: stats.visibleFiles,
+        visibleDirs: stats.dirs,
+        totalFiles: frame.timeline.files,
+        totalBytes: frame.timeline.totalBytes,
+        authors: frame.timeline.authors,
+        activeAuthors: activeAuthors.map((author) => ({
+          id: author.id,
+          name: author.name,
+          color: author.color,
+          commits: author.commits,
+          lastActiveAt: 0,
+        })),
+      })
+      drawInfoPanel(ctx, model, {
+        x: padding,
+        y: infoY,
+        width: infoWidth,
+        height: infoHeight,
+        unit,
+        font,
+        smallFont,
+        monoFont: `${Math.max(7, Math.round(unit * 0.78))}px ui-monospace, "SFMono-Regular", Menlo, monospace`,
+        panel: (x, y, width, height) => drawPanel(ctx, x, y, width, height, { radius: Math.round(unit * 0.6) }),
+      })
     }
 
     // ---- activity column ------------------------------------------------

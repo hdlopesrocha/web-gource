@@ -7,6 +7,7 @@ import { ParticleField, pointSizePixels } from '../src/render/particles'
 import { Camera2D } from '../src/render/camera'
 import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
+import { buildInfoPanelModel, fitText, wrapText } from '../src/render/info-panel'
 import { BeamField } from '../src/render/beams'
 import type { SimNode } from '../src/sim/simulation'
 
@@ -498,6 +499,104 @@ describe('Camera2D', () => {
     expect(Number.isFinite(rig.camera.position.x)).toBe(true)
     expect(Number.isFinite(rig.camera.position.y)).toBe(true)
     expect(rig.viewHeight).toBeGreaterThan(0)
+  })
+})
+
+describe('info panel model', () => {
+  const commit = {
+    sha: 'abcdef1234567890',
+    shortSha: 'abcdef1',
+    subject: 'fix: make the parser handle empty input',
+    author: 'Ada',
+    authorColor: '#5ec8ff',
+    isMerge: false,
+    filesKnown: true,
+    filesTruncated: false,
+    changes: Array.from({ length: 12 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      kind: 'modify' as const,
+      size: 1024 * (index + 1),
+    })),
+    additions: 42,
+    deletions: 7,
+    timestamp: 0,
+  }
+
+  it('builds the same content the on-screen panel shows', () => {
+    const model = buildInfoPanelModel({
+      date: Date.UTC(2024, 2, 6, 14, 30),
+      time: 60,
+      duration: 240,
+      fps: 60,
+      commit,
+      visibleFiles: 12,
+      visibleDirs: 3,
+      totalFiles: 1234,
+      totalBytes: 5_000_000,
+      authors: 8,
+      activeAuthors: [{ id: 'a', name: 'Ada', color: '#fff', commits: 3, lastActiveAt: 0 }],
+    })
+    expect(model.dateLabel).toBe('2024-03-06 14:30')
+    expect(model.timeLabel).toBe('1:00 / 4:00')
+    expect(model.fpsLabel).toBe('60 fps')
+    expect(model.subject).toContain('parser')
+    expect(model.author).toEqual({
+      name: 'Ada',
+      color: '#5ec8ff',
+      shortSha: 'abcdef1',
+      additions: 42,
+      deletions: 7,
+    })
+    // Only nine files are listed, the rest are summarised.
+    expect(model.changes).toHaveLength(9)
+    expect(model.changes[0]).toEqual({ kind: 'modify', label: 'modified', path: 'src/file-0.ts', size: 1024 })
+    expect(model.moreFiles).toBe(3)
+    expect(model.missing).toBeNull()
+    expect(model.stats.map((stat) => stat.label)).toEqual([
+      'files in tree',
+      'directories',
+      'files in history',
+      'tracked size',
+      'authors',
+    ])
+    expect(model.stats[0].value).toBe('12')
+    expect(model.stats[3].value).toBe('4.8 MB')
+    expect(model.workingNow).toHaveLength(1)
+  })
+
+  it('explains a commit without file data and keeps merge marks', () => {
+    const model = buildInfoPanelModel({
+      date: 0,
+      time: 0,
+      duration: 0,
+      fps: 30,
+      commit: { ...commit, filesKnown: false, filesMissingReason: 'rate-limit', isMerge: true, changes: [] },
+      visibleFiles: 0,
+      visibleDirs: 0,
+      totalFiles: 0,
+      totalBytes: 0,
+      authors: 0,
+      activeAuthors: [],
+    })
+    expect(model.dateLabel).toBe('—')
+    expect(model.isMerge).toBe(true)
+    expect(model.missing).toBe('File list unavailable: API quota exhausted')
+    expect(model.changes).toEqual([])
+  })
+
+  it('wraps and truncates text to fit the panel', () => {
+    // A stub context with a fixed character width, enough for measuring.
+    const ctx = {
+      measureText: (text: string) => ({ width: text.length * 10 }),
+    } as unknown as CanvasRenderingContext2D
+    expect(fitText(ctx, 'short', 200)).toBe('short')
+    const truncated = fitText(ctx, 'a-very-long-path/file.ts', 100)
+    expect(truncated.endsWith('…')).toBe(true)
+    // The longest prefix that fits, plus the ellipsis.
+    expect(truncated.length * 10).toBeLessThanOrEqual(100)
+    const lines = wrapText(ctx, 'one two three four five six seven', 100, 2)
+    expect(lines).toHaveLength(2)
+    expect(lines[1].endsWith('…')).toBe(true)
   })
 })
 

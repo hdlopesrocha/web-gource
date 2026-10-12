@@ -1,109 +1,88 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { store } from '../state/store'
-import { formatDateTime, formatDuration } from '../timeline/schedule'
 import { formatBytes } from '../util/format'
+import { buildInfoPanelModel } from '../render/info-panel'
 
 const hud = computed(() => store.hud)
 const stats = computed(() => store.timelineStats)
 
-const changeKindLabel: Record<string, string> = {
-  add: 'added',
-  modify: 'modified',
-  delete: 'deleted',
-  rename: 'renamed',
-}
-
-const missingLabel = computed(() => {
-  const reason = hud.value?.commit?.filesMissingReason
-  switch (reason) {
-    case 'rate-limit':
-      return 'File list unavailable: API quota exhausted'
-    case 'merge-parents':
-      return 'Merge commit: the host reported no changed files'
-    case 'too-large':
-      return 'File list unavailable: commit too large'
-    case 'error':
-      return 'File list unavailable: request failed'
-    default:
-      return 'File list unavailable'
-  }
-})
-
-const subject = computed(() => hud.value?.commit?.subject ?? '—')
+/**
+ * The same model the video compositor draws, so the panel and the exported
+ * frame always show the same content.
+ */
+const model = computed(() =>
+  buildInfoPanelModel({
+    date: hud.value?.date ?? 0,
+    time: hud.value?.time ?? 0,
+    duration: hud.value?.duration ?? 0,
+    fps: hud.value?.fps ?? 0,
+    commit: hud.value?.commit ?? null,
+    visibleFiles: hud.value?.visibleFiles ?? 0,
+    visibleDirs: hud.value?.visibleDirs ?? 0,
+    totalFiles: hud.value?.totalFiles ?? 0,
+    totalBytes: hud.value?.totalBytes ?? 0,
+    authors: stats.value?.authors ?? 0,
+    activeAuthors: hud.value?.activeAuthors ?? [],
+  }),
+)
 </script>
 
 <template>
   <div class="info panel">
     <div class="head">
       <div class="date-block">
-        <span class="date mono">{{ hud ? formatDateTime(hud.date) : '—' }}</span>
+        <span class="date mono">{{ model.dateLabel }}</span>
         <span class="faint mono">
-          {{ formatDuration(hud?.time ?? 0) }} / {{ formatDuration(hud?.duration ?? 0) }}
-          <template v-if="hud"> · {{ hud.fps }} fps</template>
+          {{ model.timeLabel }}
+          <template v-if="hud"> · {{ model.fpsLabel }}</template>
         </span>
       </div>
-      <span v-if="hud?.commit?.isMerge" class="badge">merge</span>
+      <span v-if="model.isMerge" class="badge">merge</span>
     </div>
 
     <div class="commit">
-      <p class="subject" :title="subject">{{ subject }}</p>
+      <p class="subject" :title="model.subject">{{ model.subject }}</p>
       <div class="commit-meta">
-        <span v-if="hud?.commit" class="author-dot" :style="{ background: hud.commit.authorColor }" />
-        <span class="author">{{ hud?.commit?.author ?? '—' }}</span>
-        <span v-if="hud?.commit" class="mono faint">{{ hud.commit.shortSha }}</span>
-        <span v-if="hud?.commit" class="faint mono">
-          +{{ hud.commit.additions }} / −{{ hud.commit.deletions }}
+        <span v-if="model.author" class="author-dot" :style="{ background: model.author.color }" />
+        <span class="author">{{ model.author?.name ?? '—' }}</span>
+        <span v-if="model.author" class="mono faint">{{ model.author.shortSha }}</span>
+        <span v-if="model.author" class="faint mono">
+          +{{ model.author.additions }} / −{{ model.author.deletions }}
         </span>
       </div>
     </div>
 
-    <div v-if="hud?.commit && hud.commit.changes.length > 0" class="changes scroll">
-      <div v-for="change in hud.commit.changes.slice(0, 9)" :key="change.path + change.kind" class="change-row">
-        <span class="chip" :class="change.kind">{{ changeKindLabel[change.kind] }}</span>
+    <div v-if="model.changes.length > 0" class="changes scroll">
+      <div v-for="change in model.changes" :key="change.path + change.kind" class="change-row">
+        <span class="chip" :class="change.kind">{{ change.label }}</span>
         <span class="path mono" :title="change.path">{{ change.path }}</span>
         <span v-if="change.size !== undefined" class="size mono faint">{{ formatBytes(change.size) }}</span>
       </div>
-      <div v-if="hud.commit.changes.length > 9" class="faint more">
-        +{{ hud.commit.changes.length - 9 }} more files in this commit
+      <div v-if="model.moreFiles > 0" class="faint more">
+        +{{ model.moreFiles }} more files in this commit
       </div>
-      <div v-if="hud.commit.filesTruncated" class="faint more">
+      <div v-if="model.truncated" class="faint more">
         The host truncated this commit's file list at 300 entries.
       </div>
     </div>
 
-    <div v-else-if="hud?.commit && !hud.commit.filesKnown" class="notice">
+    <div v-else-if="model.missing" class="notice">
       <span class="badge warn">no file data</span>
-      <span class="faint">{{ missingLabel }}</span>
+      <span class="faint">{{ model.missing }}</span>
     </div>
 
     <div class="stats">
-      <div class="stat">
-        <span class="stat-value">{{ hud?.visibleFiles ?? 0 }}</span>
-        <span class="stat-label">files in tree</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value">{{ hud?.visibleDirs ?? 0 }}</span>
-        <span class="stat-label">directories</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value">{{ (hud?.totalFiles ?? 0).toLocaleString() }}</span>
-        <span class="stat-label">files in history</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value">{{ formatBytes(hud?.totalBytes ?? 0) }}</span>
-        <span class="stat-label">tracked size</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value">{{ stats?.authors ?? 0 }}</span>
-        <span class="stat-label">authors</span>
+      <div v-for="stat in model.stats" :key="stat.label" class="stat">
+        <span class="stat-value">{{ stat.value }}</span>
+        <span class="stat-label">{{ stat.label }}</span>
       </div>
     </div>
 
-    <div v-if="hud && hud.activeAuthors.length > 0" class="authors">
+    <div v-if="model.workingNow.length > 0" class="authors">
       <span class="section-label">working now</span>
       <div class="author-list">
-        <span v-for="author in hud.activeAuthors.slice(0, 4)" :key="author.id" class="author-chip">
+        <span v-for="author in model.workingNow" :key="author.id" class="author-chip">
           <span class="author-dot" :style="{ background: author.color }" />
           {{ author.name }}
           <span class="faint">{{ author.commits }}</span>
