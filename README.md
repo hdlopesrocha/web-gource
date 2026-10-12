@@ -215,14 +215,23 @@ The whole tree is packed hierarchically, and it reflows while history plays:
   its subfolders, recursively), and its parent packs it by that radius — so a
   folder that grows reserves the room it needs and its siblings slide outwards
   instead of overlapping it;
-* inside a folder, files sit on the inner ring(s) and subfolders on the outer
-  ring(s), each packed by its cluster radius, so nesting never collides either;
+* inside a folder, files fill a **disc** (greedy spiral packing, largest circles
+  first) instead of a ring — a ring grows linearly with the file count, which is
+  what used to push subfolders away from their parent, while a disc grows with
+  the square root and stays compact. Subfolders are then packed on the ring just
+  outside the file circles, sized by their own cluster radius, so nesting cannot
+  collide either;
 * a folder that moves takes its subtree with it, keeping every cluster rigid
   while it slides to its new place;
 * rings are packed against the real geometry: the arc length that has to fit
   *and* the chord between adjacent slots (using the actual adjacent pairs), and a
   ring's circles must clear the previous ring's circles — which is what keeps
-  concentric rings from overlapping each other too.
+  concentric rings from overlapping each other too;
+* placement is incremental: a file that has not changed size keeps its slot, a
+  circle may grow into the free gap around it, and only a circle that would
+  actually overlap a neighbour is moved. Layout changes are quantised, so a file
+  growing by a fraction of a unit does not reflow the whole tree. Replaying 5,000
+  commits with 3,600 files takes ~1.2 s of layout work.
 
 Inside a directory, files are packed onto one or more concentric rings and those
 rings reflow while history plays:

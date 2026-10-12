@@ -65,9 +65,9 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           The tree is packed hierarchically. Every folder knows the size of its whole cluster — its files plus its
           subfolders, recursively — and its parent packs it by that size, so folders never overlap each other no
-          matter how much they grow. Inside a folder, files sit on the inner ring and subfolders on the outer ring,
-          each sized by what it has to hold. Adding a file, or a circle growing with its size, smoothly pushes the
-          neighbours outwards, and a folder that moves takes its subtree with it. Positions are still derived from
+          matter how much they grow. Inside a folder, files fill a compact disc and subfolders sit on the ring just
+          outside them, each sized by what it has to hold. Adding a file, or a circle growing with its size, smoothly
+          pushes the neighbours outwards, and a folder that moves takes its subtree with it. Positions are still derived from
           the repository state alone, so the same history always produces the same map. Settings → Visual can pin
           every node to its path-derived position instead.
         </p>

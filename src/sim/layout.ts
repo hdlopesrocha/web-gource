@@ -42,12 +42,24 @@ export const LAYOUT = {
   baseDistance: 9,
   /** Additional distance per level of depth. */
   distancePerDepth: 2.4,
-  /** Innermost radius of the ring that holds a directory's files. */
-  fileRingRadius: 2.2,
+  /** Innermost radius at which a directory's files start. */
+  fileRingRadius: 1.1,
+  /** Safety bound for the disc packing of a directory's files. */
+  maxDiscRadius: 48,
+  /**
+   * Layout changes are rounded to this step, so growing a file by a pixel does
+   * not reflow the whole tree on every commit.
+   */
+  layoutQuantum: 0.5,
+  /**
+   * Overlap tolerated before a grown circle is moved. Lets circles grow into the
+   * free space around them without shuffling their neighbours.
+   */
+  growthSlack: 0.25,
   /** Innermost radius of the ring that holds a directory's subdirectories. */
-  dirRingRadius: 6,
+  dirRingRadius: 2.5,
   /** Free space kept between neighbouring directory clusters. */
-  clusterGap: 1.2,
+  clusterGap: 0.6,
   /**
    * A directory ring is closed beyond this radius and a new one started. Kept
    * generous: cluster sizes dominate the radius anyway, and closing rings early
@@ -55,7 +67,7 @@ export const LAYOUT = {
    */
   maxDirRingRadius: 60,
   /** Gap kept between neighbouring file circles. */
-  fileGap: 0.4,
+  fileGap: 0.25,
   /** A ring is closed and a new one started beyond this radius. */
   maxRingRadius: 5,
   /** Hard cap on concentric rings per directory. */
@@ -72,8 +84,8 @@ export const LAYOUT = {
    * folder's cluster stays dense: ring packing is space hungry, and clusters are
    * what separate folders from each other.
    */
-  minFileRadius: 0.1,
-  maxFileRadius: 1.0,
+  minFileRadius: 0.08,
+  maxFileRadius: 0.75,
 }
 
 export function depthOfPath(path: string): number {
@@ -206,7 +218,7 @@ export function placeOnRings(
       const next = entries[(index + 1) % entries.length]
       widestPair = Math.max(widestPair, entries[index].radius + next.radius)
     }
-    const chord = ((widestPair + config.gap) / (2 * Math.sin(Math.PI / entries.length))) * 1.05
+    const chord = ((widestPair + config.gap) / (2 * Math.sin(Math.PI / entries.length))) * 1.02
     return Math.max(packing, chord)
   }
 
@@ -257,6 +269,209 @@ export function placeOnRings(
     if (placement) byKey.set(sorted[index].key, placement)
   }
   return sorted.map((item) => byKey.get(item.key) ?? { x: 0, y: 0, ring: 0, angle: 0 })
+}
+
+export const DEFAULT_DISC_OPTIONS: DiscOptions = {
+  minRadius: LAYOUT.fileRingRadius,
+  gap: LAYOUT.fileGap,
+  phase: 0,
+  maxRadius: LAYOUT.maxDiscRadius,
+}
+
+export interface DiscObstacle {
+  x: number
+  y: number
+  radius: number
+}
+
+export interface DiscOptions {
+  /** Radius from the centre where the first circle may start. */
+  minRadius: number
+  /** Free space kept between neighbouring circles. */
+  gap: number
+  /** Angular phase, so different folders do not look identical. */
+  phase: number
+  /** Safety bound on the search radius. */
+  maxRadius: number
+  /**
+   * Circles that are already fixed and must not be disturbed. Used for
+   * incremental packing: existing files keep their spot and only new or resized
+   * ones are placed around them.
+   */
+  obstacles?: readonly DiscObstacle[]
+  /**
+   * Where to start looking. Callers can pass the radius of the last placement so
+   * a dense folder does not search from the centre every time.
+   */
+  startRadius?: number
+}
+
+export interface DiscPlacement {
+  x: number
+  y: number
+  /** Distance from the centre. */
+  radius: number
+}
+
+/**
+ * Pack items into a disc around a centre, densest-first.
+ *
+ * A ring layout grows linearly with the number of items (the circumference has
+ * to hold them all), which is what pushed subfolders away from their parent.
+ * This greedy spiral packing fills the *area* instead, so a folder with many
+ * files stays compact (roughly the square root of the count) while still
+ * guaranteeing that no two circles touch.
+ *
+ * Items are placed largest first at the centre and smaller ones fill the gaps,
+ * which also makes the result stable: adding a small file does not move the big
+ * ones, and the whole layout is a deterministic function of the item list.
+ */
+export function placeInDisc(
+  items: readonly RingItem[],
+  options: Partial<DiscOptions> = {},
+): DiscPlacement[] {
+  const config: DiscOptions = { ...DEFAULT_DISC_OPTIONS, ...options }
+  const placements: DiscPlacement[] = []
+  if (items.length === 0) return placements
+
+  // Largest first, ties broken by key for determinism.
+  const order = [...items]
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.radius - a.item.radius || (a.item.key < b.item.key ? -1 : 1))
+
+  let widest = 0
+  for (const item of items) widest = Math.max(widest, item.radius)
+  for (const obstacle of config.obstacles ?? []) widest = Math.max(widest, obstacle.radius)
+
+  // A candidate only needs to look at the nine cells around it.
+  const cell = Math.max(0.5, widest * 2 + config.gap)
+  const cellKey = (x: number, y: number): string => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`
+  const grid = new Map<string, { x: number; y: number; radius: number }[]>()
+
+  const addObstacle = (circle: { x: number; y: number; radius: number }): void => {
+    const key = cellKey(circle.x, circle.y)
+    const bucket = grid.get(key)
+    if (bucket) bucket.push(circle)
+    else grid.set(key, [circle])
+  }
+  for (const obstacle of config.obstacles ?? []) addObstacle(obstacle)
+
+  const collides = (x: number, y: number, radius: number): boolean => {
+    const cx = Math.floor(x / cell)
+    const cy = Math.floor(y / cell)
+    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+        const bucket = grid.get(`${gx}:${gy}`)
+        if (!bucket) continue
+        for (const other of bucket) {
+          const dx = other.x - x
+          const dy = other.y - y
+          const minDistance = radius + other.radius + config.gap
+          if (dx * dx + dy * dy < minDistance * minDistance) return true
+        }
+      }
+    }
+    return false
+  }
+
+  const remember = (index: number, x: number, y: number, radius: number): void => {
+    placements[index] = { x, y, radius }
+    addObstacle({ x, y, radius })
+  }
+
+  const GOLDEN = 2.399963229728653
+  // Radial step and the search bound both follow the item sizes, so the number
+  // of candidates stays proportional to the space that has to be explored.
+  const step = Math.max(0.45, config.gap * 1.2)
+  // The search has to reach past whatever is already there, otherwise a dense
+  // folder would keep falling back to positions outside the free space.
+  let occupiedReach = 0
+  for (const obstacle of config.obstacles ?? []) {
+    occupiedReach = Math.max(occupiedReach, Math.hypot(obstacle.x, obstacle.y) + obstacle.radius)
+  }
+  const denseRadius = Math.sqrt(items.length + 1) * (widest * 2 + config.gap) + config.minRadius
+  const searchLimit = Math.min(
+    config.maxRadius,
+    Math.max(config.minRadius + widest, denseRadius, occupiedReach + widest + config.gap),
+  )
+
+  for (let slot = 0; slot < order.length; slot += 1) {
+    const { item, index } = order[slot]
+    let placed = false
+    // Start where the last placement ended (dense folders) but never closer than
+    // the centre allows.
+    const start = Math.max(config.minRadius + item.radius, (config.startRadius ?? 0) - step * 2)
+    for (let radius = start; radius <= searchLimit; radius += step) {
+      const samples = Math.min(
+        12,
+        Math.max(6, Math.round((Math.PI * 2 * radius) / Math.max(0.5, (item.radius + config.gap) * 2.4))),
+      )
+      const phase = config.phase + slot * GOLDEN
+      for (let sample = 0; sample < samples; sample += 1) {
+        const angle = phase + (sample / samples) * Math.PI * 2
+        const x = Math.cos(angle) * radius
+        const y = Math.sin(angle) * radius
+        if (collides(x, y, item.radius)) continue
+        remember(index, x, y, radius)
+        placed = true
+        break
+      }
+      if (placed) break
+    }
+    if (!placed) {
+      // Very dense input: keep walking the spiral outwards until the circle fits,
+      // so the fallback can never stack two files on the same spot.
+      let radius = searchLimit + item.radius + config.gap
+      let angle = config.phase + slot * GOLDEN
+      let guard = 0
+      while (collides(Math.cos(angle) * radius, Math.sin(angle) * radius, item.radius) && guard < 512) {
+        radius += step
+        angle += GOLDEN * 0.5
+        guard += 1
+      }
+      remember(index, Math.cos(angle) * radius, Math.sin(angle) * radius, radius)
+    }
+  }
+
+  return placements
+}
+
+/**
+ * Indices of circles that overlap each other (used to decide whether an
+ * incremental layout is still valid).
+ */
+export function findOverlaps(circles: readonly DiscObstacle[], gap = 0): number[] {
+  const offenders: number[] = []
+  if (circles.length < 2) return offenders
+  let widest = 0
+  for (const circle of circles) widest = Math.max(widest, circle.radius)
+  const cell = Math.max(0.5, widest * 2 + gap)
+  const grid = new Map<string, number[]>()
+  for (let index = 0; index < circles.length; index += 1) {
+    const circle = circles[index]
+    const cx = Math.floor(circle.x / cell)
+    const cy = Math.floor(circle.y / cell)
+    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+        const bucket = grid.get(`${gx}:${gy}`)
+        if (!bucket) continue
+        for (const other of bucket) {
+          const dx = circles[other].x - circle.x
+          const dy = circles[other].y - circle.y
+          const minDistance = circle.radius + circles[other].radius + gap
+          if (dx * dx + dy * dy < minDistance * minDistance) {
+            if (!offenders.includes(index)) offenders.push(index)
+            if (!offenders.includes(other)) offenders.push(other)
+          }
+        }
+      }
+    }
+    const key = `${cx}:${cy}`
+    const bucket = grid.get(key)
+    if (bucket) bucket.push(index)
+    else grid.set(key, [index])
+  }
+  return offenders
 }
 
 /** Extent (max distance from the centre) of a set of placements. */

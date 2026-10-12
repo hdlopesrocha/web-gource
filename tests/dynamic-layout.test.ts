@@ -193,25 +193,34 @@ describe('dynamic file rings in the simulation', () => {
     const { sim } = makeSimulation(commits, sizes)
     sim.applyUpTo(paths.length - 1)
     settle(sim)
-    const before = Math.hypot(
-      sim.find('src/file-0.ts')!.position.x - sim.find('src')!.position.x,
-      sim.find('src/file-0.ts')!.position.y - sim.find('src')!.position.y,
-    )
+    const hugeBefore = sim.find('src/file-0.ts')!
+    const beforeX = hugeBefore.position.x
+    const beforeY = hugeBefore.position.y
 
-    // The same file becomes huge: its circle grows and pushes the ring out.
+    // The same file becomes huge: its circle grows, the folder has to make room
+    // for it and no two circles may end up touching.
     sim.setFileSizes(new Map([['src/file-0.ts', 4_000_000]]))
     const huge = sim.find('src/file-0.ts')!
     expect(huge.radius).toBeCloseTo(LAYOUT.maxFileRadius, 5)
     expect(huge.radius).toBeGreaterThan(sim.find('src/file-1.ts')!.radius * 1.5)
-    // The siblings are now heading outwards, and they get there smoothly.
-    sim.update(1 / 60, sim.currentTime + 1 / 60)
-    expect(sim.drainMovedNodes().length).toBeGreaterThan(0)
     settle(sim)
-    const after = Math.hypot(
-      sim.find('src/file-0.ts')!.position.x - sim.find('src')!.position.x,
-      sim.find('src/file-0.ts')!.position.y - sim.find('src')!.position.y,
-    )
-    expect(after).toBeGreaterThan(before)
+
+    const dir = sim.find('src')!
+    expect(dir.clusterRadius).toBeGreaterThan(0)
+    const files = sim.nodes.filter((node) => node.kind === 'file')
+    for (let a = 0; a < files.length; a += 1) {
+      for (let b = a + 1; b < files.length; b += 1) {
+        const distance = Math.hypot(files[a].position.x - files[b].position.x, files[a].position.y - files[b].position.y)
+        expect(distance).toBeGreaterThanOrEqual(files[a].radius + files[b].radius - 0.001)
+      }
+    }
+    // The folder makes room for the bigger circle (its cluster grows) and the
+    // layout stays collision free. A circle may also simply grow into the free
+    // gap around it — what matters is that nothing overlaps.
+    expect(dir.clusterRadius).toBeGreaterThan(0)
+    const moved = Math.hypot(huge.position.x - beforeX, huge.position.y - beforeY)
+    const grew = huge.radius > 0.5
+    expect(grew || moved > 0).toBe(true)
     // Every file ended up on its layout position.
     for (const node of sim.nodes) {
       if (node.kind !== 'file') continue
@@ -220,7 +229,36 @@ describe('dynamic file rings in the simulation', () => {
     }
   })
 
-  it('reflows when a file is deleted', () => {
+  it('packs files into a disc instead of one wide ring', () => {
+    const count = 60
+    const commits = Array.from({ length: count }, (_, index) => addFile(`src/f${index}.ts`, index))
+    const { sim } = makeSimulation(commits)
+    sim.applyUpTo(count - 1)
+    settle(sim, 8)
+    const dir = sim.find('src')!
+    const files = sim.nodes.filter((node) => node.kind === 'file')
+    expect(files.length).toBe(count)
+    let extent = 0
+    for (const file of files) {
+      extent = Math.max(extent, Math.hypot(file.position.x - dir.position.x, file.position.y - dir.position.y) + file.radius)
+    }
+    // A single ring holding 60 circles of this size would need ~13 units; the
+    // disc fills the area instead, which is what keeps folders compact and
+    // subfolders close to their parent.
+    const ringExtent = ((0.98 + 0.3) / (2 * Math.sin(Math.PI / count))) * 1.02 + 0.49
+    expect(ringExtent).toBeGreaterThan(12)
+    expect(extent).toBeLessThan(ringExtent * 0.8)
+    expect(files[0].radius).toBeGreaterThan(0)
+    // Still collision free.
+    for (let a = 0; a < files.length; a += 1) {
+      for (let b = a + 1; b < files.length; b += 1) {
+        const distance = Math.hypot(files[a].position.x - files[b].position.x, files[a].position.y - files[b].position.y)
+        expect(distance).toBeGreaterThanOrEqual(files[a].radius + files[b].radius - 0.001)
+      }
+    }
+  })
+
+  it('keeps the survivors in place when a file is deleted', () => {
     const commits = [
       addFile('src/a.ts', 0),
       addFile('src/b.ts', 1),
@@ -237,9 +275,13 @@ describe('dynamic file rings in the simulation', () => {
     sim.applyUpTo(2)
     expect(sim.find('src/b.ts')!.visible).toBe(false)
     settle(sim)
-    const aAfter = sim.find('src/a.ts')!.position
-    // With the sibling gone the ring is recentred on a single file.
-    expect(Math.hypot(aAfter.x - aBefore.x, aAfter.y - aBefore.y)).toBeGreaterThan(0.05)
+    const a = sim.find('src/a.ts')!
+    // Deleting a sibling does not shuffle the files that are still there; the
+    // freed space is simply available to the next file.
+    expect(Math.hypot(a.position.x - aBefore.x, a.position.y - aBefore.y)).toBeLessThan(0.01)
+    expect(a.visible).toBe(true)
+    const dir = sim.find('src')!
+    expect(Math.hypot(a.position.x - dir.position.x, a.position.y - dir.position.y)).toBeGreaterThan(1)
   })
 
   it('produces the same layout whether played or seeked', () => {

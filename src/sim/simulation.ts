@@ -7,7 +7,10 @@ import {
   hashUnit,
   LAYOUT,
   ORIGIN,
+  findOverlaps,
+  placeInDisc,
   placeOnRings,
+  type DiscPlacement,
   splitPath,
   type Vec3,
 } from './layout'
@@ -177,10 +180,17 @@ export class Simulation {
   private maxActivity = 0
   /** Host-reported sizes for the whole snapshot (path → bytes). */
   private fileSizes = new Map<string, number>()
+  /**
+   * Placement cache per directory: existing files keep their spot so an
+   * incremental reflow is cheap (only new or resized circles are placed).
+   */
+  private discCache = new Map<number, Map<string, { x: number; y: number; radius: number }>>()
   /** Nodes currently easing towards a new layout position. */
   private movingNodes = new Set<number>()
   /** Nodes that moved since the last drain, for the renderer. */
   private movedNodes: number[] = []
+  /** Directories whose layout must be refreshed after the current commit. */
+  private pendingReflow = new Set<number>()
   /** Reflow file rings when files appear, disappear or change size. */
   dynamicLayout = true
   /** Reference size for the circle scale (95th percentile of the snapshot). */
@@ -257,6 +267,7 @@ export class Simulation {
     this.maxActivity = 0
     this.movingNodes.clear()
     this.movedNodes = []
+    this.discCache.clear()
     this.activitySamples = []
     this.time = 0
     this.maxAppliedIndex = -1
@@ -303,10 +314,10 @@ export class Simulation {
    * that moves takes its own subtree with it, which keeps every cluster rigid
    * while it slides to its new place.
    */
-  reflowDirectory(dirId: number): void {
-    if (!this.dynamicLayout) return
+  reflowDirectory(dirId: number): boolean {
+    if (!this.dynamicLayout) return false
     const dir = this.nodeList[dirId]
-    if (!dir || dir.kind === 'file') return
+    if (!dir || dir.kind === 'file') return false
 
     const files: SimNode[] = []
     const subdirs: SimNode[] = []
@@ -317,26 +328,27 @@ export class Simulation {
       else if (child.kind === 'dir') subdirs.push(child)
     }
 
-    // 1. Files on the inner ring(s).
-    const filePlacements = placeOnRings(
-      files.map((node) => ({ key: node.path, radius: node.radius })),
-      { minRadius: LAYOUT.fileRingRadius, gap: LAYOUT.fileGap },
-    )
+    // 1. Files fill a disc around the directory: dense packing keeps the folder
+    //    compact, which is what keeps subfolders close to their parent.
+    const filePlacements = this.placeFiles(dir, files)
     let fileExtent = 0
-    let widestFile = 0
     for (let index = 0; index < files.length; index += 1) {
       const placement = filePlacements[index]
       if (!placement) continue
+      // `fileExtent` is the outer edge of the file circles, radius included.
       fileExtent = Math.max(fileExtent, Math.hypot(placement.x, placement.y) + files[index].radius)
-      widestFile = Math.max(widestFile, files[index].radius)
     }
 
     // 2. Subdirectories on the outer ring(s), sized by their cluster radius so
-    //    their contents stay clear of everything else.
-    const innerForDirs =
-      files.length > 0 ? fileExtent + widestFile + LAYOUT.fileGap : LAYOUT.dirRingRadius
+    //    their contents stay clear of everything else. They start right outside
+    //    the file circles — no extra padding, or subfolders drift away from
+    //    their parent. The clear radius is quantised so a file disc that grows
+    //    by a fraction of a unit does not shift every subfolder (and with it the
+    //    whole subtree) on every commit.
+    const quantisedExtent = Math.ceil(fileExtent / LAYOUT.layoutQuantum) * LAYOUT.layoutQuantum
+    const innerForDirs = files.length > 0 ? quantisedExtent + LAYOUT.fileGap : LAYOUT.dirRingRadius
     const dirPlacements = placeOnRings(
-      subdirs.map((node) => ({ key: node.path, radius: node.clusterRadius + LAYOUT.clusterGap })),
+      subdirs.map((node) => ({ key: node.path, radius: node.clusterRadius })),
       {
         minRadius: innerForDirs,
         gap: LAYOUT.clusterGap,
@@ -346,33 +358,147 @@ export class Simulation {
     )
 
     // 3. Apply the placements.
+    let changed = false
     let extent = dir.radius
     const base = dir.targetPosition
     for (let index = 0; index < files.length; index += 1) {
       const placement = filePlacements[index]
       const node = files[index]
       if (!placement) continue
-      this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })
+      if (this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })) changed = true
       extent = Math.max(extent, Math.hypot(placement.x, placement.y) + node.radius)
     }
     for (let index = 0; index < subdirs.length; index += 1) {
       const placement = dirPlacements[index]
       const node = subdirs[index]
       if (!placement) continue
-      this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })
+      if (this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })) changed = true
       extent = Math.max(extent, Math.hypot(placement.x, placement.y) + node.clusterRadius)
     }
-    dir.clusterRadius = extent
+
+    // Only publish a meaningfully different cluster radius: parents pack their
+    // children by it, so a tiny change would ripple through the whole tree.
+    const threshold = Math.max(LAYOUT.layoutQuantum * 0.5, dir.clusterRadius * 0.04)
+    if (Math.abs(extent - dir.clusterRadius) > threshold || dir.clusterRadius <= LAYOUT.dirRadius) {
+      dir.clusterRadius = Math.ceil(extent / LAYOUT.layoutQuantum) * LAYOUT.layoutQuantum
+      changed = true
+    }
+    return changed
   }
 
-  /** Move a node (and, for a directory, its whole subtree) to a new position. */
-  private setNodeTarget(node: SimNode, target: Vec3): void {
+  /**
+   * Place a directory's files in a disc, incrementally.
+   *
+   * Files that are already laid out and have not changed size keep their spot,
+   * so adding one file costs one placement instead of re-packing the folder; a
+   * file whose circle grew is re-placed (and pushes its neighbours out of the
+   * way) only when it would otherwise overlap one of them.
+   */
+  private placeFiles(dir: SimNode, files: SimNode[]): DiscPlacement[] {
+    const phase = hashUnit(dir.path, 17) * Math.PI * 2
+    const cache = this.discCache.get(dir.id) ?? new Map<string, { x: number; y: number; radius: number }>()
+    this.discCache.set(dir.id, cache)
+
+    const visible = new Set<string>()
+    const stable: { key: string; radius: number; x: number; y: number }[] = []
+    const pending: SimNode[] = []
+    let grew = false
+
+    for (const node of files) {
+      visible.add(node.path)
+      const entry = cache.get(node.path)
+      if (entry) {
+        // A circle that grew keeps its slot as long as it still fits: only a
+        // real collision (checked below) makes it move, which is what keeps a
+        // busy commit from re-packing the whole folder.
+        if (node.radius > entry.radius + 0.01) grew = true
+        stable.push({ key: node.path, radius: node.radius, x: entry.x, y: entry.y })
+      } else {
+        pending.push(node)
+      }
+    }
+    // Forget files that are gone (their space becomes free for the next one).
+    for (const path of [...cache.keys()]) if (!visible.has(path)) cache.delete(path)
+
+    // A grown circle may now overlap a neighbour. Only the circles that actually
+    // collide are re-placed (around the rest, which stay put); a small overlap is
+    // tolerated so a circle can grow into its own gap without any movement.
+    if (grew) {
+      // Allow a circle to grow into the free gap around it, but never into a
+      // neighbour: the tolerance is the gap minus a small margin.
+      const offenders = findOverlaps(stable, LAYOUT.fileGap - LAYOUT.growthSlack)
+      if (offenders.length > 0) {
+        const byPath = new Map(files.map((node) => [node.path, node]))
+        const offending = new Set<string>()
+        for (const index of offenders) offending.add(stable[index].key)
+        const keep: { key: string; radius: number; x: number; y: number }[] = []
+        for (const entry of stable) {
+          if (!offending.has(entry.key)) {
+            keep.push(entry)
+            continue
+          }
+          const node = byPath.get(entry.key)
+          if (node) pending.push(node)
+          cache.delete(entry.key)
+        }
+        stable.length = 0
+        stable.push(...keep)
+      }
+    }
+
+    let placements: DiscPlacement[]
+    if (pending.length === 0) {
+      placements = stable.map((entry) => ({ x: entry.x, y: entry.y, radius: Math.hypot(entry.x, entry.y) }))
+      // Keep the returned order aligned with `files`.
+      const byPath = new Map(stable.map((entry) => [entry.key, entry]))
+      return files.map((node) => {
+        const entry = byPath.get(node.path)
+        return entry
+          ? { x: entry.x, y: entry.y, radius: Math.hypot(entry.x, entry.y) }
+          : { x: 0, y: 0, radius: 0 }
+      })
+    }
+
+    placements = placeInDisc(
+      pending.map((node) => ({ key: node.path, radius: node.radius })),
+      {
+        minRadius: LAYOUT.fileRingRadius,
+        gap: LAYOUT.fileGap,
+        phase,
+        maxRadius: LAYOUT.maxDiscRadius,
+        obstacles: stable.map((entry) => ({ x: entry.x, y: entry.y, radius: entry.radius })),
+      },
+    )
+
+    const result = new Map<string, DiscPlacement>()
+    for (const entry of stable) result.set(entry.key, { x: entry.x, y: entry.y, radius: Math.hypot(entry.x, entry.y) })
+    for (let index = 0; index < pending.length; index += 1) {
+      const placement = placements[index]
+      const node = pending[index]
+      if (!placement) continue
+      result.set(node.path, placement)
+      cache.set(node.path, { x: placement.x, y: placement.y, radius: node.radius })
+    }
+    // Refresh the cached radii of the stable entries so later frames see them.
+    for (const entry of stable) {
+      const cached = cache.get(entry.key)
+      if (cached) cached.radius = entry.radius
+    }
+    return files.map((node) => result.get(node.path) ?? { x: 0, y: 0, radius: 0 })
+  }
+
+  /**
+   * Move a node (and, for a directory, its whole subtree) to a new position.
+   * Returns true when the target actually changed.
+   */
+  private setNodeTarget(node: SimNode, target: Vec3): boolean {
     const dx = target.x - node.targetPosition.x
     const dy = target.y - node.targetPosition.y
-    if (dx * dx + dy * dy < 0.0004) return
+    if (dx * dx + dy * dy < 0.0004) return false
     node.targetPosition = target
     this.movingNodes.add(node.id)
     if (node.kind === 'dir') this.offsetSubtree(node, dx, dy)
+    return true
   }
 
   /** Keep a subtree rigid while its root slides to a new place. */
@@ -397,8 +523,12 @@ export class Simulation {
   reflowChain(dirId: number): void {
     let current = dirId
     let guard = 0
+    let first = true
     while (current >= 0 && guard < 64) {
-      this.reflowDirectory(current)
+      const changed = this.reflowDirectory(current)
+      // Nothing rippled upwards: the ancestors keep their layout.
+      if (!changed && !first) break
+      first = false
       const node = this.nodeList[current]
       current = node ? node.parent : -1
       guard += 1
@@ -693,10 +823,13 @@ export class Simulation {
     }
 
     const touched: SimNode[] = []
+    this.pendingReflow.clear()
     for (const change of commit.changes) {
       const node = this.applyChange(change, index, author, fresh)
       if (node) touched.push(node)
     }
+    for (const dirId of this.pendingReflow) this.reflowChain(dirId)
+    this.pendingReflow.clear()
 
     if (author) {
       const focus = touched.length > 0 ? touched[touched.length - 1] : this.root
@@ -756,7 +889,7 @@ export class Simulation {
         node.visible = false
         if (fresh) this.recordToggle(node.id, index)
         this.visibleFiles = Math.max(0, this.visibleFiles - 1)
-        this.reflowChain(node.parent)
+        this.pendingReflow.add(node.parent)
       }
       if (fresh) {
         node.lastKind = 'delete'
@@ -787,8 +920,9 @@ export class Simulation {
       const previousRadius = node.radius
       node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
       node.clusterRadius = node.radius
-      // A growing circle needs more room: let the ring adapt.
-      if (Math.abs(node.radius - previousRadius) > 0.01) this.reflowChain(node.parent)
+      // A growing circle needs more room: let the layout adapt (once per
+      // directory per commit, not once per changed file).
+      if (Math.abs(node.radius - previousRadius) > 0.01) this.pendingReflow.add(node.parent)
     }
     this.pushEvent({ type: 'node-changed', node, kind })
     this.pushEvent({ type: 'activity', node, kind, strength: change.additions + change.deletions + 1 })
@@ -842,8 +976,8 @@ export class Simulation {
     this.pushEvent({ type: 'activity', node, kind: 'rename', strength: change.additions + change.deletions + 1 })
     if (author) author.lastKind = 'rename'
     // Reflow both the old and the new directory (and their ancestors).
-    if (previousParent !== node.parent) this.reflowChain(previousParent)
-    this.reflowChain(node.parent)
+    if (previousParent !== node.parent) this.pendingReflow.add(previousParent)
+    this.pendingReflow.add(node.parent)
     return node
   }
 
@@ -855,7 +989,7 @@ export class Simulation {
         existing.visible = true
         if (fresh) this.recordToggle(existing.id, index)
         this.visibleFiles += 1
-        this.reflowChain(existing.parent)
+        this.pendingReflow.add(existing.parent)
         this.movingNodes.add(existing.id)
       }
       return existing
@@ -898,8 +1032,9 @@ export class Simulation {
     if (fresh) this.recordToggle(node.id, index)
     this.visibleFiles += 1
     this.pushEvent({ type: 'node-added', node })
-    // The new file takes its slot and pushes its siblings outwards.
-    this.reflowChain(parent.id)
+    // The new file takes its slot (applied once per commit with the other
+    // reflows) and does not slide in from elsewhere.
+    this.pendingReflow.add(parent.id)
     this.snapToTarget(node)
     return node
   }
