@@ -63,6 +63,17 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Glow</h3>
+        <p class="muted small">
+          Files are drawn from Gource's own ball sprite — a highlight above and to the left, darkening towards the
+          rim — so each circle reads as a small sphere. Behind every folder sits Gource's bloom: an additive halo
+          sized twice the folder's cluster radius and tinted with the folder colour, which is what makes a cluster of
+          files look luminous. It is drawn after the circles, so the halos wash over their own files the way they do
+          in Gource. Settings → Scene switches the glow off or drives its intensity (Gource's default is 0.75).
+        </p>
+      </section>
+
+      <section>
         <h3>Dynamic layout</h3>
         <p class="muted small">
           Folder and file placement follows Gource's own algorithm. A folder's radius is the square root of the area

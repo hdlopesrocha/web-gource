@@ -113,6 +113,7 @@ src/
   render/                   WebGL layers (Three.js)
     renderer.ts             scene composition, event consumption, settings, sizing
     nodes.ts                instanced file/directory nodes with capacity growth
+    glow.ts                 Gource's directory bloom (additive halos)
     edges.ts                branch edges as a single growable line buffer
     particles.ts            additive particle pool for activity effects and author trails
     authors.ts              pooled avatar sprites with a texture cache
@@ -120,7 +121,7 @@ src/
     camera.ts               orbit camera with Gource-style automatic framing
     minimap.ts              2D overview of the tree, authors and camera position
     palette.ts              extension/author/change colours
-    textures.ts             canvas texture caches (labels, avatars, glows)
+    textures.ts             canvas texture caches (labels, avatars, glows, ball + bloom sprites)
   engine/
     engine.ts               playback clock, simulation driving, camera, HUD, recording hooks
     controller.ts           app orchestration: load, filters, seek, settings, recording
@@ -184,11 +185,14 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Rendering
 
-* Files and directories are two `InstancedMesh` objects — flat discs for files, rings for
-  directories — viewed through an orthographic camera, with per-instance colour and matrix updates
-  only for changed nodes. Layer order: branches (behind), circles, activity particles, rays,
-  authors, labels (front). Both grow by reallocating and copying instance buffers when a repository
-  turns out to be larger than expected.
+* Files and directories are two `InstancedMesh` objects — Gource's lit ball sprite for files, rings
+  for directories — viewed through an orthographic camera, with per-instance colour and matrix
+  updates only for changed nodes. Layer order: branches (behind), circles, folder glow, activity
+  particles, rays, authors, labels (front). Both grow by reallocating and copying instance buffers
+  when a repository turns out to be larger than expected.
+* File sprites use the ball from Gource's own `data/file.png` (a highlight above and to the left,
+  darkening towards the rim), tinted by the instance colour, so a file still carries its own colour
+  but reads as a sphere rather than a flat disc.
 * Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
   depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
   behind a file circle or a directory ring instead of being painted across it — and every segment is
@@ -206,6 +210,12 @@ Given the same history and settings, the same sequence of events is produced:
   circles write depth first and the grid is rejected wherever they cover it. The depth stack is
   explicit — background −6, grid −5, branches 0, circles +0.25, effects +0.5. The minimap shows the
   whole tree with the current view position.
+* The glow is Gource's bloom layer (`GlowField`): one additive halo per directory, sized
+  `clusterRadius * 2` and tinted `directoryColour * bloomIntensity`, using a reproduction of
+  Gource's `bloom.tga` falloff (`1 - smoothstep(0, 0.72, r)`, peaking at half white). It is drawn
+  after the circles (additively, so the dots stay crisp) and before the beams and avatars, so a
+  folder's halo washes over its own file cluster the way Gource's does. Settings → Scene switches it
+  off or drives the intensity from 0 to 1.5 (Gource's default is 0.75).
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
 
@@ -345,7 +355,9 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   clusters (including nested ones) never overlap and stay inside their parent's cluster, growing a
   folder pushes its siblings outwards, seek and playback produce identical layouts, and the static
   mode pins nodes to their path-derived positions;
-* rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
+* rendering bookkeeping: instance allocation, capacity growth, hidden nodes, folder glow (one halo
+  per directory sized from the cluster radius, intensity baked into the instance colours), edge
+  buffers, particle
   pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
   WebGL-unavailable degradation;
