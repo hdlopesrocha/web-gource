@@ -63,6 +63,16 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Beams</h3>
+        <p class="muted small">
+          A commit sends a beam from the author to every file it changed. By default that beam is directional: a bright
+          head leaves the avatar, travels to the element and lights the rest of the line as it arrives, with a comet
+          tail behind it. Settings → Visual switches between <em>Travelling head</em> and the classic
+          <em>Solid ray</em> (a full-length line drawn immediately) and sets the travel time.
+        </p>
+      </section>
+
+      <section>
         <h3>Activity</h3>
         <p class="muted small">
           The Activity panel (<kbd>H</kbd>) shows when the work happened. The first chart is a density heatmap of
@@ -173,6 +183,16 @@ const shortcuts: { keys: string; action: string }[] = [
           visibility are derived purely from commit data (idle gaps are compressed with a fixed, documented curve).
           Seeking re-evaluates the scene from the timeline rather than replaying it, so scrubbing is instant and still
           exact.
+        </p>
+      </section>
+
+      <section>
+        <h3>Beams</h3>
+        <p class="muted small">
+          A commit sends a beam from the author to every file it changed. By default that beam is directional: a bright
+          head leaves the avatar, travels to the element and lights the rest of the line as it arrives, with a comet
+          tail behind it. Settings → Visual switches between <em>Travelling head</em> and the classic
+          <em>Solid ray</em> (a full-length line drawn immediately) and sets the travel time.
         </p>
       </section>
 

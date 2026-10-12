@@ -494,6 +494,8 @@ export class VisualizerController {
       showBloom: settings.showBloom,
       bloomIntensity: settings.bloomIntensity,
       showBeams: settings.showBeams,
+      beamStyle: settings.beamStyle,
+      beamTravelSeconds: settings.beamTravelSeconds,
       beamIntensity: settings.beamIntensity,
       beamWidth: settings.beamWidth,
     }

@@ -294,6 +294,33 @@ onMounted(() => {
           <label class="switch"><input type="checkbox" :checked="settings.showAuthorGlow" @change="update({ showAuthorGlow: ($event.target as HTMLInputElement).checked })" /> Author halo</label>
           <label class="switch"><input type="checkbox" :checked="settings.showBeams" @change="update({ showBeams: ($event.target as HTMLInputElement).checked })" /> Beams to changed files</label>
           <div class="field">
+            <label for="beam-style">Beam motion</label>
+            <select
+              id="beam-style"
+              :value="settings.beamStyle"
+              @change="update({ beamStyle: ($event.target as HTMLSelectElement).value as 'travelling' | 'solid' })"
+            >
+              <option value="travelling">Travelling head (directional)</option>
+              <option value="solid">Solid ray (classic)</option>
+            </select>
+            <span class="faint hint">
+              The travelling beam sends a bright head from the avatar towards the file or folder it changed, with the
+              tail following it; the solid ray is the original full-length line.
+            </span>
+          </div>
+          <div v-if="settings.beamStyle === 'travelling'" class="field">
+            <label>Travel time · {{ settings.beamTravelSeconds.toFixed(2) }} s</label>
+            <input
+              type="range"
+              min="0.15"
+              max="2"
+              step="0.05"
+              :value="settings.beamTravelSeconds"
+              @input="update({ beamTravelSeconds: Number(($event.target as HTMLInputElement).value) })"
+            />
+            <span class="faint hint">How long the head takes to reach the element.</span>
+          </div>
+          <div class="field">
             <label>Beam brightness · {{ settings.beamIntensity.toFixed(2) }}×</label>
             <input type="range" min="0.2" max="2" step="0.05" :value="settings.beamIntensity" @input="update({ beamIntensity: Number(($event.target as HTMLInputElement).value) })" />
           </div>

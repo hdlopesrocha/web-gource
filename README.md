@@ -314,7 +314,11 @@ Given the same history and settings, the same sequence of events is produced:
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
   at any zoom level.
 * Author→file beams are one dynamic mesh rebuilt per frame (two quads per beam: glow + core), so a
-  commit touching twenty files still costs a single draw call.
+  commit touching twenty files still costs a single draw call. By default the beam is **directional**:
+  a bright head leaves the avatar and travels to the file or folder it changed, with a comet tail
+  following it and the far end of the soft glow brightening as it arrives — so a change reads as a
+  signal being sent. Settings → Visual offers `Travelling head` (default) or `Solid ray` (the original
+  full-length line, unchanged) plus the travel time (0.15–2 s).
 * Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
   dense repositories stay readable. File labels can include the host-reported size.
 * A camera-following background gradient and grid keep panning and zooming readable. The grid is a

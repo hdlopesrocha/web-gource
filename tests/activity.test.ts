@@ -221,6 +221,98 @@ describe('activity tethers', () => {
   })
 })
 
+describe('BeamField styles', () => {
+  function beamNode(id: number, x: number, y: number) {
+    return {
+      id,
+      path: `src/f${id}.ts`,
+      name: `f${id}.ts`,
+      kind: 'file' as const,
+      parent: 0,
+      children: [],
+      position: { x, y, z: 0 },
+      targetPosition: { x, y, z: 0 },
+      radius: 0.4,
+      clusterRadius: 0.4,
+      ownDiscRadius: 0.4,
+      contentRadius: 0.4,
+      subtreeArea: 0,
+      positionInitialized: true,
+      sizeBytes: 0,
+      sizeKnown: false,
+      activity: 1,
+      bornIndex: 0,
+      lastChangeIndex: 0,
+      lastKind: 'modify' as const,
+      changes: 1,
+      additions: 1,
+      deletions: 0,
+      visible: true,
+    }
+  }
+
+  function authorAt(x: number, y: number, start: number, until: number) {
+    return {
+      author: { id: 'a', name: 'Ada', commits: 1, first: 0, last: 0, additions: 0, deletions: 0, colorIndex: 0, unattributed: false },
+      position: { x, y, z: 0 },
+      velocity: { x: 0, y: 0, z: 0 },
+      target: { x, y, z: 0 },
+      targetNodeId: 1,
+      lastActiveAt: start,
+      appearedAt: start,
+      appliedCommits: 1,
+      lastKind: 'modify' as const,
+      visible: true,
+      tethers: [{ nodeId: 1, kind: 'modify' as const, start, until, strength: 5, reference: 5 }],
+    }
+  }
+
+  const nodes = [beamNode(0, 0, 0), beamNode(1, 40, 0)]
+
+  it('sends the bright head from the author to the element over time', () => {
+    const field = new BeamField(8)
+    field.setStyle('travelling')
+    field.setTravelSeconds(0.5)
+    const ada = authorAt(0, 0, 0, 4)
+
+    // The author end is lifted by 2.5, so the beam starts at y = 2.5.
+    field.update(0.05, [ada] as never, nodes as never, 0.05)
+    const early = field.sample()!
+    // A tenth of the way along a beam from (0, 2.5) to (40, 0).
+    expect(early.headX).toBeCloseTo(4, 1)
+    expect(early.headY).toBeLessThan(2.5) // moving towards the element
+    expect(early.coreX).toBeLessThan(0.5) // the tail is still at the avatar
+    expect(early.coreX).toBeLessThan(early.headX) // the head leads the tail
+
+    field.update(0.25, [ada] as never, nodes as never, 0.05)
+    const middle = field.sample()!
+    expect(middle.headX).toBeGreaterThan(10)
+    expect(middle.headX).toBeLessThan(32)
+
+    field.update(0.6, [ada] as never, nodes as never, 0.05)
+    const arrived = field.sample()!
+    // Reached the element at (40, 0): the head sits on it (the corner of the
+    // core quad is a hair off the axis).
+    expect(arrived.headX).toBeCloseTo(40, 1)
+    expect(arrived.headY).toBeLessThan(0.5)
+    field.dispose()
+  })
+
+  it('keeps the classic solid ray when selected', () => {
+    const field = new BeamField(8)
+    field.setStyle('solid')
+    expect(field.currentStyle).toBe('solid')
+    field.update(0.01, [authorAt(0, 0, 0, 4)] as never, nodes as never, 0.05)
+    const sample = field.sample()!
+    // The core spans the whole beam from the first frame.
+    expect(sample.headX).toBeCloseTo(40, 1)
+    expect(sample.style).toBe(0)
+    field.setStyle('travelling')
+    expect(field.currentStyle).toBe('travelling')
+    field.dispose()
+  })
+})
+
 describe('BeamField', () => {
   function node(id: number, x: number, y: number) {
     return {
@@ -342,17 +434,21 @@ describe('BeamField', () => {
 
   it('draws stronger beams for bigger changes', () => {
     const field = new BeamField(4)
-    const nodes = [node(0, 0, 0), node(1, 0, 0)]
+    // A real beam: the target must be away from the author, or nothing is drawn.
+    const nodes = [node(0, 0, 0), node(1, 10, 2.5)]
     const small = author([{ nodeId: 0, kind: 'modify', start: 0, until: 5, strength: 2, reference: 400 }])
     const big = author([{ nodeId: 0, kind: 'modify', start: 0, until: 5, strength: 400, reference: 400 }])
     const read = (target: ReturnType<typeof author>) => {
       field.update(0.5, [target], nodes, 0.2)
       const colors = field.mesh.geometry.getAttribute('color') as import('three').BufferAttribute
       const positions = field.mesh.geometry.getAttribute('position') as import('three').BufferAttribute
-      // Brightness of the beam core.
-      const brightness = colors.getX(6) + colors.getY(6) + colors.getZ(6)
-      // Width: distance from the beam axis to the first vertex.
-      const width = Math.hypot(positions.getX(6) - 10, positions.getY(6) - 12.5)
+      // Brightness of the beam core (either end of it: the head in travelling
+      // mode, the start in solid mode).
+      const core = (index: number) => colors.getX(index) + colors.getY(index) + colors.getZ(index)
+      const brightness = Math.max(core(6), core(8))
+      // Width: half the distance between the two sides of the glow quad, which
+      // is the beam's half-width in either style.
+      const width = Math.hypot(positions.getX(0) - positions.getX(1), positions.getY(0) - positions.getY(1)) / 2
       return { brightness, width }
     }
     const weak = read(small)

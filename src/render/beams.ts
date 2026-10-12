@@ -14,7 +14,14 @@ import { colorForChange } from './palette'
  *
  * The geometry is rebuilt each frame — a few hundred vertices — so the
  * endpoints can follow both the moving avatar and its target node.
+ *
+ * Two styles are available: `travelling` (the default) sends a bright head from
+ * the avatar towards the element, with a comet-like tail following it and the
+ * far end of the soft glow brightening as it arrives; `solid` is the original
+ * full-length ray, kept so the older look is one setting away.
  */
+export type BeamStyle = 'travelling' | 'solid'
+
 export class BeamField {
   readonly mesh: THREE.Mesh
   private capacity: number
@@ -25,6 +32,10 @@ export class BeamField {
   private enabled = true
   private intensity = 1
   private widthPixels = 3.2
+  private style: BeamStyle = 'travelling'
+  private travelSeconds = 0.55
+  /** Fraction of the beam the bright head covers while it travels. */
+  private readonly cometLength = 0.45
   private lastSegments = 0
   /** Vertical offset applied to the author end so beams start at the avatar. */
   private readonly authorLift = 2.5
@@ -67,6 +78,20 @@ export class BeamField {
     this.widthPixels = Math.max(0.5, pixels)
   }
 
+  /** How the beam is drawn: a travelling head, or the original solid ray. */
+  setStyle(style: BeamStyle): void {
+    this.style = style
+  }
+
+  /** Seconds the bright head takes to travel from the avatar to the element. */
+  setTravelSeconds(seconds: number): void {
+    this.travelSeconds = Math.min(3, Math.max(0.1, seconds))
+  }
+
+  get currentStyle(): BeamStyle {
+    return this.style
+  }
+
   /**
    * Strength multiplier for a tether: a commit that changed a file a lot gets a
    * wider, brighter beam than a one-line tweak. Normalised against the largest
@@ -100,6 +125,13 @@ export class BeamField {
       drawCount: this.geometry.drawRange.count,
       visible: this.mesh.visible ? 1 : 0,
       widthPixels: this.widthPixels,
+      style: this.style === 'travelling' ? 1 : 0,
+      /** Leading edge of the bright core (where the head is). */
+      headX: round(this.positions[24]),
+      headY: round(this.positions[25]),
+      /** Trailing edge of the bright core. */
+      coreX: round(this.positions[18]),
+      coreY: round(this.positions[19]),
     }
   }
 
@@ -174,24 +206,44 @@ export class BeamField {
 
         this.scratch.copy(colorForChange(tether.kind))
 
+        // Directional travel: the bright head starts at the avatar and reaches
+        // the element after `travelSeconds`; the tail follows it, so once it
+        // arrives the whole beam is lit. The solid style is a full-length ray
+        // from the first frame, exactly as before.
+        const travelling = this.style === 'travelling'
+        const head = travelling ? Math.min(1, age / this.travelSeconds) : 1
+        const coreStart = travelling ? (head >= 1 ? 0 : Math.max(0, head - this.cometLength)) : 0
+        const startBrightness = travelling ? 0.7 : 2.1
+        const headBrightness = travelling ? 2.4 : 0.95
+        // The far end of the glow brightens as the head approaches it.
+        const farGlow = travelling ? 0.22 * (0.35 + 0.65 * head) : 0.22
+
+        const pointX = (t: number): number => ax + dx * t
+        const pointY = (t: number): number => ay + dy * t
+        const sx = pointX(coreStart)
+        const sy = pointY(coreStart)
+        const hx = pointX(head)
+        const hy = pointY(head)
+
         // 1. Soft glow: a wider, dimmer quad that makes the beam read even on a
         //    busy background.
         const glowX = nx * 2.6
         const glowY = ny * 2.6
         put(0, ax + glowX, ay + glowY, 0.5 * scale)
         put(1, ax - glowX, ay - glowY, 0.5 * scale)
-        put(2, bx + glowX * taper, by + glowY * taper, 0.22 * scale)
+        put(2, bx + glowX * taper, by + glowY * taper, farGlow * scale)
         put(3, ax - glowX, ay - glowY, 0.5 * scale)
-        put(4, bx + glowX * taper, by + glowY * taper, 0.22 * scale)
-        put(5, bx - glowX * taper, by - glowY * taper, 0.22 * scale)
+        put(4, bx + glowX * taper, by + glowY * taper, farGlow * scale)
+        put(5, bx - glowX * taper, by - glowY * taper, farGlow * scale)
 
-        // 2. Core: the bright line from the avatar to the file.
-        put(6, ax + nx, ay + ny, 2.1 * scale)
-        put(7, ax - nx, ay - ny, 2.1 * scale)
-        put(8, bx + nx * taper, by + ny * taper, 0.95 * scale)
-        put(9, ax - nx, ay - ny, 2.1 * scale)
-        put(10, bx + nx * taper, by + ny * taper, 0.95 * scale)
-        put(11, bx - nx * taper, by - ny * taper, 0.95 * scale)
+        // 2. Core: the bright head travelling towards the element, with the tail
+        //    trailing it (a full-length line once it has arrived).
+        put(6, sx + nx, sy + ny, startBrightness * scale)
+        put(7, sx - nx, sy - ny, startBrightness * scale)
+        put(8, hx + nx * taper, hy + ny * taper, headBrightness * scale)
+        put(9, sx - nx, sy - ny, startBrightness * scale)
+        put(10, hx + nx * taper, hy + ny * taper, headBrightness * scale)
+        put(11, hx - nx * taper, hy - ny * taper, headBrightness * scale)
         segment += 1
       }
     }

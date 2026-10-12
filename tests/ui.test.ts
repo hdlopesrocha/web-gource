@@ -479,6 +479,18 @@ describe('panels', () => {
     vi.restoreAllMocks()
   })
 
+  it('settings panel offers the beam styles', async () => {
+    const wrapper = mount(SettingsPanel)
+    // Travelling is the default; the classic solid ray stays selectable.
+    expect(store.settings.beamStyle).toBe('travelling')
+    const select = wrapper.find('#beam-style').element as HTMLSelectElement
+    expect(select.value).toBe('travelling')
+    const options = [...select.options].map((option) => option.value)
+    expect(options).toEqual(['travelling', 'solid'])
+    expect(wrapper.text()).toContain('Travel time')
+    expect(wrapper.text()).toContain('solid ray is the original full-length line')
+  })
+
   it('settings panel exposes visualization, camera, filter and data tabs', async () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')

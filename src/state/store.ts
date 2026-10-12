@@ -278,6 +278,8 @@ const defaultSettings: AppState['settings'] = {
   showBloom: true,
   bloomIntensity: 0.75,
   showBeams: true,
+  beamStyle: 'travelling',
+  beamTravelSeconds: 0.55,
   beamIntensity: 1.15,
   beamWidth: 3.2,
   followActivity: true,

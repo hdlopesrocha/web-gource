@@ -5,7 +5,7 @@ import { EFFECT_Z, NodeField, type FileColorMode } from './nodes'
 import { EdgeField } from './edges'
 import { ParticleField } from './particles'
 import { AuthorField } from './authors'
-import { BeamField } from './beams'
+import { BeamField, type BeamStyle } from './beams'
 import { GlowField } from './glow'
 import { LabelField } from './labels'
 import { Camera2D } from './camera'
@@ -37,6 +37,10 @@ export interface RendererSettings {
   bloomIntensity: number
   /** Beams from an author to the files it just changed (Gource tethers). */
   showBeams: boolean
+  /** How a beam is drawn: a head travelling to the element, or a solid ray. */
+  beamStyle: BeamStyle
+  /** Seconds the travelling head takes to cross a beam. */
+  beamTravelSeconds: number
   beamIntensity: number
   /** Beam width in CSS pixels. */
   beamWidth: number
@@ -61,6 +65,8 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   showBloom: true,
   bloomIntensity: 0.75,
   showBeams: true,
+  beamStyle: 'travelling',
+  beamTravelSeconds: 0.55,
   beamIntensity: 1.15,
   beamWidth: 3.2,
 }
@@ -289,6 +295,8 @@ export class SceneRenderer {
     this.glow.setIntensity(this.settings.bloomIntensity, this.pendingNodes ?? [])
     this.glow.setEnabled(this.settings.showBloom)
     this.beams.setEnabled(this.settings.showBeams)
+    this.beams.setStyle(this.settings.beamStyle)
+    this.beams.setTravelSeconds(this.settings.beamTravelSeconds)
     this.beams.setIntensity(this.settings.beamIntensity)
     this.beams.setWidthPixels(this.settings.beamWidth)
     const gridMaterial = this.grid.material as THREE.ShaderMaterial
