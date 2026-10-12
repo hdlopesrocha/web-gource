@@ -347,6 +347,13 @@ describe('StageView', () => {
 })
 
 describe('panels', () => {
+  /** Click a settings tab by its label (tab order is a UI detail). */
+  async function openTab(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
+    const button = wrapper.findAll('.tabs button').find((entry) => entry.text().trim() === label)
+    if (!button) throw new Error(`settings tab "${label}" not found`)
+    await button.trigger('click')
+  }
+
   it('authors panel lists authors from the timeline', () => {
     const timeline = buildTimeline(repo, [rawCommit(0), rawCommit(1)])
     // Point the controller at a timeline without creating an engine.
@@ -359,9 +366,10 @@ describe('panels', () => {
     expect(wrapper.findAll('.author-row').length).toBe(1)
   })
 
-  it('authors panel adds and removes ignored folders', async () => {
+  it('settings panel adds and removes ignored folders', async () => {
     store.ignoredFolders = []
-    const wrapper = mount(AuthorsPanel)
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Filters')
     const input = wrapper.find('input[list="ignored-folder-suggestions"]')
     expect(input.exists()).toBe(true)
 
@@ -378,9 +386,10 @@ describe('panels', () => {
     expect(wrapper.find('.chips').exists()).toBe(false)
   })
 
-  it('authors panel toggles hidden folders', async () => {
+  it('settings panel toggles hidden folders', async () => {
     store.hideHiddenFolders = true
-    const wrapper = mount(AuthorsPanel)
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Filters')
     const box = wrapper.find('input[type="checkbox"]')
     expect(box.exists()).toBe(true)
     expect(wrapper.text()).toContain('Hide hidden folders')
@@ -392,15 +401,24 @@ describe('panels', () => {
     expect(store.hideHiddenFolders).toBe(true)
   })
 
-  it('settings panel exposes visualization, camera and recording tabs', async () => {
+  it('settings panel exposes visualization, camera, filter and data tabs', async () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')
-    await wrapper.findAll('.tabs button')[1].trigger('click')
+    await openTab(wrapper, 'Camera')
     expect(wrapper.text()).toContain('Automatic view')
-    await wrapper.findAll('.tabs button')[2].trigger('click')
+    await openTab(wrapper, 'Filters')
+    expect(wrapper.text()).toContain('Hidden folders')
+    expect(wrapper.text()).toContain('Ignored folders')
+    await openTab(wrapper, 'Recording')
     expect(wrapper.text()).toContain('Video export')
-    await wrapper.findAll('.tabs button')[3].trigger('click')
+    await openTab(wrapper, 'Data')
     expect(wrapper.text()).toContain('Loaded data')
+  })
+
+  it('authors panel points at the folder filters', () => {
+    const wrapper = mount(AuthorsPanel)
+    expect(wrapper.text()).toContain('Settings → Filters')
+    expect(wrapper.find('input[list="ignored-folder-suggestions"]').exists()).toBe(false)
   })
 
   it('settings panel reports when recording is unsupported', async () => {
@@ -410,7 +428,7 @@ describe('panels', () => {
     })
     const exportSupport = vi.spyOn(controller, 'exportSupport').mockReturnValue({ supported: false, codecs: [] })
     const wrapper = mount(SettingsPanel)
-    await wrapper.findAll('.tabs button')[2].trigger('click')
+    await openTab(wrapper, 'Recording')
     // The deterministic render is the default mode and says what is missing.
     expect(wrapper.text()).toContain('cannot encode video frame by frame')
     // Live capture keeps its own message.
@@ -429,7 +447,7 @@ describe('panels', () => {
       ],
     })
     const wrapper = mount(SettingsPanel)
-    await wrapper.findAll('.tabs button')[2].trigger('click')
+    await openTab(wrapper, 'Recording')
     const text = wrapper.text()
     // Frame rate is fixed, the end time is stated, and the format defaults to WebM.
     expect(text).toContain('30 fps (fixed)')

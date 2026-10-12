@@ -78,9 +78,9 @@ const shortcuts: { keys: string; action: string }[] = [
       <section>
         <h3>Filters</h3>
         <p class="muted small">
-          The Authors panel hides authors and commits by date, and the folder ignore list removes whole trees from
-          the visualization — vendored dependencies, generated output, anything you do not want to watch. An entry
-          such as <code>third_party</code> hides any folder with that name at any depth (case-insensitively);
+          Settings → Filters hides folders: the ignore list removes whole trees from the visualization —
+          vendored dependencies, generated output, anything you do not want to watch. An entry such as
+          <code>third_party</code> hides any folder with that name at any depth (case-insensitively);
           <code>third*</code> is a glob and <code>src/vendor</code> matches one path. Hidden folders — any folder
           whose name starts with a dot, such as <code>.github</code> or <code>.vscode</code> — have their own
           toggle, because they are tooling rather than code; hidden <em>files</em> like <code>.gitignore</code> are

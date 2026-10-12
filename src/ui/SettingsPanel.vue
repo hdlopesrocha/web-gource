@@ -7,12 +7,13 @@ import { formatDuration } from '../timeline/schedule'
 import { formatBytes } from '../util/format'
 import { fileRadiusForActivity, fileRadiusForBytes } from '../sim/simulation'
 import { EXPORT_FPS } from '../engine/export/frames'
+import { COMMON_IGNORED_FOLDERS, HIDDEN_FOLDER_EXAMPLES, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
 import { formatBytes as formatExportBytes } from '../engine/recorder'
 import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
-const tab = ref<'visual' | 'camera' | 'recording' | 'data'>('visual')
+const tab = ref<'visual' | 'camera' | 'filters' | 'recording' | 'data'>('visual')
 const tokenSavedMessage = ref<string | null>(null)
 
 function onTokenSaved(providerId: string | null): void {
@@ -21,6 +22,35 @@ function onTokenSaved(providerId: string | null): void {
     : 'Token stored.'
 }
 const support = computed(() => controller.recordingSupport())
+
+/* Folder filters (moved here from the authors panel). */
+const ignoredInput = ref('')
+const ignoredFolders = computed(() => store.ignoredFolders)
+const hiddenExamples = HIDDEN_FOLDER_EXAMPLES.join(', ')
+const suggestedFolders = computed(() => {
+  const active = new Set(ignoredFolders.value.map((entry) => entry.toLowerCase()))
+  return COMMON_IGNORED_FOLDERS.filter((name) => !active.has(name))
+})
+const hiddenSummary = computed(() => {
+  const stats = store.timelineStats
+  if (!stats) return ''
+  const count = stats.ignoredFiles ?? 0
+  if (count === 0) return 'Nothing is hidden right now.'
+  return `${count.toLocaleString()} file${count === 1 ? '' : 's'} hidden in this window.`
+})
+
+function addIgnored(entry: string): void {
+  const value = entry.trim()
+  ignoredInput.value = ''
+  if (!value) return
+  const next = addIgnoredFolder(store.ignoredFolders, value)
+  if (next.length === store.ignoredFolders.length) return
+  controller.applyFilters({ ignoredFolders: next })
+}
+
+function removeIgnored(entry: string): void {
+  controller.applyFilters({ ignoredFolders: removeIgnoredFolder(store.ignoredFolders, entry) })
+}
 const exportSupport = computed(() => controller.exportSupport())
 const exportState = computed(() => store.export)
 const exportProgress = computed(() => store.export.progress)
@@ -156,7 +186,7 @@ onMounted(() => {
     <header class="head">
       <div>
         <h2>Settings</h2>
-        <p class="faint">Visualization, camera, pacing and video export</p>
+        <p class="faint">Visualization, camera, filters, pacing and video export</p>
       </div>
       <button class="btn ghost small" type="button" @click="emit('close')">✕</button>
     </header>
@@ -164,6 +194,7 @@ onMounted(() => {
     <nav class="tabs">
       <button class="btn small" :class="{ active: tab === 'visual' }" type="button" @click="tab = 'visual'">Visual</button>
       <button class="btn small" :class="{ active: tab === 'camera' }" type="button" @click="tab = 'camera'">Camera</button>
+      <button class="btn small" :class="{ active: tab === 'filters' }" type="button" @click="tab = 'filters'">Filters</button>
       <button class="btn small" :class="{ active: tab === 'recording' }" type="button" @click="tab = 'recording'">Recording</button>
       <button class="btn small" :class="{ active: tab === 'data' }" type="button" @click="tab = 'data'">Data</button>
     </nav>
@@ -338,6 +369,64 @@ onMounted(() => {
           <p class="faint note">
             The scene is flat: drag to pan, scroll to zoom (the pointer stays anchored), arrow keys step through
             commits. Manual input pauses the automatic view for a few seconds.
+          </p>
+        </section>
+      </template>
+
+      <template v-else-if="tab === 'filters'">
+        <section class="group">
+          <h3>Hidden folders</h3>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="store.hideHiddenFolders"
+              @change="controller.applyFilters({ hideHiddenFolders: ($event.target as HTMLInputElement).checked })"
+            />
+            Hide hidden folders
+          </label>
+          <p class="faint note">
+            Folders whose name starts with a dot ({{ hiddenExamples }}) are tooling, not code. Hidden
+            <em>files</em> such as <code>.gitignore</code> stay visible, because only folder names are tested.
+          </p>
+        </section>
+
+        <section class="group">
+          <h3>Ignored folders</h3>
+          <div class="row">
+            <input
+              v-model="ignoredInput"
+              type="text"
+              list="ignored-folder-suggestions"
+              placeholder="third_party…"
+              @keydown.enter.prevent="addIgnored(ignoredInput)"
+            />
+            <button class="btn small" type="button" @click="addIgnored(ignoredInput)">Hide</button>
+          </div>
+          <datalist id="ignored-folder-suggestions">
+            <option v-for="name in suggestedFolders" :key="name" :value="name" />
+          </datalist>
+          <ul v-if="ignoredFolders.length > 0" class="chips">
+            <li v-for="entry in ignoredFolders" :key="entry">
+              <span class="mono">{{ entry }}</span>
+              <button class="btn ghost small" type="button" :title="`Stop ignoring ${entry}`" @click="removeIgnored(entry)">✕</button>
+            </li>
+          </ul>
+          <p class="faint note">
+            Hides any folder with that name, at any depth and regardless of case. Use <code>*</code> for a glob
+            (<code>third*</code>) or <code>src/vendor</code> for one path.
+          </p>
+          <p class="faint note">
+            Ignoring filters file changes, not commits: a commit that only touched hidden trees still plays, it just
+            has no files to highlight. {{ hiddenSummary }}
+          </p>
+          <button class="btn small" type="button" @click="controller.clearFilters()">Clear every filter</button>
+        </section>
+
+        <section class="group">
+          <h3>Authors and dates</h3>
+          <p class="faint note">
+            Per-author toggles and the date range live in the Authors panel (<kbd>A</kbd>), together with
+            “Clear every filter”.
           </p>
         </section>
       </template>
@@ -666,6 +755,40 @@ onMounted(() => {
 .mode-row .btn.active {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.chips li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: rgba(94, 200, 255, 0.08);
+  font-size: 11px;
+}
+
+.chips button {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.note code,
+.note kbd {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
 }
 
 .record-row {

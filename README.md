@@ -108,7 +108,7 @@ the result has to be reproducible.
 ### Ignoring folders
 
 Repositories contain trees nobody wants to watch — `node_modules`, `vendor`, `third_party`,
-generated output. The Authors panel has an **Ignore folders** list that removes them:
+generated output. **Settings → Filters** has an **Ignored folders** list that removes them:
 
 | entry | hides |
 | --- | --- |
@@ -120,7 +120,7 @@ Folders only: a *file* named `third_party` is untouched, and the last segment of
 treated as the file. Entries are trimmed and deduplicated, so a pasted list works the same on every
 host.
 
-**Hidden folders** have a toggle of their own (on by default): any folder whose name starts with a dot —
+**Hidden folders** have a toggle of their own in the same tab (on by default): any folder whose name starts with a dot —
 `.github`, `.vscode`, `.husky`, `.cache`, `.idea` — is tooling rather than code, so it stays out of the
 visualization. Hidden *files* are left alone: a root `.gitignore` or a `.eslintrc.json` still appears, because
 the filter only ever looks at directory segments. `.*` is not an ignore-list entry, precisely because it would
@@ -131,7 +131,9 @@ plays (its author and message are history), it simply has no files to highlight,
 additions/deletions are recomputed from the changes that remain — the counters never include hidden
 trees. A rename that moves a file *out* of an ignored folder is kept as an addition, because the old
 path is not part of the visualization. The list is stored locally and survives a reload;
-**Clear every filter** empties it along with the author and date filters.
+**Clear every filter** (in Settings → Filters or the Authors panel) empties it along with the hidden-folder
+toggle, the author and the date filters. Per-author toggles and the date range stay in the Authors panel
+(`A`), which links to the folder filters.
 
 ### Personal access tokens
 

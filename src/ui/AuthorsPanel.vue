@@ -3,7 +3,6 @@ import { computed, ref } from 'vue'
 import { controller } from '../engine/controller'
 import { store } from '../state/store'
 import { formatDate } from '../timeline/schedule'
-import { COMMON_IGNORED_FOLDERS, HIDDEN_FOLDER_EXAMPLES, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
@@ -14,27 +13,6 @@ const authors = computed(() => {
   return controller.timelineAuthors()
 })
 const hidden = computed(() => new Set(store.hiddenAuthors))
-const ignoredInput = ref('')
-const hiddenExamples = HIDDEN_FOLDER_EXAMPLES.join(', ')
-const ignoredFolders = computed(() => store.ignoredFolders)
-/** Suggestions that are not already ignored. */
-const suggestedFolders = computed(() => {
-  const active = new Set(ignoredFolders.value.map((entry) => entry.toLowerCase()))
-  return COMMON_IGNORED_FOLDERS.filter((name) => !active.has(name))
-})
-
-function addIgnored(entry: string): void {
-  const value = entry.trim()
-  ignoredInput.value = ''
-  if (!value) return
-  const next = addIgnoredFolder(store.ignoredFolders, value)
-  if (next.length === store.ignoredFolders.length) return
-  controller.applyFilters({ ignoredFolders: next })
-}
-
-function removeIgnored(entry: string): void {
-  controller.applyFilters({ ignoredFolders: removeIgnoredFolder(store.ignoredFolders, entry) })
-}
 const totalCommits = computed(() => store.timelineStats?.commits ?? 1)
 
 const filtered = computed(() => {
@@ -97,44 +75,10 @@ function showAll(): void {
         <span class="faint hint">Repository history spans {{ rangeLimits.min }} → {{ rangeLimits.max }}</span>
       </div>
       <div class="field">
-        <label class="switch">
-          <input
-            type="checkbox"
-            :checked="store.hideHiddenFolders"
-            @change="controller.applyFilters({ hideHiddenFolders: ($event.target as HTMLInputElement).checked })"
-          />
-          Hide hidden folders
-        </label>
         <span class="faint hint">
-          Folders whose name starts with a dot ({{ hiddenExamples }}) are tooling, not code. Hidden
-          <em>files</em> such as <code>.gitignore</code> stay visible.
+          Folder filters — hidden folders and ignored folders — moved to Settings → Filters.
         </span>
-      </div>
-      <div class="field">
-        <label>Ignore folders</label>
-        <div class="row">
-          <input
-            v-model="ignoredInput"
-            type="text"
-            list="ignored-folder-suggestions"
-            placeholder="third_party…"
-            @keydown.enter.prevent="addIgnored(ignoredInput)"
-          />
-          <button class="btn small" type="button" @click="addIgnored(ignoredInput)">Hide</button>
-        </div>
-        <datalist id="ignored-folder-suggestions">
-          <option v-for="name in suggestedFolders" :key="name" :value="name" />
-        </datalist>
-        <ul v-if="ignoredFolders.length > 0" class="chips">
-          <li v-for="entry in ignoredFolders" :key="entry">
-            <span class="mono">{{ entry }}</span>
-            <button class="btn ghost small" type="button" :title="`Stop ignoring ${entry}`" @click="removeIgnored(entry)">✕</button>
-          </li>
-        </ul>
-        <span class="faint hint">
-          Hides any folder with that name, at any depth and regardless of case. Use <code>*</code> for a glob
-          (<code>third*</code>) or <code>src/vendor</code> for one path.
-        </span>
+        <button class="btn small" type="button" @click="store.ui.settingsOpen = true">Open folder filters</button>
       </div>
       <div class="row">
         <input v-model="search" type="text" placeholder="Filter authors…" />
@@ -216,32 +160,6 @@ function showAll(): void {
 
 .hint {
   font-size: 10.5px;
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-}
-
-.chips li {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--panel-border);
-  border-radius: 999px;
-  background: rgba(94, 200, 255, 0.08);
-  font-size: 11px;
-}
-
-.chips button {
-  padding: 0 4px;
-  font-size: 11px;
-  line-height: 1.4;
 }
 
 .hint code {
