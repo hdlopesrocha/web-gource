@@ -6,6 +6,7 @@ import { EdgeField } from './edges'
 import { ParticleField } from './particles'
 import { AuthorField } from './authors'
 import { BeamField } from './beams'
+import { GlowField } from './glow'
 import { LabelField } from './labels'
 import { Camera2D } from './camera'
 import { backgroundColor, DIR_COLOR, GRID_COLOR } from './palette'
@@ -30,6 +31,10 @@ export interface RendererSettings {
   /** Faint background grid (helps with panning/zooming in 2D). */
   showGrid: boolean
   gridSpacing: number
+  /** Gource's bloom: an additive halo around every folder. */
+  showBloom: boolean
+  /** Gource's `bloom_intensity` (0 hides the halo). */
+  bloomIntensity: number
   /** Beams from an author to the files it just changed (Gource tethers). */
   showBeams: boolean
   beamIntensity: number
@@ -53,6 +58,8 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   authorScale: 1,
   showGrid: true,
   gridSpacing: 40,
+  showBloom: true,
+  bloomIntensity: 0.75,
   showBeams: true,
   beamIntensity: 1.15,
   beamWidth: 3.2,
@@ -62,10 +69,12 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
  * Depth stack of the flat scene (the camera looks down the -Z axis, so a larger
  * z is closer to the viewer):
  *
- *   background -6 · grid -5 · branches 0 · nodes +0.25 · effects +0.5
+ *   background -6 · grid -5 · branches 0 · nodes +0.25 · glow +0.4 · effects +0.5
  *
  * The grid is a transparent overlay, so it is drawn after the opaque circles;
- * depth testing (not the render order) is what keeps it behind the tree.
+ * depth testing (not the render order) is what keeps it behind the tree. The
+ * glow is additive and drawn after the circles (like Gource's bloom), so a
+ * folder's halo washes over its own file cluster.
  */
 export const BACKGROUND_Z = -6
 export const GRID_Z = -5
@@ -103,6 +112,7 @@ export class SceneRenderer {
   private authors: AuthorField
   private beams: BeamField
   private labels: LabelField
+  private glow: GlowField
   private background: THREE.Mesh
   private grid: THREE.Mesh
   private settings: RendererSettings = { ...DEFAULT_RENDERER_SETTINGS }
@@ -148,9 +158,11 @@ export class SceneRenderer {
     })
     this.labels = new LabelField(MAX_LABELS)
     this.beams = new BeamField()
+    this.glow = new GlowField(this.dirCapacity)
 
     this.scene.add(this.edges.lines)
     this.scene.add(this.beams.mesh)
+    this.scene.add(this.glow.group)
     this.scene.add(this.nodes.group)
     this.scene.add(this.particles.points)
     this.scene.add(this.authors.group)
@@ -163,11 +175,17 @@ export class SceneRenderer {
     return this.canvas
   }
 
-  get info(): { liveParticles: number; nodeStats: { files: number; dirs: number }; beams: number } {
+  get info(): {
+    liveParticles: number
+    nodeStats: { files: number; dirs: number }
+    beams: number
+    bloom: number
+  } {
     return {
       liveParticles: this.particles.liveCount,
       nodeStats: this.nodes.stats,
       beams: this.beams.segmentCount,
+      bloom: this.glow.stats,
     }
   }
 
@@ -268,6 +286,8 @@ export class SceneRenderer {
       scale: this.settings.authorScale,
     })
     this.grid.visible = this.settings.showGrid
+    this.glow.setIntensity(this.settings.bloomIntensity, this.pendingNodes ?? [])
+    this.glow.setEnabled(this.settings.showBloom)
     this.beams.setEnabled(this.settings.showBeams)
     this.beams.setIntensity(this.settings.beamIntensity)
     this.beams.setWidthPixels(this.settings.beamWidth)
@@ -346,6 +366,7 @@ export class SceneRenderer {
     if (full) {
       this.nodes.sync(nodes, true)
       this.edges.sync(nodes, true)
+      this.glow.sync(nodes, true)
       this.dirtyNodes.clear()
       sim.needsFullSync = false
       this.fullSyncPending = false
@@ -354,6 +375,7 @@ export class SceneRenderer {
 
     this.nodes.sync(nodes, false, [...this.dirtyNodes])
     this.edges.sync(nodes, false, [...this.dirtyNodes])
+    this.glow.sync(nodes, false, [...this.dirtyNodes])
     this.dirtyNodes.clear()
   }
 
@@ -368,6 +390,7 @@ export class SceneRenderer {
     if (moved.length > 0 && !this.fullSyncPending) {
       this.nodes.sync(nodes, false, moved)
       this.edges.sync(nodes, false, moved)
+      this.glow.sync(nodes, false, moved)
     }
     this.nodes.update(simTime, nodes)
     this.edges.update(simTime, nodes)
@@ -478,6 +501,7 @@ export class SceneRenderer {
     this.authors.dispose()
     this.beams.dispose()
     this.labels.dispose()
+    this.glow.dispose()
     this.background.geometry.dispose()
     ;(this.background.material as THREE.Material).dispose()
     this.grid.geometry.dispose()

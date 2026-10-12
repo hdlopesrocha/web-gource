@@ -190,6 +190,11 @@ onMounted(() => {
           <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Directory rings</label>
           <label class="switch"><input type="checkbox" :checked="settings.showEdges" @change="update({ showEdges: ($event.target as HTMLInputElement).checked })" /> Branch edges</label>
           <label class="switch"><input type="checkbox" :checked="settings.showGrid" @change="update({ showGrid: ($event.target as HTMLInputElement).checked })" /> Background grid</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showBloom" @change="update({ showBloom: ($event.target as HTMLInputElement).checked })" /> Folder glow</label>
+          <div class="field">
+            <label>Glow intensity · {{ settings.bloomIntensity.toFixed(2) }}</label>
+            <input type="range" min="0" max="1.5" step="0.05" :value="settings.bloomIntensity" @input="update({ bloomIntensity: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
           <div class="field">
             <label>Edge opacity · {{ settings.edgeOpacity.toFixed(2) }}</label>
             <input type="range" min="0.05" max="1" step="0.05" :value="settings.edgeOpacity" @input="update({ edgeOpacity: Number(($event.target as HTMLInputElement).value) })" />

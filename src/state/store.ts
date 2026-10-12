@@ -216,6 +216,8 @@ const defaultSettings: AppState['settings'] = {
   authorScale: 1,
   showGrid: true,
   gridSpacing: 40,
+  showBloom: true,
+  bloomIntensity: 0.75,
   showBeams: true,
   beamIntensity: 1.15,
   beamWidth: 3.2,
