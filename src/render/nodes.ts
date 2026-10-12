@@ -3,6 +3,7 @@ import type { ChangeKind } from '../timeline/types'
 import type { SimNode } from '../sim/simulation'
 import { extensionOf } from '../timeline/builder'
 import { colorForChange, colorForExtension, DIR_COLOR, ROOT_COLOR } from './palette'
+import { ballTexture } from './textures'
 
 export type FileColorMode = 'extension' | 'activity' | 'flat'
 
@@ -69,10 +70,16 @@ export class NodeField {
     this.baseFileColors = new Float32Array(options.maxFiles * 3)
     this.baseDirColors = new Float32Array(options.maxDirs * 3)
 
-    // Flat shapes: discs for files, rings for directories.
-    this.fileGeometry = new THREE.CircleGeometry(1, 24)
+    // Flat shapes: Gource's lit ball sprites for files, rings for directories.
+    this.fileGeometry = new THREE.PlaneGeometry(2, 2)
     this.dirGeometry = new THREE.RingGeometry(0.58, 1, 26)
-    this.fileMaterial = new THREE.MeshBasicMaterial({ toneMapped: false })
+    this.fileMaterial = new THREE.MeshBasicMaterial({
+      // Gource's file.png: a ball lit from above-left, tinted per instance.
+      map: ballTexture(),
+      transparent: true,
+      depthWrite: true,
+      toneMapped: false,
+    })
     this.dirMaterial = new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide })
 
     this.fileMesh = this.createMesh(this.fileGeometry, this.fileMaterial, this.fileCapacity)
