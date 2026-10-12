@@ -219,12 +219,20 @@ The whole tree is packed hierarchically, and it reflows while history plays:
   its subfolders, recursively), and its parent packs it by that radius — so a
   folder that grows reserves the room it needs and its siblings slide outwards
   instead of overlapping it;
-* inside a folder, files fill a **disc** (greedy spiral packing, largest circles
-  first) instead of a ring — a ring grows linearly with the file count, which is
-  what used to push subfolders away from their parent, while a disc grows with
-  the square root and stays compact. Subfolders are then packed on the ring just
-  outside the file circles, sized by their own cluster radius, so nesting cannot
-  collide either;
+* inside a folder, files **and subfolders share one disc** (greedy spiral
+  packing, smallest circles first) — a ring grows linearly with the file count,
+  which is what used to push subfolders away from their parent, while a disc
+  grows with the square root and stays compact. Because the packing is shared,
+  a subfolder can sit *inside* the file area when there is room, instead of
+  always being pushed outside it;
+* a subfolder reserves room for its own files plus a fixed margin rather than
+  its whole subtree. Reserving the whole subtree is exact but makes the required
+  space grow with every level of nesting, which pushed deep trees (thousands of
+  files, five or six levels) hundreds of units from the origin. A correction pass
+  then pushes apart the few circles that a capped reservation left touching, so
+  a large tree stays compact with only a small residue of overlapping reserved
+  space (about 1% of nodes, in the emptiest parts of a cluster) instead of a tree
+  that spirals outwards;
 * a folder that moves takes its subtree with it, keeping every cluster rigid
   while it slides to its new place;
 * rings are packed against the real geometry: the arc length that has to fit

@@ -27,6 +27,7 @@ function node(id: number, overrides: Partial<SimNode> = {}): SimNode {
     targetPosition: { x: id * 0.5, y: 0, z: 0 },
     radius: 0.2,
     clusterRadius: 0.2,
+    ownDiscRadius: 0.2,
     sizeBytes: 0,
     sizeKnown: false,
     activity: 0,

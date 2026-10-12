@@ -61,6 +61,13 @@ export const LAYOUT = {
   /** Free space kept between neighbouring directory clusters. */
   clusterGap: 0.6,
   /**
+   * Extra room a subfolder reserves beyond its own files. A folder's subtree can
+   * extend further out in its own direction, but reserving the *whole* subtree
+   * makes the required space grow with every level of nesting, which pushed deep
+   * trees hundreds of units from the origin.
+   */
+  subtreeReserve: 6,
+  /**
    * A directory ring is closed beyond this radius and a new one started. Kept
    * generous: cluster sizes dominate the radius anyway, and closing rings early
    * would push folders into a long spiral instead of one ring.
@@ -300,6 +307,12 @@ export interface DiscOptions {
    */
   obstacles?: readonly DiscObstacle[]
   /**
+   * Placement order. `smallest-first` fills the centre with small items and
+   * pushes the big ones outwards, which is what keeps a folder compact;
+   * `largest-first` gives the big items the innermost slots.
+   */
+  order?: 'largest-first' | 'smallest-first'
+  /**
    * Where to start looking. Callers can pass the radius of the last placement so
    * a dense folder does not search from the centre every time.
    */
@@ -334,10 +347,15 @@ export function placeInDisc(
   const placements: DiscPlacement[] = []
   if (items.length === 0) return placements
 
-  // Largest first, ties broken by key for determinism.
+  // Ties are broken by key for determinism.
+  const smallestFirst = config.order === 'smallest-first'
   const order = [...items]
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => b.item.radius - a.item.radius || (a.item.key < b.item.key ? -1 : 1))
+    .sort((a, b) =>
+      smallestFirst
+        ? a.item.radius - b.item.radius || (a.item.key < b.item.key ? -1 : 1)
+        : b.item.radius - a.item.radius || (a.item.key < b.item.key ? -1 : 1),
+    )
 
   let widest = 0
   for (const item of items) widest = Math.max(widest, item.radius)
@@ -472,6 +490,115 @@ export function findOverlaps(circles: readonly DiscObstacle[], gap = 0): number[
     else grid.set(key, [index])
   }
   return offenders
+}
+
+export interface OverlapNode {
+  id: number
+  x: number
+  y: number
+  radius: number
+}
+
+export interface OverlapOptions {
+  /** Free space to keep between circles. */
+  gap: number
+  /** How many resolution passes to run. */
+  iterations: number
+  /** A node is only pushed outwards, never inwards. */
+  maxPush?: number
+}
+
+/**
+ * Push overlapping circles apart, radially outwards.
+ *
+ * The packing reserves a *capped* amount of room for a folder (reserving its
+ * whole subtree makes deep trees explode), so a folder's far tail can end up
+ * overlapping a neighbour. This pass fixes exactly those cases: it finds the
+ * overlapping pairs with a spatial hash and pushes the offending circle away
+ * from the origin by the smallest distance that clears the overlap, leaving
+ * everything else untouched. A few passes are enough because each push only
+ * moves a circle outward into free space.
+ */
+export function resolveOverlaps(nodes: OverlapNode[], options: Partial<OverlapOptions> = {}): Set<number> {
+  const config: OverlapOptions = { gap: LAYOUT.fileGap, iterations: 3, ...options }
+  const moved = new Set<number>()
+  if (nodes.length < 2) return moved
+
+  let widest = 0
+  for (const node of nodes) widest = Math.max(widest, node.radius)
+  const cell = Math.max(0.5, widest * 2 + config.gap)
+
+  for (let pass = 0; pass < config.iterations; pass += 1) {
+    const grid = new Map<string, number[]>()
+    let anyOverlap = false
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index]
+      const cx = Math.floor(node.x / cell)
+      const cy = Math.floor(node.y / cell)
+      let push = 0
+      for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+        for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+          const bucket = grid.get(`${gx}:${gy}`)
+          if (!bucket) continue
+          for (const other of bucket) {
+            const peer = nodes[other]
+            const dx = peer.x - node.x
+            const dy = peer.y - node.y
+            const distance = Math.hypot(dx, dy)
+            const needed = node.radius + peer.radius + config.gap - distance
+            if (needed > push) push = needed
+          }
+        }
+      }
+      if (push > 0) {
+        // Move directly away from the circle that is crowding this node: that
+        // resolves the pair with the smallest movement. (Pushing radially
+        // outwards would walk into whatever sits further out on the same ray.)
+        let ux = 0
+        let uy = 0
+        for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+          for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+            const bucket = grid.get(`${gx}:${gy}`)
+            if (!bucket) continue
+            for (const other of bucket) {
+              const peer = nodes[other]
+              const dx = node.x - peer.x
+              const dy = node.y - peer.y
+              const distance = Math.hypot(dx, dy)
+              const needed = node.radius + peer.radius + config.gap - distance
+              if (needed <= 0) continue
+              if (distance > 0.001) {
+                ux += (dx / distance) * needed
+                uy += (dy / distance) * needed
+              } else {
+                const angle = (node.id * 2.399963229728653) % (Math.PI * 2)
+                ux += Math.cos(angle) * needed
+                uy += Math.sin(angle) * needed
+              }
+            }
+          }
+        }
+        const magnitude = Math.hypot(ux, uy)
+        const step = Math.min(push + 0.02, config.maxPush ?? Number.POSITIVE_INFINITY)
+        if (magnitude > 0.001) {
+          node.x += (ux / magnitude) * step
+          node.y += (uy / magnitude) * step
+        } else {
+          const angle = (node.id * 2.399963229728653) % (Math.PI * 2)
+          node.x += Math.cos(angle) * step
+          node.y += Math.sin(angle) * step
+        }
+        moved.add(node.id)
+        anyOverlap = true
+      }
+      const key = `${cx}:${cy}`
+      const bucket = grid.get(key)
+      if (bucket) bucket.push(index)
+      else grid.set(key, [index])
+    }
+    if (!anyOverlap) break
+  }
+  return moved
 }
 
 /** Extent (max distance from the centre) of a set of placements. */
