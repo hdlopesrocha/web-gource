@@ -63,6 +63,18 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Filters</h3>
+        <p class="muted small">
+          The Authors panel hides authors and commits by date, and the folder ignore list removes whole trees from
+          the visualization — vendored dependencies, generated output, anything you do not want to watch. An entry
+          such as <code>third_party</code> hides any folder with that name at any depth (case-insensitively);
+          <code>third*</code> is a glob and <code>src/vendor</code> matches one path. Commits are never dropped by
+          the ignore list: a commit that only touched ignored folders still plays, it just has no files to highlight,
+          and the +/- counters only count what is left.
+        </p>
+      </section>
+
+      <section>
         <h3>Glow</h3>
         <p class="muted small">
           Files are drawn from Gource's own ball sprite — a highlight above and to the left, darkening towards the

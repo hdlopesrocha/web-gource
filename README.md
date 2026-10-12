@@ -44,6 +44,28 @@ npm run typecheck    # vue-tsc only
    small batches; the visualization starts as soon as the first batch is ready.
 4. Play with it: scrub, seek, filter, and export a video.
 
+### Ignoring folders
+
+Repositories contain trees nobody wants to watch — `node_modules`, `vendor`, `third_party`,
+generated output. The Authors panel has an **Ignore folders** list that removes them:
+
+| entry | hides |
+| --- | --- |
+| `third_party` | any folder with that name, at any depth, case-insensitively |
+| `third*` | folders matching the glob (`third_party`, `third-party`, `thirdparty`) |
+| `src/vendor` | that one path (and everything under it) |
+
+Folders only: a *file* named `third_party` is untouched, and the last segment of a path is always
+treated as the file. Entries are trimmed and deduplicated, so a pasted list works the same on every
+host.
+
+Ignoring filters **file changes, not commits**: a commit that only touched ignored folders still
+plays (its author and message are history), it simply has no files to highlight, and its
+additions/deletions are recomputed from the changes that remain — the counters never include hidden
+trees. A rename that moves a file *out* of an ignored folder is kept as an addition, because the old
+path is not part of the visualization. The list is stored locally and survives a reload;
+**Clear every filter** empties it along with the author and date filters.
+
 ### Personal access tokens
 
 Tokens are optional, never required for public repositories, and always stored locally in the
@@ -106,6 +128,7 @@ src/
   timeline/                 normalized history
     types.ts                Timeline, TimelineCommit, TimelineAuthor, change kinds
     builder.ts              raw commits → timeline (+ author aggregation, stats, filters)
+    ignore.ts               folder ignore list (names, globs, path prefixes)
     schedule.ts             deterministic playback schedule and date ↔ time mapping
   sim/                      repository state, independent of rendering
     layout.ts               deterministic path → position mapping (stable under filtering/seeking)
