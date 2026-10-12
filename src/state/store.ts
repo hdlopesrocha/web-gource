@@ -117,6 +117,35 @@ export interface RecordingSettings {
   maxWallSeconds: number
 }
 
+/**
+ * Deterministic export settings: the animation is rendered frame by frame from
+ * `t = 0` at exactly 30 frames per simulated second, independent of the machine.
+ */
+export interface ExportSettings {
+  /** Container preference; WebM (VP9) is the default, MP4 (H.264) optional. */
+  container: 'webm' | 'mp4'
+  /** Bitrate override in bits per second; 0 derives it from the resolution. */
+  bitrate: number
+}
+
+export interface ExportProgressState {
+  frames: number
+  totalFrames: number
+  simTime: number
+  duration: number
+  percent: number
+  bytes: number
+  queue: number
+}
+
+export interface ExportCodecInfo {
+  container: 'webm' | 'mp4'
+  label: string
+  codec: string
+  supported: boolean
+  hardware: boolean
+}
+
 export interface UiState {
   settingsOpen: boolean
   helpOpen: boolean
@@ -169,6 +198,25 @@ export interface AppState {
     /** Custom pacing values, used when `pacing === 'custom'`. */
     customSecondsPerDay: number
     customMinSpacing: number
+  }
+  export: ExportSettings & {
+    active: boolean
+    progress: ExportProgressState | null
+    error: string | null
+    /** Finished export, ready to download or preview. */
+    lastUrl: string | null
+    lastExtension: string
+    lastLabel: string
+    lastBytes: number
+    lastFrames: number
+    lastSeconds: number
+    lastElapsed: number
+    /** True when the last export used a hardware encoder. */
+    lastHardware: boolean
+    /** Encoders this browser offers, probed by the controller. */
+    codecs: ExportCodecInfo[]
+    /** True once probing has run (so the UI can say "unavailable"). */
+    probed: boolean
   }
   recording: RecordingSettings & {
     active: boolean
@@ -256,6 +304,11 @@ const defaultRecording: RecordingSettings = {
   maxWallSeconds: 1800,
 }
 
+const defaultExport: ExportSettings = {
+  container: 'webm',
+  bitrate: 0,
+}
+
 const initialLoadOptions = { ...defaultLoadOptions, ...readJson(LOAD_KEY, defaultLoadOptions) }
 
 export const store = reactive<AppState>({
@@ -281,6 +334,22 @@ export const store = reactive<AppState>({
   ignoredFolders: readJson(FILTER_KEY, { ignoredFolders: [] as string[] }).ignoredFolders,
   dateRange: { from: null, to: null },
   settings: readJson(SETTINGS_KEY, defaultSettings),
+  export: {
+    ...defaultExport,
+    active: false,
+    progress: null,
+    error: null,
+    lastUrl: null,
+    lastExtension: 'webm',
+    lastLabel: '',
+    lastBytes: 0,
+    lastFrames: 0,
+    lastSeconds: 0,
+    lastElapsed: 0,
+    lastHardware: false,
+    codecs: [],
+    probed: false,
+  },
   recording: {
     ...defaultRecording,
     active: false,

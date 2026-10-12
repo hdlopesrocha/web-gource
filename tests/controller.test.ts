@@ -140,6 +140,22 @@ describe('VisualizerController', () => {
       .toHaveLength(before.length)
   })
 
+  it('reports deterministic export support honestly', async () => {
+    // jsdom has no WebCodecs, so the export must say so instead of pretending.
+    expect(controller.exportSupport().supported).toBe(false)
+    expect(store.export.codecs).toEqual([])
+    expect(store.export.probed).toBe(false)
+    await controller.refreshExportSupport()
+    expect(store.export.probed).toBe(true)
+    expect(store.export.codecs).toEqual([])
+    // Without an engine there is nothing to render; the call must be a no-op
+    // rather than throwing.
+    await controller.startExport()
+    expect(store.export.active).toBe(false)
+    controller.cancelExport()
+    expect(store.export.active).toBe(false)
+  })
+
   it('toggles a single author', async () => {
     const { url } = mockApi(generateCommits(16))
     await controller.load(url)

@@ -16,6 +16,9 @@ import {
   isRecordingSupported,
   preferredFormat,
 } from './recorder'
+import { EXPORT_FPS } from './export/frames'
+import { ExportCancelledError, OfflineExporter, type ExportProgress } from './export/exporter'
+import { discoverCodecs, isWebCodecsSupported, type CodecChoice } from './export/encoder'
 import {
   persistLoadOptions,
   persistFilters,
@@ -587,6 +590,159 @@ export class VisualizerController {
     if (this.engine && this.timeline) return this.engine.activityBuckets(count)
     if (this.timeline) return bucketActivity(this.timeline.commits, count)
     return []
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Deterministic export
+   * ------------------------------------------------------------------ */
+
+  private exporter: OfflineExporter | null = null
+
+  /** Whether deterministic export is possible, and which codecs were found. */
+  exportSupport(): { supported: boolean; codecs: typeof store.export.codecs } {
+    return { supported: isWebCodecsSupported(), codecs: store.export.codecs }
+  }
+
+  /**
+   * Probe the browser's encoders at the export resolution.
+   *
+   * WebCodecs support differs by platform (WebM everywhere Chromium runs, MP4
+   * only where an AVC encoder exists), so the list is discovered rather than
+   * assumed, and hardware implementations are preferred.
+   */
+  async refreshExportSupport(): Promise<void> {
+    const settings = store.recording
+    if (!isWebCodecsSupported()) {
+      store.export.codecs = []
+      store.export.probed = true
+      return
+    }
+    const found = await discoverCodecs(settings.width, settings.height, EXPORT_FPS, 6_000_000)
+    store.export.codecs = found.map((codec: CodecChoice) => ({
+      container: codec.container,
+      label: codec.label,
+      codec: codec.codecString,
+      supported: true,
+      hardware: codec.hardwareAccelerated,
+    }))
+    store.export.probed = true
+  }
+
+  private exportChoice(): CodecChoice | null {
+    const preferred = store.export.container
+    const available = store.export.codecs.filter((codec) => codec.supported)
+    const pick = available.find((codec) => codec.container === preferred) ?? available[0]
+    if (!pick) return null
+    return {
+      container: pick.container,
+      codec: pick.codec.startsWith('avc1') ? 'h264' : pick.codec.startsWith('vp09') ? 'vp9' : pick.codec === 'vp8' ? 'vp8' : 'av1',
+      codecString: pick.codec,
+      label: pick.label,
+      extension: pick.container === 'webm' ? 'webm' : 'mp4',
+      mimeType: pick.container === 'webm' ? 'video/webm' : 'video/mp4',
+      hardwareAccelerated: pick.hardware,
+    }
+  }
+
+  /**
+   * Render the whole animation from `t = 0` and encode it.
+   *
+   * The clock is driven by the frame index (30 frames per simulated second), so
+   * the result does not depend on how fast this machine renders; progress is
+   * reported as frames and simulated time.
+   */
+  async startExport(): Promise<void> {
+    if (!this.engine || store.export.active) return
+    // Mark the export as active before the first await, so the UI (and any
+    // caller) sees it immediately rather than during codec probing.
+    store.export.active = true
+    store.export.progress = null
+    store.export.error = null
+    const engine = this.engine
+    let restoreTime = engine.position
+    try {
+      if (!isWebCodecsSupported()) {
+        store.export.error = 'This browser cannot encode video (WebCodecs is unavailable). Try desktop Chrome or Edge.'
+        return
+      }
+      if (store.export.codecs.length === 0) await this.refreshExportSupport()
+      const choice = this.exportChoice()
+      if (!choice) {
+        store.export.error = 'No usable video encoder was found for this resolution in this browser.'
+        return
+      }
+      if (store.export.lastUrl) {
+        URL.revokeObjectURL(store.export.lastUrl)
+        store.export.lastUrl = null
+      }
+
+      const settings = store.recording
+      restoreTime = engine.position
+      const exporter = new OfflineExporter()
+      this.exporter = exporter
+      engine.beginOfflineExport(settings.width, settings.height)
+
+      const result = await exporter.run({
+        duration: engine.duration,
+        choice,
+        width: settings.width,
+        height: settings.height,
+        bitrate: store.export.bitrate > 0 ? store.export.bitrate : undefined,
+        onProgress: (progress: ExportProgress) => {
+          store.export.progress = {
+            frames: progress.frames,
+            totalFrames: progress.totalFrames,
+            simTime: progress.simTime,
+            duration: progress.duration,
+            percent: progress.percent,
+            bytes: progress.bytes,
+            queue: progress.queue,
+          }
+        },
+        frameFactory: (request) => engine.renderExportFrame(request),
+      })
+      store.export.lastUrl = URL.createObjectURL(result.blob)
+      store.export.lastExtension = result.extension
+      store.export.lastLabel = `${result.choice.label}${result.choice.hardwareAccelerated ? ' · hardware' : ''}`
+      store.export.lastBytes = result.bytes
+      store.export.lastFrames = result.frames
+      store.export.lastSeconds = result.seconds
+      store.export.lastElapsed = result.elapsed
+      store.export.lastHardware = result.choice.hardwareAccelerated
+    } catch (error) {
+      store.export.error =
+        error instanceof ExportCancelledError
+          ? null
+          : `Export failed: ${(error as Error).message}`
+    } finally {
+      this.exporter = null
+      store.export.active = false
+      store.export.progress = null
+      engine.endOfflineExport(restoreTime)
+    }
+  }
+
+  cancelExport(): void {
+    this.exporter?.cancel()
+  }
+
+  downloadExport(): void {
+    const url = store.export.lastUrl
+    if (!url) return
+    const name = `${store.repo?.name ?? 'repository'}-gource-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
+    downloadRecording(
+      {
+        blob: new Blob(),
+        url,
+        mimeType: store.export.lastExtension === 'mp4' ? 'video/mp4' : 'video/webm',
+        extension: store.export.lastExtension,
+        frames: store.export.lastFrames,
+        elapsed: store.export.lastElapsed,
+        simulatedSeconds: store.export.lastSeconds,
+        bytes: store.export.lastBytes,
+      },
+      name,
+    )
   }
 
   /* ------------------------------------------------------------------ *
