@@ -179,9 +179,9 @@ onMounted(() => {
             Dynamic layout
           </label>
           <p class="faint note">
-            With the dynamic layout on, files are packed onto rings around their directory: adding a file, or a circle
-            growing with its size, pushes its neighbours outwards smoothly instead of overlapping them. Turn it off to
-            pin every file to the position derived from its path.
+            With the dynamic layout on, files are grouped on rings around their directory (Gource's model): adding a
+            file, or a circle growing with its size, reflows the rings and pushes neighbouring folders outwards
+            smoothly instead of overlapping them. Turn it off to pin every file to the position derived from its path.
           </p>
         </section>
 

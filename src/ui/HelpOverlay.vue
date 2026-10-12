@@ -65,13 +65,15 @@ const shortcuts: { keys: string; action: string }[] = [
       <section>
         <h3>Dynamic layout</h3>
         <p class="muted small">
-          The tree is packed hierarchically. Every folder knows the size of its whole cluster — its files plus its
-          subfolders, recursively — and its parent packs it by that size, so folders never overlap each other no
-          matter how much they grow. Inside a folder, files fill a compact disc and subfolders sit on the ring just
-          outside them, each sized by what it has to hold. Adding a file, or a circle growing with its size, smoothly
-          pushes the neighbours outwards, and a folder that moves takes its subtree with it. Positions are still derived from
-          the repository state alone, so the same history always produces the same map. Settings → Visual can pin
-          every node to its path-derived position instead.
+          Folder and file placement follows Gource's own algorithm. A folder's radius is the square root of the area
+          its subtree needs, and its parent keeps it that far away, so a folder that grows pushes its siblings
+          outwards instead of overlapping them. Inside a folder, files are grouped on concentric rings — one file
+          diameter apart, as many per ring as its circumference allows — and a circle that grows with its file size
+          expands the rings smoothly. Directories are placed by a force relaxation: gravity towards their ideal
+          distance from the parent, an outward push, and repulsion from their siblings, with a projection pass that
+          guarantees no two circles ever overlap. Positions are derived from the repository state alone, so the same
+          history always produces the same map. Settings → Visual can pin every node to its path-derived position
+          instead.
         </p>
       </section>
 

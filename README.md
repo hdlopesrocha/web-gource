@@ -209,58 +209,57 @@ Given the same history and settings, the same sequence of events is produced:
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
 
-### Dynamic layout
+### Dynamic layout — Gource's model
 
-![Files packed on rings around their directories, with branches stopping at the circle edges](docs/screenshot-rings.png)
+![Files grouped on rings around their directories](docs/screenshot-rings.png)
 
-The whole tree is packed hierarchically, and it reflows while history plays:
+Folder and file placement follows the algorithm in Gource's own source
+(`src/dirnode.cpp`), adapted for files that have a size:
 
-* every folder knows the **cluster radius** of its whole subtree (its files plus
-  its subfolders, recursively), and its parent packs it by that radius — so a
-  folder that grows reserves the room it needs and its siblings slide outwards
-  instead of overlapping it;
-* inside a folder, files **and subfolders share one disc** (greedy spiral
-  packing, smallest circles first) — a ring grows linearly with the file count,
-  which is what used to push subfolders away from their parent, while a disc
-  grows with the square root and stays compact. Because the packing is shared,
-  a subfolder can sit *inside* the file area when there is room, instead of
-  always being pushed outside it;
-* a subfolder reserves room for its own files plus a fixed margin rather than
-  its whole subtree. Reserving the whole subtree is exact but makes the required
-  space grow with every level of nesting, which pushed deep trees (thousands of
-  files, five or six levels) hundreds of units from the origin. A correction pass
-  then pushes apart the few circles that a capped reservation left touching, so
-  a large tree stays compact with only a small residue of overlapping reserved
-  space (about 1% of nodes, in the emptiest parts of a cluster) instead of a tree
-  that spirals outwards;
-* a folder that moves takes its subtree with it, keeping every cluster rigid
-  while it slides to its new place;
-* rings are packed against the real geometry: the arc length that has to fit
-  *and* the chord between adjacent slots (using the actual adjacent pairs), and a
-  ring's circles must clear the previous ring's circles — which is what keeps
-  concentric rings from overlapping each other too;
-* placement is incremental: a file that has not changed size keeps its slot, a
-  circle may grow into the free gap around it, and only a circle that would
-  actually overlap a neighbour is moved. Layout changes are quantised, so a file
-  growing by a fraction of a unit does not reflow the whole tree. Replaying 5,000
-  commits with 3,600 files takes ~1.2 s of layout work.
+* **A directory's radius is the square root of the area it needs**
+  (`RDirNode::calcRadius`): `radius = sqrt(area) * 1.5`, where the area is the
+  sum of the file areas in its whole subtree. A folder's *own* files get their
+  own radius (`parent_radius` in Gource), and that is the radius its children are
+  placed against. Because everything scales with the square root of the content,
+  the extent of the tree grows with `sqrt(files)` rather than with nesting depth.
+* **Files are grouped on concentric rings around their folder**
+  (`RDirNode::updateFilePositions`, `calcFileDest`). Ring radii step outwards by
+  one "file diameter", each ring holds as many files as fit around its
+  circumference, and slots are spread with a half-slot offset. Gource spaces its
+  rings by the fixed 8-unit file diameter; here the spacing follows the widest
+  circle in the folder and each slot's angle comes from the chord that circle
+  actually needs, so a folder full of large files still packs tightly without
+  overlapping.
+* **Directories are placed by a force relaxation** (`RDirNode::applyForces`):
+  gravity towards the ideal clearance from the parent
+  (`|Δpos| − (dirRadius + parentOwnRadius)`), a push along the parent's own
+  direction so children fan outwards, repulsion from siblings scaled by the
+  parent's radius over its child count, and overlap resolution against every
+  nearby directory.
+* Gource resolves overlaps with a spring far weaker than its gravity, so crowded
+  parents end up with overlapping clusters. Here each relaxation ends with a
+  **projection sweep** instead: overlapping bodies are pushed apart by the
+  smallest distance that clears them, and a folder may sit inside its ancestors'
+  clusters (it only has to clear their own files). The result keeps Gource's look
+  — folders fan out and settle at their ideal distance — while nothing overlaps:
+  no two file circles, no two folder rings, and no file crossing a folder that is
+  not its parent.
+* A new folder starts next to its parent with a hashed offset
+  (`RDirNode::setInitialPosition`), and a folder that moves carries its own files
+  with it (and, while it is first taking its place, its whole subtree).
+* The expensive part (the forces) runs every fourth commit; the projection runs
+  after every commit, so a growing circle is separated immediately while folders
+  drift into place over a few commits. A full reflow (seek, size change, filter)
+  relaxes much longer and projects until clean.
 
-Inside a directory, files are packed onto one or more concentric rings and those
-rings reflow while history plays:
+Replaying 5,000 commits over 3,600 files costs a few seconds of layout work, and
+the tests assert the no-overlap contract while playing, after host sizes arrive
+and after a seek.
 
-* the ring radius follows the circles that have to fit (arc length *and* the
-  chord between neighbouring slots), so a folder full of large files gets a
-  wider ring and its contents never overlap;
-* adding a file pushes its siblings to new slots, and deleting one closes the
-  gap — both eased over ~0.7 s instead of jumping;
-* a circle that grows with its file size (or with accumulated line activity in
-  activity mode) expands its ring and pushes its neighbours outwards;
-* order is by path, so a new file shifts the ring by one slot deterministically
-  rather than reshuffling it;
-* positions remain a pure function of the applied commits, so seeking to a point
-  in history produces exactly the layout that playing to it would;
 * Settings → Visual can switch the dynamic layout off, which eases every file
   back to its path-derived position for a static map.
+* Positions remain a pure function of the applied commits, so seeking forward to
+  a point in history produces exactly the layout that playing to it would.
 
 ### Reading the activity
 
@@ -338,8 +337,10 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   colours;
 * activity beams: brightness and width scale with the size of the change, endpoints follow both
   the avatar and the node, and the author layer renders above the rays;
-* dynamic layout: ring packing never overlaps circles, grows with item count and radius, uses
-  concentric rings for crowds without the rings colliding, is deterministic and order independent;
+* dynamic layout: Gource's radius model (square root of the area), file grouping on rings (no
+  overlaps, grows with count and size, deterministic), the force relaxation (ideal clearance,
+  siblings spread, overlaps projected apart), and the no-overlap contract (clusters, file
+  circles, file vs. folder rings) while playing, after sizes arrive and after a seek;
   in the simulation, adding, deleting or growing a file moves its siblings smoothly, folder
   clusters (including nested ones) never overlap and stay inside their parent's cluster, growing a
   folder pushes its siblings outwards, seek and playback produce identical layouts, and the static
