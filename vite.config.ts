@@ -3,6 +3,9 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
+  // Relative asset URLs: the same build works from a domain root and from a
+  // project subpath such as https://<user>.github.io/<repo>/.
+  base: './',
   plugins: [vue()],
   resolve: {
     alias: {

@@ -11,7 +11,8 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:api": "vitest run --config vitest.api.config.ts"
+    "test:api": "vitest run --config vitest.api.config.ts",
+    "deploy": "bash scripts/deploy-gh-pages.sh"
   },
   "dependencies": {
     "three": "^0.180.0",

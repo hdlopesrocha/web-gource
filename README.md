@@ -15,6 +15,10 @@ independently written Three.js renderer.
 https://github.com/owner/repository   →   animated 2D repository history
 ```
 
+**Live:** <https://hdlopesrocha.github.io/web-gource/> — the published build is the same code as
+`master`; the demo repository works offline, and real repositories are fetched straight from the
+host API in your browser.
+
 ## Quick start
 
 ```bash
@@ -34,6 +38,23 @@ npm run typecheck    # vue-tsc only
 
 `npm run test:api` spends API quota; set `GITHUB_TOKEN` to use an authenticated quota and
 `WEB_GOURCE_TEST_REPO` to test against another repository.
+
+## Publishing
+
+The site is a static build published to the `gh-pages` branch:
+
+```bash
+npm run deploy        # build, then publish dist/ to gh-pages
+```
+
+`scripts/deploy-gh-pages.sh` builds the project and copies `dist/` into a throwaway worktree of an
+orphan `gh-pages` branch, so `dist/` is never committed and the source history is never rewritten.
+It adds `.nojekyll` (so every asset is served verbatim), commits, and force-pushes the branch
+(`DEPLOY_REMOTE=...` and `DEPLOY_BRANCH=...` override the defaults). Vite is configured with a
+relative `base`, so the same build works both from a domain root and from a project subpath.
+
+On GitHub, Pages must point at the branch once: **Settings → Pages → Source: Deploy from a branch
+→ `gh-pages` / `(root)`**. The build then appears at `https://<user>.github.io/<repo>/`.
 
 ## Using it
 
