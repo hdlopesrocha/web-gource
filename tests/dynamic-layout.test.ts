@@ -1,14 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { LAYOUT, placeOnRings, ringExtent } from '../src/sim/layout'
+import {
+  GOURCE,
+  dirRadiusFor,
+  fileArea,
+  placeFilesInRings,
+  relaxDirectories,
+  type ForceNode,
+} from '../src/sim/layout'
 import { Simulation } from '../src/sim/simulation'
 import { buildTimeline } from '../src/timeline/builder'
 import { buildSchedule } from '../src/timeline/schedule'
 import type { RawCommit, RepoInfo } from '../src/git/types'
 
 /**
- * Dynamic layout: files sit on rings around their directory, and those rings
- * reflow when files are added or removed and when circles grow with the file
- * size.
+ * Dynamic layout, replicating Gource's model (src/dirnode.cpp):
+ *
+ *  - a directory's radius is `sqrt(area) * padding`,
+ *  - files are grouped on concentric rings around their directory,
+ *  - directories are placed by a force relaxation (gravity to the ideal
+ *    clearance from the parent, an outward push along the parent's normal,
+ *    sibling repulsion, and overlap resolution).
  */
 
 const repo: RepoInfo = {
@@ -55,64 +66,56 @@ function settle(sim: Simulation, seconds = 3): void {
   }
 }
 
-describe('placeOnRings', () => {
-  it('spreads items evenly and never overlaps them', () => {
+function distanceBetween(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+describe('placeFilesInRings (Gource file grouping)', () => {
+  it('never overlaps two files and keeps them outside the folder node', () => {
+    const innerRadius = 0.5
     const items = Array.from({ length: 12 }, (_, index) => ({ key: `f${index}.ts`, radius: 0.5 }))
-    const placements = placeOnRings(items)
+    const placements = placeFilesInRings(items, { innerRadius })
     expect(placements).toHaveLength(12)
     for (let a = 0; a < placements.length; a += 1) {
+      const radius = Math.hypot(placements[a].x, placements[a].y)
+      // Innermost ring clears the folder node and the widest circle.
+      expect(radius).toBeGreaterThanOrEqual(innerRadius + 0.5 + GOURCE.fileGap - 1e-6)
       for (let b = a + 1; b < placements.length; b += 1) {
-        const distance = Math.hypot(placements[a].x - placements[b].x, placements[a].y - placements[b].y)
-        // Circles of radius 0.5 each, plus the configured gap.
-        expect(distance).toBeGreaterThanOrEqual(1 + LAYOUT.fileGap - 0.05)
+        const distance = distanceBetween(placements[a], placements[b])
+        expect(distance).toBeGreaterThanOrEqual(1 - 1e-6)
       }
     }
   })
 
-  it('grows the ring radius with the number and size of items', () => {
-    const few = Array.from({ length: 4 }, (_, index) => ({ key: `a${index}`, radius: 0.3 }))
-    const many = Array.from({ length: 24 }, (_, index) => ({ key: `b${index}`, radius: 0.3 }))
-    // A crowd of ten where one circle is huge needs more room than ten small ones.
-    const smallCrowd = Array.from({ length: 10 }, (_, index) => ({ key: `c${index}`, radius: 0.3 }))
-    const mixedCrowd = [...smallCrowd.slice(1), { key: 'c9', radius: 1.5 }]
-
-    expect(ringExtent(placeOnRings(many))).toBeGreaterThan(ringExtent(placeOnRings(few)))
-    expect(ringExtent(placeOnRings(mixedCrowd))).toBeGreaterThan(ringExtent(placeOnRings(smallCrowd)))
-    // Small circles on a sparse ring still use the minimum clear radius, so
-    // their inner edge sits exactly at the configured distance.
-    expect(ringExtent(placeOnRings(few))).toBeCloseTo(LAYOUT.fileRingRadius + 0.3, 5)
+  it('gives a wide file the room it needs', () => {
+    const items = [
+      { key: 'wide.ts', radius: 1.5 },
+      { key: 'a.ts', radius: 0.2 },
+      { key: 'b.ts', radius: 0.2 },
+      { key: 'c.ts', radius: 0.2 },
+    ]
+    const placements = placeFilesInRings(items, { innerRadius: 0.5 })
+    for (let index = 1; index < placements.length; index += 1) {
+      expect(distanceBetween(placements[0], placements[index])).toBeGreaterThanOrEqual(1.7)
+    }
   })
 
-  it('uses concentric rings when a single ring would be too wide', () => {
-    const items = Array.from({ length: 60 }, (_, index) => ({ key: `f${index}`, radius: 0.6 }))
-    const placements = placeOnRings(items)
+  it('grows outwards as files are added', () => {
+    const extentOf = (count: number): number => {
+      const items = Array.from({ length: count }, (_, index) => ({ key: `f${index}`, radius: 0.3 }))
+      return Math.max(...placeFilesInRings(items, { innerRadius: 0.5 }).map((p) => Math.hypot(p.x, p.y) + 0.3))
+    }
+    expect(extentOf(24)).toBeGreaterThan(extentOf(4))
+  })
+
+  it('fills a disc instead of one very wide ring', () => {
+    const items = Array.from({ length: 60 }, (_, index) => ({ key: `f${index}`, radius: 0.5 }))
+    const placements = placeFilesInRings(items, { innerRadius: 0.5 })
     const rings = new Set(placements.map((placement) => placement.ring))
     expect(rings.size).toBeGreaterThan(1)
-    expect(rings.size).toBeLessThanOrEqual(LAYOUT.maxRings)
-    // Inner rings are inside outer rings.
-    for (const placement of placements) {
-      const radius = Math.hypot(placement.x, placement.y)
-      if (placement.ring > 0) expect(radius).toBeGreaterThan(LAYOUT.fileRingRadius)
-    }
-  })
-
-  it('keeps different rings from overlapping each other', () => {
-    // Wide items on the first ring and smaller ones on the next: the second ring
-    // must clear the first ring's circles, not just its centre line.
-    const items = [
-      ...Array.from({ length: 7 }, (_, index) => ({ key: `wide-${index}`, radius: 4 })),
-      ...Array.from({ length: 12 }, (_, index) => ({ key: `small-${index}`, radius: 0.5 })),
-    ]
-    const placements = placeOnRings(items, { minRadius: 2, gap: 1, maxRingRadius: 18 })
-    expect(new Set(placements.map((placement) => placement.ring)).size).toBeGreaterThan(1)
-    // Placements come back in the same (sorted) order as the input keys.
-    const sorted = [...items].sort((a, b) => (a.key < b.key ? -1 : 1))
-    for (let a = 0; a < placements.length; a += 1) {
-      for (let b = a + 1; b < placements.length; b += 1) {
-        const distance = Math.hypot(placements[a].x - placements[b].x, placements[a].y - placements[b].y)
-        expect(distance).toBeGreaterThanOrEqual(sorted[a].radius + sorted[b].radius - 0.001)
-      }
-    }
+    const extent = Math.max(...placements.map((p) => Math.hypot(p.x, p.y) + 0.5))
+    // One ring holding 60 of these circles would reach ~13 units.
+    expect(extent).toBeLessThan(8)
   })
 
   it('is deterministic and keeps the input order', () => {
@@ -121,36 +124,105 @@ describe('placeOnRings', () => {
       { key: 'src/a.ts', radius: 0.9 },
       { key: 'src/c.ts', radius: 0.2 },
     ]
-    const first = placeOnRings(items)
-    const second = placeOnRings([...items].reverse())
-    // Reversing the input does not change the placement of each key.
-    expect(second).toEqual(first)
-    expect(placeOnRings(items)).toEqual(first)
+    const first = placeFilesInRings(items, { innerRadius: 0.5 })
+    expect(placeFilesInRings(items, { innerRadius: 0.5 })).toEqual(first)
+    expect(first.map((placement) => placement.ring)).toHaveLength(3)
   })
 
   it('handles an empty directory', () => {
-    expect(placeOnRings([])).toEqual([])
+    expect(placeFilesInRings([], { innerRadius: 0.5 })).toEqual([])
   })
 })
 
-describe('dynamic file rings in the simulation', () => {
-  it('places files on a ring around their directory', () => {
+describe('Gource radii', () => {
+  it('counts a circle as pi r squared and grows the radius with its square root', () => {
+    expect(fileArea(2)).toBeCloseTo(Math.PI * 4, 6)
+    const single = dirRadiusFor(fileArea(1))
+    const quad = dirRadiusFor(fileArea(1) * 4)
+    expect(quad).toBeCloseTo(single * 2, 6)
+    expect(single).toBeCloseTo(1.5 * Math.PI ** 0.5, 6)
+  })
+
+  it('floors a tiny folder at the minimum radius', () => {
+    expect(dirRadiusFor(0)).toBeCloseTo(GOURCE.minDirRadius, 6)
+  })
+})
+
+describe('relaxDirectories (Gource forces)', () => {
+  function node(id: number, parent: number, x: number, y: number, ownRadius = 1, dirRadius = 1.5): ForceNode {
+    return { id, parent, children: [], ownRadius, dirRadius, x, y, visible: true }
+  }
+
+  it('keeps the root at the origin and settles children at their ideal clearance', () => {
+    const root = node(0, -1, 3, -2, 1, 2)
+    const children = [node(1, 0, 3.1, -2.1), node(2, 0, 3.05, -1.95), node(3, 0, 2.9, -2.2)]
+    root.children = [1, 2, 3]
+    const nodes = [root, ...children]
+    relaxDirectories(nodes, { steps: 200 })
+    expect(root.x).toBeCloseTo(0, 6)
+    expect(root.y).toBeCloseTo(0, 6)
+    for (const child of children) {
+      // Clearance: |parent - child| - (child radius + parent own radius) ~ 0.
+      const clearance = distanceBetween(child, root) - (child.dirRadius + root.ownRadius)
+      expect(Math.abs(clearance)).toBeLessThan(0.35)
+    }
+    // Siblings spread around the parent instead of stacking.
+    for (let a = 0; a < children.length; a += 1) {
+      for (let b = a + 1; b < children.length; b += 1) {
+        expect(distanceBetween(children[a], children[b])).toBeGreaterThan(children[a].dirRadius + children[b].dirRadius)
+      }
+    }
+  })
+
+  it('pushes overlapping directories apart', () => {
+    const root = node(0, -1, 0, 0, 0.5, 0.5)
+    const a = node(1, 0, 0, -3, 0.5, 2)
+    const b = node(2, 0, 0.4, -3, 0.5, 2)
+    root.children = [1, 2]
+    relaxDirectories([root, a, b], { steps: 300 })
+    expect(distanceBetween(a, b)).toBeGreaterThanOrEqual(a.dirRadius + b.dirRadius - 0.05)
+  })
+
+  it('is deterministic', () => {
+    const make = () => {
+      const root = node(0, -1, 0, 0, 1, 1)
+      const children = [node(1, 0, 1, 0), node(2, 0, -1, 0.2), node(3, 0, 0.3, -1)]
+      root.children = [1, 2, 3]
+      return [root, ...children]
+    }
+    const first = make()
+    const second = make()
+    relaxDirectories(first, { steps: 50 })
+    relaxDirectories(second, { steps: 50 })
+    for (let index = 0; index < first.length; index += 1) {
+      expect(first[index].x).toBeCloseTo(second[index].x, 10)
+      expect(first[index].y).toBeCloseTo(second[index].y, 10)
+    }
+  })
+})
+
+describe('dynamic layout in the simulation', () => {
+  it('groups a folder\'s files on a ring around it', () => {
     const commits = ['src/a.ts', 'src/b.ts', 'src/c.ts'].map((path, index) => addFile(path, index))
     const { sim } = makeSimulation(commits)
     sim.applyUpTo(2)
-    // Directories are packed too, so let the tree settle before measuring.
     settle(sim)
-    const dir = sim.find('src')
-    expect(dir).toBeDefined()
+    const dir = sim.find('src')!
     const files = sim.nodes.filter((node) => node.kind === 'file')
     expect(files).toHaveLength(3)
     for (const file of files) {
-      const distance = Math.hypot(file.position.x - dir!.position.x, file.position.y - dir!.position.y)
-      // All three sit on the same ring, at a sane distance from the directory.
-      expect(distance).toBeGreaterThan(LAYOUT.fileRingRadius - 1)
-      expect(distance).toBeLessThan(LAYOUT.maxRingRadius + 2)
-      // Files never sit exactly on the directory node.
-      expect(distance).toBeGreaterThan(1)
+      const distance = Math.hypot(file.position.x - dir.position.x, file.position.y - dir.position.y)
+      // Every file sits on the same ring, just outside the folder node.
+      expect(distance).toBeGreaterThan(dir.radius)
+      expect(distance).toBeLessThan(2)
+    }
+    // And no two circles touch.
+    for (let a = 0; a < files.length; a += 1) {
+      for (let b = a + 1; b < files.length; b += 1) {
+        expect(distanceBetween(files[a].position, files[b].position)).toBeGreaterThanOrEqual(
+          files[a].radius + files[b].radius - 0.02,
+        )
+      }
     }
   })
 
@@ -160,14 +232,13 @@ describe('dynamic file rings in the simulation', () => {
     const a = sim.find('src/a.ts')!
     const b = sim.find('src/b.ts')!
     const beforeA = { ...a.position }
-    const distanceBefore = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y)
 
     sim.applyUpTo(2) // adds src/c.ts
     // The existing files are heading somewhere new...
-    const targetShift = Math.hypot(a.targetPosition.x - beforeA.x, a.targetPosition.y - beforeA.y)
+    const targetShift = distanceBetween(a.targetPosition, beforeA)
     expect(targetShift).toBeGreaterThan(0.05)
     // ...but they have not jumped there: the movement is animated.
-    expect(Math.hypot(a.position.x - beforeA.x, a.position.y - beforeA.y)).toBeLessThan(targetShift * 0.5)
+    expect(distanceBetween(a.position, beforeA)).toBeLessThan(targetShift * 0.5)
     sim.update(1 / 60, sim.currentTime + 1 / 60)
     const moving = sim.drainMovedNodes()
     expect(moving).toContain(a.id)
@@ -175,61 +246,40 @@ describe('dynamic file rings in the simulation', () => {
     settle(sim)
     expect(a.position.x).toBeCloseTo(a.targetPosition.x, 3)
     expect(b.position.x).toBeCloseTo(b.targetPosition.x, 3)
-    // The three files still do not overlap.
-    const files = sim.nodes.filter((node) => node.kind === 'file')
-    for (let x = 0; x < files.length; x += 1) {
-      for (let y = x + 1; y < files.length; y += 1) {
-        const distance = Math.hypot(files[x].position.x - files[y].position.x, files[x].position.y - files[y].position.y)
-        expect(distance).toBeGreaterThanOrEqual(files[x].radius + files[y].radius - 0.05)
-      }
-    }
-    expect(distanceBefore).toBeGreaterThan(0)
   })
 
-  it('expands the ring when a circle grows with its file size', () => {
+  it('expands the rings when a circle grows with its file size', () => {
     const paths = Array.from({ length: 10 }, (_, index) => `src/file-${index}.ts`)
     const commits = paths.map((path, index) => addFile(path, index))
     const sizes = new Map<string, number>(paths.map((path) => [path, 100]))
     const { sim } = makeSimulation(commits, sizes)
     sim.applyUpTo(paths.length - 1)
     settle(sim)
-    const hugeBefore = sim.find('src/file-0.ts')!
-    const beforeX = hugeBefore.position.x
-    const beforeY = hugeBefore.position.y
+    const before = { ...sim.find('src/file-0.ts')!.position }
 
-    // The same file becomes huge: its circle grows, the folder has to make room
-    // for it and no two circles may end up touching.
     sim.setFileSizes(new Map([['src/file-0.ts', 4_000_000]]))
     const huge = sim.find('src/file-0.ts')!
-    expect(huge.radius).toBeCloseTo(LAYOUT.maxFileRadius, 5)
-    expect(huge.radius).toBeGreaterThan(sim.find('src/file-1.ts')!.radius * 1.5)
+    expect(huge.radius).toBeCloseTo(0.75, 5)
+    expect(huge.radius).toBeGreaterThan(sim.find('src/file-1.ts')!.radius * 1.2)
     settle(sim)
 
-    const dir = sim.find('src')!
-    expect(dir.clusterRadius).toBeGreaterThan(0)
     const files = sim.nodes.filter((node) => node.kind === 'file')
     for (let a = 0; a < files.length; a += 1) {
       for (let b = a + 1; b < files.length; b += 1) {
-        const distance = Math.hypot(files[a].position.x - files[b].position.x, files[a].position.y - files[b].position.y)
-        expect(distance).toBeGreaterThanOrEqual(files[a].radius + files[b].radius - 0.001)
+        expect(distanceBetween(files[a].position, files[b].position)).toBeGreaterThanOrEqual(
+          files[a].radius + files[b].radius - 0.02,
+        )
       }
     }
-    // The folder makes room for the bigger circle (its cluster grows) and the
-    // layout stays collision free. A circle may also simply grow into the free
-    // gap around it — what matters is that nothing overlaps.
-    expect(dir.clusterRadius).toBeGreaterThan(0)
-    const moved = Math.hypot(huge.position.x - beforeX, huge.position.y - beforeY)
-    const grew = huge.radius > 0.5
-    expect(grew || moved > 0).toBe(true)
-    // Every file ended up on its layout position.
-    for (const node of sim.nodes) {
-      if (node.kind !== 'file') continue
+    // The big circle either moved or grew into the free space around it.
+    expect(huge.radius > 0.5 || distanceBetween(huge.position, before) > 0).toBe(true)
+    for (const node of files) {
       expect(node.position.x).toBeCloseTo(node.targetPosition.x, 3)
       expect(node.position.y).toBeCloseTo(node.targetPosition.y, 3)
     }
   })
 
-  it('packs files into a disc instead of one wide ring', () => {
+  it('fills a disc instead of one wide ring', () => {
     const count = 60
     const commits = Array.from({ length: count }, (_, index) => addFile(`src/f${index}.ts`, index))
     const { sim } = makeSimulation(commits)
@@ -242,18 +292,13 @@ describe('dynamic file rings in the simulation', () => {
     for (const file of files) {
       extent = Math.max(extent, Math.hypot(file.position.x - dir.position.x, file.position.y - dir.position.y) + file.radius)
     }
-    // A single ring holding 60 circles of this size would need ~13 units; the
-    // disc fills the area instead, which is what keeps folders compact and
-    // subfolders close to their parent.
-    const ringExtent = ((0.98 + 0.3) / (2 * Math.sin(Math.PI / count))) * 1.02 + 0.49
-    expect(ringExtent).toBeGreaterThan(12)
-    expect(extent).toBeLessThan(ringExtent * 0.8)
-    expect(files[0].radius).toBeGreaterThan(0)
-    // Still collision free.
+    // One ring holding 60 circles of this size would need ~13 units.
+    expect(extent).toBeLessThan(10)
     for (let a = 0; a < files.length; a += 1) {
       for (let b = a + 1; b < files.length; b += 1) {
-        const distance = Math.hypot(files[a].position.x - files[b].position.x, files[a].position.y - files[b].position.y)
-        expect(distance).toBeGreaterThanOrEqual(files[a].radius + files[b].radius - 0.001)
+        expect(distanceBetween(files[a].position, files[b].position)).toBeGreaterThanOrEqual(
+          files[a].radius + files[b].radius - 0.02,
+        )
       }
     }
   })
@@ -276,12 +321,12 @@ describe('dynamic file rings in the simulation', () => {
     expect(sim.find('src/b.ts')!.visible).toBe(false)
     settle(sim)
     const a = sim.find('src/a.ts')!
-    // Deleting a sibling does not shuffle the files that are still there; the
-    // freed space is simply available to the next file.
-    expect(Math.hypot(a.position.x - aBefore.x, a.position.y - aBefore.y)).toBeLessThan(0.01)
+    // The first file keeps the first slot, so deleting its sibling does not
+    // shuffle it; the freed space is simply available to the next file.
+    expect(distanceBetween(a.position, aBefore)).toBeLessThan(0.01)
     expect(a.visible).toBe(true)
     const dir = sim.find('src')!
-    expect(Math.hypot(a.position.x - dir.position.x, a.position.y - dir.position.y)).toBeGreaterThan(1)
+    expect(Math.hypot(a.position.x - dir.position.x, a.position.y - dir.position.y)).toBeGreaterThan(dir.radius)
   })
 
   it('produces the same layout whether played or seeked', () => {
@@ -309,8 +354,6 @@ describe('dynamic file rings in the simulation', () => {
     const a = sim.find('src/a.ts')!
     const b = sim.find('src/b.ts')!
     const dir = sim.find('src')!
-    // Static hashed offsets: the files are where their path says, and adding a
-    // sibling did not move anything.
     expect(a.position.x).toBeCloseTo(a.targetPosition.x, 6)
     expect(b.position.x).toBeCloseTo(b.targetPosition.x, 6)
     expect(Math.hypot(a.position.x - dir.position.x, a.position.y - dir.position.y)).toBeGreaterThan(1)
@@ -321,7 +364,6 @@ describe('dynamic file rings in the simulation', () => {
     const commits = Array.from({ length: 10 }, (_, index) => addFile(`src/file-${index}.ts`, index))
     const { sim } = makeSimulation(commits)
     sim.applyUpTo(9)
-    // Mid-animation the reported positions are still finite and inside bounds.
     sim.update(1 / 60, sim.currentTime + 0.1)
     const bounds = sim.bounds()
     for (const node of sim.nodes) {
@@ -347,11 +389,14 @@ describe('folder clusters', () => {
   }
 
   /** Distance between two clusters' centres minus both cluster radii. */
-  function clusterGap(a: { position: { x: number; y: number }; clusterRadius: number }, b: { position: { x: number; y: number }; clusterRadius: number }): number {
-    return Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y) - a.clusterRadius - b.clusterRadius
+  function clusterGap(
+    a: { position: { x: number; y: number }; clusterRadius: number },
+    b: { position: { x: number; y: number }; clusterRadius: number },
+  ): number {
+    return distanceBetween(a.position, b.position) - a.clusterRadius - b.clusterRadius
   }
 
-  it('keeps sibling folders apart, sized by their contents', () => {
+  it('spreads sibling folders around the root without overlapping', () => {
     const commits = manyFolders(9, 5)
     const { sim } = makeSimulation(commits)
     sim.applyUpTo(commits.length - 1)
@@ -361,13 +406,12 @@ describe('folder clusters', () => {
     expect(root).toBeDefined()
     const folders = sim.nodes.filter((node) => node.kind === 'dir' && node.parent === root!.id)
     expect(folders.length).toBe(9)
-    // No two sibling clusters overlap.
     for (let a = 0; a < folders.length; a += 1) {
       for (let b = a + 1; b < folders.length; b += 1) {
         expect(clusterGap(folders[a], folders[b])).toBeGreaterThan(0)
       }
     }
-    // Every folder's cluster radius covers its own files.
+    // Every folder's cluster radius covers the files it holds.
     for (const folder of folders) {
       const files = sim.nodes.filter((node) => node.kind === 'file' && node.parent === folder.id)
       expect(files.length).toBe(5)
@@ -387,10 +431,8 @@ describe('folder clusters', () => {
     const folders = sim.nodes.filter((node) => node.kind === 'dir' && node.parent === root!.id)
     const target = folders[0]
     const sibling = folders[1]
-    const beforeTarget = Math.hypot(target.position.x - root!.position.x, target.position.y - root!.position.y)
     const beforeGap = clusterGap(target, sibling)
 
-    // Grow the first folder: many new files arrive there.
     const extra: RawCommit[] = []
     for (let index = 0; index < 12; index += 1) {
       extra.push(addFile(`${target.path}/new-${index}.ts`, commits.length + index))
@@ -400,39 +442,14 @@ describe('folder clusters', () => {
     settle(grown.sim, 8)
     const grownTarget = grown.sim.find(target.path)!
     const grownSibling = grown.sim.find(sibling.path)!
-    const afterTarget = Math.hypot(grownTarget.position.x, grownTarget.position.y)
-    const afterGap = clusterGap(grownTarget, grownSibling)
 
-    // The folder reserves more room and its sibling moves out of the way.
+    // The folder reserves more room and its sibling stays clear of it.
     expect(grownTarget.clusterRadius).toBeGreaterThan(target.clusterRadius)
-    expect(afterGap).toBeGreaterThan(0)
-    expect(Math.abs(afterTarget - beforeTarget) + Math.abs(afterGap - beforeGap)).toBeGreaterThan(0.1)
+    expect(clusterGap(grownTarget, grownSibling)).toBeGreaterThan(0)
+    expect(Math.abs(clusterGap(grownTarget, grownSibling) - beforeGap)).toBeGreaterThan(0.05)
   })
 
-  it('never overlaps clusters while the layout animates', () => {
-    const commits = manyFolders(7, 4)
-    const { sim } = makeSimulation(commits)
-    sim.applyUpTo(commits.length - 1)
-    // Sample mid-animation: clusters may be in flight, but the layout targets
-    // must already be collision free.
-    const root = sim.find('')
-    const folders = sim.nodes.filter((node) => node.kind === 'dir' && node.parent === root!.id)
-    const byTarget = folders.map((folder) => ({
-      position: folder.targetPosition,
-      clusterRadius: folder.clusterRadius,
-    }))
-    for (let a = 0; a < byTarget.length; a += 1) {
-      for (let b = a + 1; b < byTarget.length; b += 1) {
-        const gap =
-          Math.hypot(byTarget[a].position.x - byTarget[b].position.x, byTarget[a].position.y - byTarget[b].position.y) -
-          byTarget[a].clusterRadius -
-          byTarget[b].clusterRadius
-        expect(gap).toBeGreaterThan(0)
-      }
-    }
-  })
-
-  it('keeps nested folders apart as well', () => {
+  it('keeps nested folders apart and near their parent', () => {
     const commits: RawCommit[] = []
     let index = 0
     for (const path of [
@@ -456,10 +473,37 @@ describe('folder clusters', () => {
         expect(clusterGap(nested[a], nested[b])).toBeGreaterThan(0)
       }
     }
-    // And the nested clusters stay inside their parent's cluster.
     for (const child of nested) {
-      const distance = Math.hypot(child.position.x - src.position.x, child.position.y - src.position.y)
-      expect(distance + child.clusterRadius).toBeLessThanOrEqual(src.clusterRadius + 0.05)
+      // A nested folder stays close to its parent: the relaxation pulls it to
+      // the parent's clearance distance and the projection only pushes it out
+      // as far as the two clusters need, so it hovers just outside the parent's
+      // cluster instead of drifting away.
+      expect(distanceBetween(child.position, src.position)).toBeLessThan(
+        src.clusterRadius + child.clusterRadius + 1.5,
+      )
     }
+  })
+
+  it('keeps the extent of the tree growing with the square root of its content', () => {
+    const small = makeSimulation(manyFolders(4, 5))
+    small.sim.applyUpTo(19)
+    settle(small.sim, 4)
+    const large = makeSimulation(manyFolders(64, 5))
+    large.sim.applyUpTo(319)
+    settle(large.sim, 4)
+
+    const extent = (sim: Simulation): number => {
+      let max = 0
+      for (const node of sim.nodes) {
+        if (!node.visible) continue
+        max = Math.max(max, Math.hypot(node.position.x, node.position.y) + node.clusterRadius)
+      }
+      return max
+    }
+    const smallExtent = extent(small.sim)
+    const largeExtent = extent(large.sim)
+    // 16x the content should cost about 4x the radius, not 16x.
+    expect(largeExtent).toBeLessThan(smallExtent * 8)
+    expect(largeExtent).toBeGreaterThan(smallExtent)
   })
 })

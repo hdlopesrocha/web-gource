@@ -38,47 +38,12 @@ export function hashUnit(text: string, salt: number): number {
 }
 
 export const LAYOUT = {
-  /** Distance from a directory to its child directories at depth 1. */
+  /** Distance from a directory to its child directories at depth 1 (static layout). */
   baseDistance: 9,
-  /** Additional distance per level of depth. */
+  /** Additional distance per level of depth (static layout). */
   distancePerDepth: 2.4,
-  /** Innermost radius at which a directory's files start. */
+  /** Innermost radius at which a directory's files start (static layout). */
   fileRingRadius: 1.1,
-  /** Safety bound for the disc packing of a directory's files. */
-  maxDiscRadius: 48,
-  /**
-   * Layout changes are rounded to this step, so growing a file by a pixel does
-   * not reflow the whole tree on every commit.
-   */
-  layoutQuantum: 0.5,
-  /**
-   * Overlap tolerated before a grown circle is moved. Lets circles grow into the
-   * free space around them without shuffling their neighbours.
-   */
-  growthSlack: 0.25,
-  /** Innermost radius of the ring that holds a directory's subdirectories. */
-  dirRingRadius: 2.5,
-  /** Free space kept between neighbouring directory clusters. */
-  clusterGap: 0.6,
-  /**
-   * Extra room a subfolder reserves beyond its own files. A folder's subtree can
-   * extend further out in its own direction, but reserving the *whole* subtree
-   * makes the required space grow with every level of nesting, which pushed deep
-   * trees hundreds of units from the origin.
-   */
-  subtreeReserve: 6,
-  /**
-   * A directory ring is closed beyond this radius and a new one started. Kept
-   * generous: cluster sizes dominate the radius anyway, and closing rings early
-   * would push folders into a long spiral instead of one ring.
-   */
-  maxDirRingRadius: 60,
-  /** Gap kept between neighbouring file circles. */
-  fileGap: 0.25,
-  /** A ring is closed and a new one started beyond this radius. */
-  maxRingRadius: 5,
-  /** Hard cap on concentric rings per directory. */
-  maxRings: 5,
   /** How fast nodes ease towards a new layout position (per second). */
   reflowRate: 4.5,
   /** Node radii (world units, before the file-size scale is applied). */
@@ -88,8 +53,7 @@ export const LAYOUT = {
   rootRadius: 1.1,
   /**
    * Smallest and largest file circle radii after size scaling. Kept compact so a
-   * folder's cluster stays dense: ring packing is space hungry, and clusters are
-   * what separate folders from each other.
+   * folder's rings stay dense.
    */
   minFileRadius: 0.08,
   maxFileRadius: 0.75,
@@ -142,476 +106,389 @@ export function lerpVec(a: Vec3, b: Vec3, t: number): Vec3 {
 
 export const ORIGIN: Vec3 = { x: 0, y: 0, z: 0 }
 
-export interface RingItem {
-  /** Stable ordering key (the node path). */
+/**
+ * Gource's layout model, generalised to files of different sizes.
+ *
+ * Mirrors `RDirNode::calcRadius`, `RDirNode::updateFilePositions`,
+ * `RDirNode::calcFileDest` and `RDirNode::applyForces` from the original Gource
+ * source (src/dirnode.cpp), with the one difference this project asks for: files
+ * have a size, so every "one file diameter" step in the original becomes a step
+ * based on the actual circle radii.
+ *
+ *  - A directory's radius is the square root of the area its subtree needs times
+ *    a padding factor (`radius = sqrt(area) * 1.5`). That is what keeps the tree
+ *    compact: the extent grows with sqrt(files), not with nesting depth.
+ *  - Files are grouped on concentric rings around their directory, one file
+ *    diameter apart, each ring holding as many files as its circumference
+ *    allows, spread evenly with a half-slot offset.
+ *  - Directories are placed by relaxing Gource's four forces.
+ */
+export const GOURCE = {
+  /** Padding applied to sqrt(area) when computing a directory radius. */
+  dirPadding: 1.5,
+  /** Gource's gravity constant: pulls a node to its ideal distance from its parent. */
+  gravity: 10,
+  /** Minimum radius of a directory node's cluster (rarely reached, as in Gource). */
+  minDirRadius: 0.5,
+  /** Minimum radius of the area a directory's own files occupy. */
+  minOwnRadius: 0.5,
+  /** Free space kept between neighbouring file circles. */
+  fileGap: 0.35,
+  /** Free space kept between the clusters of two directories. */
+  collisionGap: 0.06,
+  /** Projection sweeps per per-commit relaxation, and per full reflow. */
+  relaxSweeps: 12,
+  reflowAllSweeps: 48,
+  /** Relaxation steps per layout update, and the step size. */
+  relaxSteps: 16,
+  /**
+   * Run the forces every Nth commit. The projection still runs after every
+   * commit, so nothing ever overlaps; the folders just take a few commits to
+   * drift into their final places, which the easing hides anyway.
+   */
+  relaxEvery: 4,
+  relaxDt: 1 / 30,
+  /**
+   * Work cap for one relaxation call, in node-steps. A big tree relaxes with
+   * fewer steps per commit instead of stalling the playback.
+   */
+  relaxBudget: 1200,
+  /** Steps requested for a full reflow (seeks, size changes), work cap allowing. */
+  reflowAllSteps: 400,
+}
+
+/** Area a circle of this radius occupies (Gource counts file area as pi r^2). */
+export function fileArea(radius: number): number {
+  return Math.PI * radius * radius
+}
+
+/** Directory radius from the area of its whole subtree: Gource's sqrt(area) * padding. */
+export function dirRadiusFor(area: number, minRadius = GOURCE.minDirRadius): number {
+  return Math.max(minRadius, Math.sqrt(Math.max(0, area)) * GOURCE.dirPadding)
+}
+
+export interface RingFile {
   key: string
-  /** Current circle radius of the item. */
   radius: number
 }
 
-export interface RingPlacement {
-  /** Offset from the directory centre. */
+export interface RingPosition {
   x: number
   y: number
-  /** Which concentric ring the item ended up on. */
+  /** Which ring the file ended up on (1 = innermost). */
   ring: number
-  angle: number
-}
-
-export interface RingOptions {
-  /** Innermost ring radius. */
-  minRadius: number
-  /** Free space kept between neighbouring circles. */
-  gap: number
-  /** Radius at which a ring is considered full. */
-  maxRingRadius: number
-  /** Maximum number of rings (the last one may exceed the soft limit). */
-  maxRings: number
-  /** Angular phase of the first item. */
-  startAngle: number
-}
-
-export const DEFAULT_RING_OPTIONS: RingOptions = {
-  minRadius: LAYOUT.fileRingRadius,
-  gap: LAYOUT.fileGap,
-  maxRingRadius: LAYOUT.maxRingRadius,
-  maxRings: LAYOUT.maxRings,
-  startAngle: 0,
 }
 
 /**
- * Lay items out on one or more concentric rings around a centre.
+ * Place a directory's files on concentric rings, the way Gource groups the files
+ * of one folder.
  *
- * The ring radius grows with the total diameter that has to fit, so a folder
- * with many files — or with a few large ones — automatically gets a wider ring
- * and its neighbours are pushed outwards. Ordering is by `key`, so inserting a
- * new file reflows the ring deterministically (everything shifts by one slot)
- * instead of shuffling.
+ * Ring radii step outwards by one "file diameter" and each ring holds as many
+ * files as fit around its circumference. Slots are proportional to each file's
+ * own diameter, so a big file gets the room it needs.
  */
-export function placeOnRings(
-  items: readonly RingItem[],
-  options: Partial<RingOptions> = {},
-): RingPlacement[] {
-  const config: RingOptions = { ...DEFAULT_RING_OPTIONS, ...options }
-  const sorted = [...items].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  const placements: RingPlacement[] = []
-  if (sorted.length === 0) return placements
-
-  let ring: RingItem[] = []
-  /**
-   * Radius from the centre where the *circles* of the next ring may start.
-   * Kept as a clear radius (not a centre radius) so the rings cannot overlap
-   * each other either.
-   */
-  let clearRadius = config.minRadius
-  let ringIndex = 0
-
-  /** Centre radius a ring needs for `entries`, given where its circles may start. */
-  const radiusFor = (entries: readonly RingItem[], clear: number): number => {
-    let demand = 0
-    let widest = 0
-    for (const entry of entries) {
-      demand += entry.radius * 2 + config.gap
-      widest = Math.max(widest, entry.radius)
-    }
-    // The ring's circles may not reach inside `clear`.
-    const packing = Math.max(clear + widest, demand / (2 * Math.PI))
-    if (entries.length < 2) return packing
-    // Neighbouring circles on the same ring must not touch either. That depends
-    // on the chord between *adjacent* slots, so use the widest adjacent pair
-    // rather than assuming every neighbour is as big as the largest item.
-    let widestPair = 0
-    for (let index = 0; index < entries.length; index += 1) {
-      const next = entries[(index + 1) % entries.length]
-      widestPair = Math.max(widestPair, entries[index].radius + next.radius)
-    }
-    const chord = ((widestPair + config.gap) / (2 * Math.sin(Math.PI / entries.length))) * 1.02
-    return Math.max(packing, chord)
-  }
-
-  const flush = (): void => {
-    if (ring.length === 0) return
-    const radius = radiusFor(ring, clearRadius)
-    const step = (Math.PI * 2) / ring.length
-    // A per-ring phase offset keeps the layout from looking mechanical without
-    // breaking the even spacing the packing math relies on.
-    const phase = (hashUnit(ring[0].key, 23) - 0.5) * step
-    let widest = 0
-    for (const item of ring) widest = Math.max(widest, item.radius)
-    for (let index = 0; index < ring.length; index += 1) {
-      const angle = config.startAngle + phase + index * step
-      placements.push({
-        x: Math.cos(angle) * radius,
-        y: Math.sin(angle) * radius,
-        ring: ringIndex,
-        angle,
-      })
-    }
-    // The next ring starts outside this one, including this ring's own radii.
-    clearRadius = radius + widest + config.gap
-    ring = []
-    ringIndex += 1
-  }
-
-  for (const item of sorted) {
-    if (ring.length > 0) {
-      const candidate = [...ring, item]
-      const radius = radiusFor(candidate, clearRadius)
-      const ringsLeft = config.maxRings - ringIndex
-      if (radius > config.maxRingRadius && ringsLeft > 1) {
-        flush()
-      } else {
-        ring = candidate
-        continue
-      }
-    }
-    ring = [item]
-  }
-  flush()
-
-  // Keep the placement order aligned with the sorted input.
-  const byKey = new Map<string, RingPlacement>()
-  for (let index = 0; index < sorted.length; index += 1) {
-    const placement = placements[index]
-    if (placement) byKey.set(sorted[index].key, placement)
-  }
-  return sorted.map((item) => byKey.get(item.key) ?? { x: 0, y: 0, ring: 0, angle: 0 })
-}
-
-export const DEFAULT_DISC_OPTIONS: DiscOptions = {
-  minRadius: LAYOUT.fileRingRadius,
-  gap: LAYOUT.fileGap,
-  phase: 0,
-  maxRadius: LAYOUT.maxDiscRadius,
-}
-
-export interface DiscObstacle {
-  x: number
-  y: number
-  radius: number
-}
-
-export interface DiscOptions {
-  /** Radius from the centre where the first circle may start. */
-  minRadius: number
-  /** Free space kept between neighbouring circles. */
-  gap: number
-  /** Angular phase, so different folders do not look identical. */
-  phase: number
-  /** Safety bound on the search radius. */
-  maxRadius: number
-  /**
-   * Circles that are already fixed and must not be disturbed. Used for
-   * incremental packing: existing files keep their spot and only new or resized
-   * ones are placed around them.
-   */
-  obstacles?: readonly DiscObstacle[]
-  /**
-   * Placement order. `smallest-first` fills the centre with small items and
-   * pushes the big ones outwards, which is what keeps a folder compact;
-   * `largest-first` gives the big items the innermost slots.
-   */
-  order?: 'largest-first' | 'smallest-first'
-  /**
-   * Where to start looking. Callers can pass the radius of the last placement so
-   * a dense folder does not search from the centre every time.
-   */
-  startRadius?: number
-}
-
-export interface DiscPlacement {
-  x: number
-  y: number
-  /** Distance from the centre. */
-  radius: number
-}
-
-/**
- * Pack items into a disc around a centre, densest-first.
- *
- * A ring layout grows linearly with the number of items (the circumference has
- * to hold them all), which is what pushed subfolders away from their parent.
- * This greedy spiral packing fills the *area* instead, so a folder with many
- * files stays compact (roughly the square root of the count) while still
- * guaranteeing that no two circles touch.
- *
- * Items are placed largest first at the centre and smaller ones fill the gaps,
- * which also makes the result stable: adding a small file does not move the big
- * ones, and the whole layout is a deterministic function of the item list.
- */
-export function placeInDisc(
-  items: readonly RingItem[],
-  options: Partial<DiscOptions> = {},
-): DiscPlacement[] {
-  const config: DiscOptions = { ...DEFAULT_DISC_OPTIONS, ...options }
-  const placements: DiscPlacement[] = []
-  if (items.length === 0) return placements
-
-  // Ties are broken by key for determinism.
-  const smallestFirst = config.order === 'smallest-first'
-  const order = [...items]
-    .map((item, index) => ({ item, index }))
-    .sort((a, b) =>
-      smallestFirst
-        ? a.item.radius - b.item.radius || (a.item.key < b.item.key ? -1 : 1)
-        : b.item.radius - a.item.radius || (a.item.key < b.item.key ? -1 : 1),
-    )
-
+export function placeFilesInRings(
+  files: readonly RingFile[],
+  options: { innerRadius: number; spacing?: number; gap?: number },
+): RingPosition[] {
+  const positions: RingPosition[] = []
+  if (files.length === 0) return positions
+  const gap = options.gap ?? GOURCE.fileGap
   let widest = 0
-  for (const item of items) widest = Math.max(widest, item.radius)
-  for (const obstacle of config.obstacles ?? []) widest = Math.max(widest, obstacle.radius)
+  for (const file of files) widest = Math.max(widest, file.radius)
+  const spacing = options.spacing ?? widest * 2 + gap
+  // The innermost ring clears both the directory node and the widest circle.
+  const base = options.innerRadius + widest + gap
+  /** Angle a circle of this radius takes up on a ring of that radius. */
+  const widthOf = (radius: number, ringRadius: number): number =>
+    2 * Math.asin(Math.min(1, (radius + gap * 0.5) / Math.max(1e-6, ringRadius)))
 
-  // A candidate only needs to look at the nine cells around it.
-  const cell = Math.max(0.5, widest * 2 + config.gap)
-  const cellKey = (x: number, y: number): string => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`
-  const grid = new Map<string, { x: number; y: number; radius: number }[]>()
-
-  const addObstacle = (circle: { x: number; y: number; radius: number }): void => {
-    const key = cellKey(circle.x, circle.y)
-    const bucket = grid.get(key)
-    if (bucket) bucket.push(circle)
-    else grid.set(key, [circle])
+  let index = 0
+  let ring = 1
+  while (index < files.length) {
+    // Gource starts the first ring at the directory and steps outwards by one
+    // file diameter; we start just outside the directory node so the folder ring
+    // itself stays visible.
+    const radius = base + (ring - 1) * spacing
+    const start = index
+    // Capacity of this ring: as many circles as fit around its circumference.
+    let arc = 0
+    while (index < files.length) {
+      const width = widthOf(files[index].radius, radius)
+      if (arc + width > Math.PI * 2 + 1e-9) break
+      arc += width
+      index += 1
+    }
+    if (index === start) {
+      // One circle too wide for this ring: it gets the ring to itself.
+      index += 1
+    }
+    const count = index - start
+    // Half-slot offset on even rings, like Gource's even distribution.
+    let cursor = ring % 2 === 0 ? Math.PI / count : 0
+    for (let slot = 0; slot < count; slot += 1) {
+      const file = files[start + slot]
+      const width = widthOf(file.radius, radius)
+      const angle = cursor + width * 0.5
+      positions[start + slot] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, ring }
+      cursor += width
+    }
+    ring += 1
   }
-  for (const obstacle of config.obstacles ?? []) addObstacle(obstacle)
+  return positions
+}
 
-  const collides = (x: number, y: number, radius: number): boolean => {
-    const cx = Math.floor(x / cell)
-    const cy = Math.floor(y / cell)
-    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
-      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
-        const bucket = grid.get(`${gx}:${gy}`)
-        if (!bucket) continue
-        for (const other of bucket) {
-          const dx = other.x - x
-          const dy = other.y - y
-          const minDistance = radius + other.radius + config.gap
-          if (dx * dx + dy * dy < minDistance * minDistance) return true
-        }
-      }
+export interface ForceNode {
+  id: number
+  /** -1 for the root. */
+  parent: number
+  children: number[]
+  /** Radius of the area this node's own files occupy (Gource's `parent_radius`). */
+  ownRadius: number
+  /** Radius of this node's whole subtree (Gource's `dir_radius`). */
+  dirRadius: number
+  /**
+   * Radius used to keep nodes apart. Defaults to `dirRadius` (Gource sizes the
+   * collision by the area of the subtree), but a caller can pass the actual
+   * extent of the node's own files, which is larger for tiny folders.
+   */
+  collisionRadius?: number
+  /** Same, for the area the node's own files occupy. Defaults to `ownRadius`. */
+  ownCollisionRadius?: number
+  x: number
+  y: number
+  visible: boolean
+}
+
+/**
+ * Deterministic pseudo-random offset for a path (Gource uses `vec2Hash`), used to
+ * give a brand new directory its starting position.
+ */
+export function hashOffset(path: string, scale = 4): { x: number; y: number } {
+  const angle = hashUnit(path, 41) * Math.PI * 2
+  const length = scale * (0.35 + hashUnit(path, 42) * 0.65)
+  return { x: Math.cos(angle) * length, y: Math.sin(angle) * length }
+}
+
+/**
+ * Relax directory positions with Gource's forces (dirnode.cpp
+ * `RDirNode::applyForces`):
+ *
+ *  1. gravity towards the ideal clearance from the parent,
+ *  2. a push along the parent's own direction, so children fan outwards,
+ *  3. repulsion from siblings, scaled by the parent's radius over its child
+ *     count — this is what spreads a folder's subfolders around it,
+ *  4. overlap resolution against every nearby directory.
+ *
+ * Gource resolves (4) with a spring that is much weaker than its gravity, so
+ * crowded parents end up with overlapping clusters. Here every step ends with a
+ * projection sweep instead: bodies that overlap are pushed apart by the smallest
+ * distance that clears them. The layout keeps Gource's look — folders fan out and
+ * settle at their ideal distance — but nothing ever overlaps.
+ *
+ * Positions are updated in place, and the result depends only on the tree shape
+ * and the radii, so the same history always relaxes to the same layout.
+ */
+export function relaxDirectories(
+  nodes: ForceNode[],
+  options: { steps?: number; dt?: number; gravity?: number; sweeps?: number; gap?: number } = {},
+): void {
+  const steps = options.steps ?? GOURCE.relaxSteps
+  const dt = options.dt ?? GOURCE.relaxDt
+  const gravity = options.gravity ?? GOURCE.gravity
+  const maxSweeps = options.sweeps ?? GOURCE.relaxSweeps
+  const gap = options.gap ?? 0
+  const byId = new Map<number, ForceNode>()
+  const collide = new Map<number, number>()
+  const ownCollide = new Map<number, number>()
+  let widest = 0
+  let radiusSum = 0
+  let counted = 0
+  for (const node of nodes) {
+    const collideRadius = node.collisionRadius ?? node.dirRadius
+    byId.set(node.id, node)
+    collide.set(node.id, collideRadius)
+    ownCollide.set(node.id, node.ownCollisionRadius ?? node.ownRadius)
+    if (!node.visible) continue
+    widest = Math.max(widest, collideRadius)
+    radiusSum += collideRadius
+    counted += 1
+  }
+  const median = counted > 0 ? radiusSum / counted : 1
+  // The grid is sized for the common node; a rare huge node scans more cells.
+  const cell = Math.max(1, median * 3)
+  const root = nodes.find((node) => node.parent < 0)
+  /**
+   * True when one of the two is an ancestor of the other. A node is allowed to
+   * sit inside the cluster of its ancestors (that is what keeps a deep tree
+   * compact); it only has to clear the ancestor's own files.
+   */
+  const related = (a: ForceNode, b: ForceNode): boolean => {
+    let current = a.parent
+    let guard = 0
+    while (current >= 0 && guard < 512) {
+      if (current === b.id) return true
+      const parent = byId.get(current)
+      if (!parent) return false
+      current = parent.parent
+      guard += 1
     }
     return false
   }
-
-  const remember = (index: number, x: number, y: number, radius: number): void => {
-    placements[index] = { x, y, radius }
-    addObstacle({ x, y, radius })
+  // Visible children per parent: the sibling force needs them every step.
+  const siblingList = new Map<number, ForceNode[]>()
+  for (const node of nodes) {
+    if (!node.visible) continue
+    const parent = byId.get(node.parent)
+    if (!parent) continue
+    const list = siblingList.get(node.parent)
+    if (list) list.push(node)
+    else siblingList.set(node.parent, [node])
   }
 
-  const GOLDEN = 2.399963229728653
-  // Radial step and the search bound both follow the item sizes, so the number
-  // of candidates stays proportional to the space that has to be explored.
-  const step = Math.max(0.45, config.gap * 1.2)
-  // The search has to reach past whatever is already there, otherwise a dense
-  // folder would keep falling back to positions outside the free space.
-  let occupiedReach = 0
-  for (const obstacle of config.obstacles ?? []) {
-    occupiedReach = Math.max(occupiedReach, Math.hypot(obstacle.x, obstacle.y) + obstacle.radius)
-  }
-  const denseRadius = Math.sqrt(items.length + 1) * (widest * 2 + config.gap) + config.minRadius
-  const searchLimit = Math.min(
-    config.maxRadius,
-    Math.max(config.minRadius + widest, denseRadius, occupiedReach + widest + config.gap),
-  )
+  for (let step = 0; step < steps; step += 1) {
+    for (const node of nodes) {
+      if (!node.visible || node.parent < 0) continue
+      const parent = byId.get(node.parent)
+      if (!parent) continue
+      const nodeRadius = collide.get(node.id) ?? node.dirRadius
+      const parentOwn = ownCollide.get(parent.id) ?? parent.ownRadius
+      let ax = 0
+      let ay = 0
 
-  for (let slot = 0; slot < order.length; slot += 1) {
-    const { item, index } = order[slot]
-    let placed = false
-    // Start where the last placement ended (dense folders) but never closer than
-    // the centre allows.
-    const start = Math.max(config.minRadius + item.radius, (config.startRadius ?? 0) - step * 2)
-    for (let radius = start; radius <= searchLimit; radius += step) {
-      const samples = Math.min(
-        12,
-        Math.max(6, Math.round((Math.PI * 2 * radius) / Math.max(0.5, (item.radius + config.gap) * 2.4))),
-      )
-      const phase = config.phase + slot * GOLDEN
-      for (let sample = 0; sample < samples; sample += 1) {
-        const angle = phase + (sample / samples) * Math.PI * 2
-        const x = Math.cos(angle) * radius
-        const y = Math.sin(angle) * radius
-        if (collides(x, y, item.radius)) continue
-        remember(index, x, y, radius)
-        placed = true
-        break
+      // 1. Gravity towards the ideal clearance from the parent.
+      let dx = parent.x - node.x
+      let dy = parent.y - node.y
+      let distance = Math.hypot(dx, dy)
+      if (distance < 1e-4) {
+        dx = 0
+        dy = -1
+        distance = 1e-4
       }
-      if (placed) break
-    }
-    if (!placed) {
-      // Very dense input: keep walking the spiral outwards until the circle fits,
-      // so the fallback can never stack two files on the same spot.
-      let radius = searchLimit + item.radius + config.gap
-      let angle = config.phase + slot * GOLDEN
-      let guard = 0
-      while (collides(Math.cos(angle) * radius, Math.sin(angle) * radius, item.radius) && guard < 512) {
-        radius += step
-        angle += GOLDEN * 0.5
-        guard += 1
-      }
-      remember(index, Math.cos(angle) * radius, Math.sin(angle) * radius, radius)
-    }
-  }
+      const clearance = distance - (nodeRadius + parentOwn)
+      ax += gravity * clearance * (dx / distance)
+      ay += gravity * clearance * (dy / distance)
 
-  return placements
-}
-
-/**
- * Indices of circles that overlap each other (used to decide whether an
- * incremental layout is still valid).
- */
-export function findOverlaps(circles: readonly DiscObstacle[], gap = 0): number[] {
-  const offenders: number[] = []
-  if (circles.length < 2) return offenders
-  let widest = 0
-  for (const circle of circles) widest = Math.max(widest, circle.radius)
-  const cell = Math.max(0.5, widest * 2 + gap)
-  const grid = new Map<string, number[]>()
-  for (let index = 0; index < circles.length; index += 1) {
-    const circle = circles[index]
-    const cx = Math.floor(circle.x / cell)
-    const cy = Math.floor(circle.y / cell)
-    for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
-      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
-        const bucket = grid.get(`${gx}:${gy}`)
-        if (!bucket) continue
-        for (const other of bucket) {
-          const dx = circles[other].x - circle.x
-          const dy = circles[other].y - circle.y
-          const minDistance = circle.radius + circles[other].radius + gap
-          if (dx * dx + dy * dy < minDistance * minDistance) {
-            if (!offenders.includes(index)) offenders.push(index)
-            if (!offenders.includes(other)) offenders.push(other)
-          }
+      // 2. Push along the parent's own direction so children sit outside it.
+      const grandparent = parent.parent >= 0 ? byId.get(parent.parent) : undefined
+      if (grandparent) {
+        let ex = parent.x - grandparent.x
+        let ey = parent.y - grandparent.y
+        const edge = Math.hypot(ex, ey)
+        if (edge > 1e-4) {
+          ex /= edge
+          ey /= edge
+          // Gource: parent->getRadius() + getRadius(), i.e. the subtree radii.
+          const target = parent.dirRadius + node.dirRadius
+          ax += parent.x + target * ex - node.x
+          ay += parent.y + target * ey - node.y
         }
       }
-    }
-    const key = `${cx}:${cy}`
-    const bucket = grid.get(key)
-    if (bucket) bucket.push(index)
-    else grid.set(key, [index])
-  }
-  return offenders
-}
 
-export interface OverlapNode {
-  id: number
-  x: number
-  y: number
-  radius: number
-}
-
-export interface OverlapOptions {
-  /** Free space to keep between circles. */
-  gap: number
-  /** How many resolution passes to run. */
-  iterations: number
-  /** A node is only pushed outwards, never inwards. */
-  maxPush?: number
-}
-
-/**
- * Push overlapping circles apart, radially outwards.
- *
- * The packing reserves a *capped* amount of room for a folder (reserving its
- * whole subtree makes deep trees explode), so a folder's far tail can end up
- * overlapping a neighbour. This pass fixes exactly those cases: it finds the
- * overlapping pairs with a spatial hash and pushes the offending circle away
- * from the origin by the smallest distance that clears the overlap, leaving
- * everything else untouched. A few passes are enough because each push only
- * moves a circle outward into free space.
- */
-export function resolveOverlaps(nodes: OverlapNode[], options: Partial<OverlapOptions> = {}): Set<number> {
-  const config: OverlapOptions = { gap: LAYOUT.fileGap, iterations: 3, ...options }
-  const moved = new Set<number>()
-  if (nodes.length < 2) return moved
-
-  let widest = 0
-  for (const node of nodes) widest = Math.max(widest, node.radius)
-  const cell = Math.max(0.5, widest * 2 + config.gap)
-
-  for (let pass = 0; pass < config.iterations; pass += 1) {
-    const grid = new Map<string, number[]>()
-    let anyOverlap = false
-    for (let index = 0; index < nodes.length; index += 1) {
-      const node = nodes[index]
-      const cx = Math.floor(node.x / cell)
-      const cy = Math.floor(node.y / cell)
-      let push = 0
-      for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
-        for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
-          const bucket = grid.get(`${gx}:${gy}`)
-          if (!bucket) continue
-          for (const other of bucket) {
-            const peer = nodes[other]
-            const dx = peer.x - node.x
-            const dy = peer.y - node.y
-            const distance = Math.hypot(dx, dy)
-            const needed = node.radius + peer.radius + config.gap - distance
-            if (needed > push) push = needed
-          }
+      // 3. Siblings: spread around the parent, scaled by its radius.
+      const siblings = siblingList.get(node.parent)
+      if (siblings && siblings.length > 1) {
+        let sx = 0
+        let sy = 0
+        for (const sibling of siblings) {
+          if (sibling.id === node.id) continue
+          const ddx = sibling.x - node.x
+          const ddy = sibling.y - node.y
+          const length = Math.hypot(ddx, ddy)
+          if (length < 1e-4) continue
+          sx -= ddx / length
+          sy -= ddy / length
         }
+        const slice = (parent.dirRadius * Math.PI) / (siblings.length + 1)
+        ax += sx * slice
+        ay += sy * slice
       }
-      if (push > 0) {
-        // Move directly away from the circle that is crowding this node: that
-        // resolves the pair with the smallest movement. (Pushing radially
-        // outwards would walk into whatever sits further out on the same ray.)
-        let ux = 0
-        let uy = 0
-        for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
-          for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
-            const bucket = grid.get(`${gx}:${gy}`)
+
+      node.x += ax * dt
+      node.y += ay * dt
+    }
+
+    if (root) {
+      root.x = 0
+      root.y = 0
+    }
+  }
+
+  // 4. Projection: separate whatever still overlaps. Gource resolves overlaps
+  // with a spring that is far weaker than its gravity, so crowded parents keep
+  // overlapping clusters; projecting instead makes the layout collision free
+  // while the forces above still decide where folders want to sit.
+  if (maxSweeps > 0) {
+    const grid = new Map<number, ForceNode[]>()
+    const key = (gx: number, gy: number): number => (gx + 8192) * 16384 + (gy + 8192)
+    for (let sweep = 0; sweep < maxSweeps; sweep += 1) {
+      grid.clear()
+      for (const node of nodes) {
+        if (!node.visible || node.parent < 0) continue
+        const k = key(Math.floor(node.x / cell), Math.floor(node.y / cell))
+        const bucket = grid.get(k)
+        if (bucket) bucket.push(node)
+        else grid.set(k, [node])
+      }
+      let resolved = 0
+      for (const node of nodes) {
+        if (!node.visible || node.parent < 0) continue
+        const nodeRadius = collide.get(node.id) ?? node.dirRadius
+        const cx = Math.floor(node.x / cell)
+        const cy = Math.floor(node.y / cell)
+        const range = 1 + Math.floor((nodeRadius + widest) / cell)
+        for (let gx = cx - range; gx <= cx + range; gx += 1) {
+          for (let gy = cy - range; gy <= cy + range; gy += 1) {
+            // Each pair is handled once: only the cells at or after the node's own.
+            if (gy < cy || (gy === cy && gx < cx)) continue
+            const bucket = grid.get(key(gx, gy))
             if (!bucket) continue
             for (const other of bucket) {
-              const peer = nodes[other]
-              const dx = node.x - peer.x
-              const dy = node.y - peer.y
-              const distance = Math.hypot(dx, dy)
-              const needed = node.radius + peer.radius + config.gap - distance
-              if (needed <= 0) continue
-              if (distance > 0.001) {
-                ux += (dx / distance) * needed
-                uy += (dy / distance) * needed
-              } else {
-                const angle = (node.id * 2.399963229728653) % (Math.PI * 2)
-                ux += Math.cos(angle) * needed
-                uy += Math.sin(angle) * needed
+              // Each pair is handled once: cells before the node's own are
+              // skipped, and inside the node's own cell only higher ids are.
+              if (other.id === node.id) continue
+              if (gx === cx && gy === cy && other.id < node.id) continue
+              let ox = other.x - node.x
+              let oy = other.y - node.y
+              let length = Math.hypot(ox, oy)
+              const otherRadius = collide.get(other.id) ?? other.dirRadius
+              let sum = nodeRadius + otherRadius + gap
+              if (length < sum) {
+                // Ancestor and descendant only have to clear the ancestor's own
+                // files; every other pair clears full clusters.
+                if (related(node, other)) sum = nodeRadius + (ownCollide.get(other.id) ?? other.ownRadius) + gap
+                else if (related(other, node)) sum = (ownCollide.get(node.id) ?? node.ownRadius) + otherRadius + gap
               }
+              if (length >= sum) continue
+              if (length >= sum) continue
+              if (length < 1e-4) {
+                // Coincident bodies: push them apart deterministically.
+                const angle = hashUnit(String(node.id), 7) * Math.PI * 2
+                ox = Math.cos(angle)
+                oy = Math.sin(angle)
+                length = 1e-4
+              }
+              const push = (sum - length) * 0.5
+              const ux = (ox / length) * push
+              const uy = (oy / length) * push
+              node.x -= ux
+              node.y -= uy
+              other.x += ux
+              other.y += uy
+              resolved += 1
             }
           }
         }
-        const magnitude = Math.hypot(ux, uy)
-        const step = Math.min(push + 0.02, config.maxPush ?? Number.POSITIVE_INFINITY)
-        if (magnitude > 0.001) {
-          node.x += (ux / magnitude) * step
-          node.y += (uy / magnitude) * step
-        } else {
-          const angle = (node.id * 2.399963229728653) % (Math.PI * 2)
-          node.x += Math.cos(angle) * step
-          node.y += Math.sin(angle) * step
-        }
-        moved.add(node.id)
-        anyOverlap = true
       }
-      const key = `${cx}:${cy}`
-      const bucket = grid.get(key)
-      if (bucket) bucket.push(index)
-      else grid.set(key, [index])
+      if (root) {
+        root.x = 0
+        root.y = 0
+      }
+      if (resolved === 0) break
     }
-    if (!anyOverlap) break
   }
-  return moved
 }
 
-/** Extent (max distance from the centre) of a set of placements. */
-export function ringExtent(placements: readonly RingPlacement[]): number {
-  let extent = 0
-  for (const placement of placements) extent = Math.max(extent, Math.hypot(placement.x, placement.y))
-  return extent
-}
-
-/**
- * Split a path into its parent directory path and file name.
- * `''` means the repository root.
- */
 export function splitPath(path: string): { parent: string; name: string } {
   const index = path.lastIndexOf('/')
   if (index === -1) return { parent: '', name: path }
