@@ -58,6 +58,18 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   beamWidth: 3.2,
 }
 
+/**
+ * Depth stack of the flat scene (the camera looks down the -Z axis, so a larger
+ * z is closer to the viewer):
+ *
+ *   background -6 · grid -5 · branches 0 · nodes +0.25 · effects +0.5
+ *
+ * The grid is a transparent overlay, so it is drawn after the opaque circles;
+ * depth testing (not the render order) is what keeps it behind the tree.
+ */
+export const BACKGROUND_Z = -6
+export const GRID_Z = -5
+
 const MAX_PARTICLES = 9000
 const MAX_LABELS = 120
 const MAX_AUTHORS = 72
@@ -192,13 +204,21 @@ export class SceneRenderer {
     return mesh
   }
 
-  /** Grid that follows the camera so panning and zooming stay readable. */
+  /**
+   * Grid that follows the camera so panning and zooming stay readable.
+   *
+   * It is a transparent overlay (the lines fade out), which means it is drawn in
+   * the transparent pass *after* the opaque node circles. Depth testing is what
+   * keeps it behind them: the circles are nearer to the camera and already wrote
+   * depth, so the grid is rejected wherever a circle covers it. Without the
+   * depth test the grid would be painted over the tree.
+   */
   private createGrid(): THREE.Mesh {
     const geometry = new THREE.PlaneGeometry(1, 1)
     const material = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       fog: false,
       uniforms: {
         uColor: { value: GRID_COLOR },
@@ -353,13 +373,15 @@ export class SceneRenderer {
     this.edges.update(simTime, nodes)
     this.particles.update(dt)
 
-    // Keep the background and grid covering the visible area.
+    // Keep the background and grid covering the visible area. Depth stack (the
+    // camera looks down -Z): grid behind the branches (-0.2), nodes in front of
+    // them (0.25), effects in front of that (0.5).
     const viewHeight = camera.viewHeight
     const viewWidth = viewHeight * (this.size.width / this.size.height)
     this.background.scale.set(viewWidth, viewHeight, 1)
-    this.background.position.set(camera.center2D.x, camera.center2D.y, -5)
+    this.background.position.set(camera.center2D.x, camera.center2D.y, BACKGROUND_Z)
     this.grid.scale.set(viewWidth, viewHeight, 1)
-    this.grid.position.set(camera.center2D.x, camera.center2D.y, -4)
+    this.grid.position.set(camera.center2D.x, camera.center2D.y, GRID_Z)
 
     const authors = [...sim.authors]
     const worldPerPixel = camera.worldPerPixel(this.size.height)

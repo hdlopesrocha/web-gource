@@ -351,6 +351,16 @@ describe('palette', () => {
   })
 })
 
+describe('background layers', () => {
+  it('keeps the grid behind the tree', async () => {
+    const { GRID_Z, BACKGROUND_Z } = await import('../src/render/renderer')
+    // The grid sits behind the branches (z = 0) and the nodes (+0.25), in front
+    // of the backdrop.
+    expect(GRID_Z).toBeLessThan(0)
+    expect(BACKGROUND_Z).toBeLessThan(GRID_Z)
+  })
+})
+
 describe('layer ordering', () => {
   it('draws branches behind the circles and effects above them', () => {
     const edges = new EdgeField(4)

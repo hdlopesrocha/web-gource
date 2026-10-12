@@ -201,8 +201,11 @@ Given the same history and settings, the same sequence of events is produced:
   commit touching twenty files still costs a single draw call.
 * Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
   dense repositories stay readable. File labels can include the host-reported size.
-* A camera-following background gradient and grid keep panning and zooming readable, and the
-  minimap shows the whole tree with the current view position.
+* A camera-following background gradient and grid keep panning and zooming readable. The grid is a
+  transparent overlay, so depth testing (not the draw order) is what keeps it behind the tree: the
+  circles write depth first and the grid is rejected wherever they cover it. The depth stack is
+  explicit — background −6, grid −5, branches 0, circles +0.25, effects +0.5. The minimap shows the
+  whole tree with the current view position.
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
 
