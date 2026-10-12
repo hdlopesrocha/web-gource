@@ -6,6 +6,8 @@ import { RESOLUTION_PRESETS } from '../engine/recorder'
 import { formatDuration } from '../timeline/schedule'
 import { formatBytes } from '../util/format'
 import { fileRadiusForActivity, fileRadiusForBytes } from '../sim/simulation'
+import { EXPORT_FPS } from '../engine/export/frames'
+import { formatBytes as formatExportBytes } from '../engine/recorder'
 import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
@@ -19,6 +21,43 @@ function onTokenSaved(providerId: string | null): void {
     : 'Token stored.'
 }
 const support = computed(() => controller.recordingSupport())
+const exportSupport = computed(() => controller.exportSupport())
+const exportState = computed(() => store.export)
+const exportProgress = computed(() => store.export.progress)
+/** Deterministic frame-by-frame render (default) or a live real-time capture. */
+const exportMode = ref<'render' | 'live'>('render')
+const EXPORT_FPS_LABEL = EXPORT_FPS
+
+const exportCodecs = computed(() => {
+  void exportState.value.probed
+  return exportState.value.codecs
+})
+
+const selectedExportCodec = computed(() => store.export.container)
+const exportResolution = computed(() => `${store.recording.width}x${store.recording.height}`)
+
+/** Frames the animation will produce at 30 fps, end inclusive. */
+const exportFramesEstimate = computed(() => Math.max(1, Math.floor(controller.duration() * EXPORT_FPS) + 1))
+
+const exportBitrateLabel = computed(() => {
+  const value = store.export.bitrate
+  if (value <= 0) return 'automatic'
+  return `${(value / 1e6).toFixed(1)} Mbps`
+})
+
+function updateExport(patch: Partial<typeof store.export>): void {
+  Object.assign(store.export, patch)
+}
+
+function setExportResolution(value: string): void {
+  setResolution(value)
+  // Encoder support depends on the resolution, so re-probe.
+  void controller.refreshExportSupport()
+}
+
+function setExportCodec(value: string): void {
+  store.export.container = value === 'mp4' ? 'mp4' : 'webm'
+}
 const recording = computed(() => store.recording)
 const settings = computed(() => store.settings)
 const progress = computed(() => store.recording.progress)
@@ -102,6 +141,9 @@ function setResolution(value: string): void {
 }
 
 onMounted(() => {
+  // Probe the WebCodecs encoders once so the export panel can be honest about
+  // what this browser can produce.
+  void controller.refreshExportSupport()
   const supported = support.value.formats.filter((format) => format.supported)
   if (supported.length > 0 && !supported.some((format) => format.mimeType === recording.value.mimeType)) {
     updateRecording({ mimeType: supported[0].mimeType })
@@ -303,74 +345,176 @@ onMounted(() => {
       <template v-else-if="tab === 'recording'">
         <section class="group">
           <h3>Video export</h3>
-          <p v-if="!support.supported" class="warn-box">
-            This browser cannot record canvas video. Try a desktop version of Chrome, Edge or Firefox.
-          </p>
-          <template v-else>
-            <div class="field">
-              <label for="format">Format</label>
-              <select id="format" v-model="selectedFormat">
-                <option v-for="format in support.formats" :key="format.mimeType" :value="format.mimeType" :disabled="!format.supported">
-                  {{ format.label }}{{ format.supported ? '' : ' — unsupported' }}
-                </option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="resolution">Resolution</label>
-              <select id="resolution" :value="`${recording.width}x${recording.height}`" @change="setResolution(($event.target as HTMLSelectElement).value)">
-                <option v-for="preset in RESOLUTION_PRESETS" :key="preset.label" :value="`${preset.width}x${preset.height}`">
-                  {{ preset.label }}
-                </option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Frame rate · {{ recording.fps }} fps</label>
-              <input type="range" min="15" max="60" step="1" :value="recording.fps" @input="updateRecording({ fps: Number(($event.target as HTMLInputElement).value) })" />
-            </div>
-            <div class="field">
-              <label>Playback speed while recording · {{ recording.speed }}×</label>
-              <input type="range" min="0.25" max="16" step="0.25" :value="recording.speed" @input="updateRecording({ speed: Number(($event.target as HTMLInputElement).value) })" />
-            </div>
-            <label class="switch"><input type="checkbox" :checked="recording.stopAtEnd" @change="updateRecording({ stopAtEnd: ($event.target as HTMLInputElement).checked })" /> Stop at the end of the timeline</label>
-            <div class="field">
-              <label>Safety limit · {{ Math.round(recording.maxWallSeconds / 60) }} min</label>
-              <input type="range" min="60" max="3600" step="30" :value="recording.maxWallSeconds" @input="updateRecording({ maxWallSeconds: Number(($event.target as HTMLInputElement).value) })" />
-            </div>
+          <div class="mode-row">
+            <button class="btn small" :class="{ active: exportMode === 'render' }" type="button" @click="exportMode = 'render'">
+              Deterministic render
+            </button>
+            <button class="btn small" :class="{ active: exportMode === 'live' }" type="button" @click="exportMode = 'live'">
+              Live capture
+            </button>
+          </div>
 
-            <p class="faint note">
-              Recording restarts the timeline at the beginning, advances by exactly one frame step per captured frame,
-              and renders at the chosen resolution. At {{ recording.speed }}× the whole timeline needs about
-              {{ formatDuration(estimatedDuration) }} of real time ({{ formatDuration(controller.duration()) }} simulated).
+          <template v-if="exportMode === 'render'">
+            <p v-if="!exportSupport.supported" class="warn-box">
+              This browser cannot encode video frame by frame (WebCodecs is unavailable). Try desktop Chrome, Edge or
+              Safari 16.4+.
             </p>
-
-            <div class="record-row">
-              <button v-if="!recording.active" class="btn primary" type="button" :disabled="!support.supported" @click="controller.startRecording()">
-                ● Start recording
-              </button>
-              <button v-else class="btn danger" type="button" @click="controller.stopRecording()">■ Stop</button>
-              <button v-if="recording.active" class="btn small" type="button" @click="controller.cancelRecording()">Discard</button>
-            </div>
-
-            <div v-if="recording.active && progress" class="progress">
-              <div class="bar"><div class="bar-fill" :style="{ width: `${progress.percent}%` }" /></div>
-              <span class="faint mono">
-                {{ progress.percent.toFixed(0) }}% · {{ progress.frames }} frames · {{ progress.elapsed.toFixed(0) }}s ·
-                {{ formatBytes(progress.bytes) }}
-              </span>
-            </div>
-
-            <p v-if="recording.error" class="warn-box">{{ recording.error }}</p>
-
-            <div v-if="recording.lastUrl" class="result">
-              <video :src="recording.lastUrl" controls playsinline class="preview" />
-              <div class="row">
-                <span class="faint mono">
-                  {{ recording.lastExtension.toUpperCase() }} · {{ formatBytes(recording.lastBytes) }} ·
-                  {{ recording.lastFrames }} frames · {{ formatDuration(recording.lastSeconds) }} simulated
+            <template v-else>
+              <div class="field">
+                <label for="export-format">Format</label>
+                <select id="export-format" :value="selectedExportCodec" @change="setExportCodec(($event.target as HTMLSelectElement).value)">
+                  <option value="webm">
+                    WebM · VP9 (default){{ exportCodecs.some((codec) => codec.container === 'webm') ? '' : ' — unavailable' }}
+                  </option>
+                  <option value="mp4">
+                    MP4 · H.264 (optional){{ exportCodecs.some((codec) => codec.container === 'mp4') ? '' : ' — unavailable' }}
+                  </option>
+                </select>
+                <span v-if="exportCodecs.length" class="faint hint">
+                  <span v-for="codec in exportCodecs" :key="codec.codec" class="chip">
+                    {{ codec.label }}<span v-if="codec.hardware"> · hardware</span>
+                  </span>
                 </span>
-                <button class="btn small primary" type="button" @click="controller.downloadRecording()">Download</button>
+                <span v-else-if="exportState.probed" class="faint hint">No encoder found for this resolution.</span>
               </div>
-            </div>
+              <div class="field">
+                <label for="export-resolution">Resolution</label>
+                <select id="export-resolution" :value="exportResolution" @change="setExportResolution(($event.target as HTMLSelectElement).value)">
+                  <option v-for="preset in RESOLUTION_PRESETS" :key="preset.label" :value="`${preset.width}x${preset.height}`">
+                    {{ preset.label }}
+                  </option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Frame rate · {{ EXPORT_FPS_LABEL }} fps (fixed)</label>
+                <span class="faint hint">
+                  Exactly {{ EXPORT_FPS_LABEL }} frames per simulated second, from t = 0 to the end of the animation:
+                  {{ exportFramesEstimate.toLocaleString() }} frames for {{ formatDuration(controller.duration()) }}.
+                </span>
+              </div>
+              <div class="field">
+                <label>Quality · {{ exportBitrateLabel }}</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="20000000"
+                  step="500000"
+                  :value="store.export.bitrate"
+                  @input="updateExport({ bitrate: Number(($event.target as HTMLInputElement).value) })"
+                />
+                <span class="faint hint">Slide to the far left to derive the bitrate from the resolution.</span>
+              </div>
+
+              <p class="faint note">
+                The render is frame-driven, not clock-driven: the simulation advances by exactly 1/30 s per frame and
+                every frame is encoded as soon as it is drawn, so the result does not depend on how fast this machine
+                is. Frames are never buffered — only the compressed stream is kept.
+              </p>
+
+              <div class="record-row">
+                <button v-if="!exportState.active" class="btn primary" type="button" :disabled="!exportSupport.supported" @click="controller.startExport()">
+                  ▶ Render animation
+                </button>
+                <button v-else class="btn danger" type="button" @click="controller.cancelExport()">■ Cancel</button>
+              </div>
+
+              <div v-if="exportState.active && exportProgress" class="progress">
+                <div class="bar"><div class="bar-fill" :style="{ width: `${exportProgress.percent}%` }" /></div>
+                <span class="faint mono">
+                  {{ exportProgress.percent.toFixed(0) }}% · {{ exportProgress.frames.toLocaleString() }} /
+                  {{ exportProgress.totalFrames.toLocaleString() }} frames · t =
+                  {{ exportProgress.simTime.toFixed(2) }}s / {{ exportProgress.duration.toFixed(2) }}s ·
+                  {{ formatExportBytes(exportProgress.bytes) }}
+                </span>
+              </div>
+
+              <p v-if="exportState.error" class="warn-box">{{ exportState.error }}</p>
+
+              <div v-if="exportState.lastUrl" class="result">
+                <video :src="exportState.lastUrl" controls playsinline class="preview" />
+                <div class="row">
+                  <span class="faint mono">
+                    {{ exportState.lastLabel }} · {{ formatExportBytes(exportState.lastBytes) }} ·
+                    {{ exportState.lastFrames.toLocaleString() }} frames ·
+                    {{ formatDuration(exportState.lastSeconds) }} simulated ·
+                    {{ formatDuration(exportState.lastElapsed) }} to render
+                  </span>
+                  <button class="btn small primary" type="button" @click="controller.downloadExport()">Download</button>
+                </div>
+              </div>
+            </template>
+          </template>
+
+          <template v-else>
+            <p v-if="!support.supported" class="warn-box">
+              This browser cannot record canvas video. Try a desktop version of Chrome, Edge or Firefox.
+            </p>
+            <template v-else>
+              <div class="field">
+                <label for="format">Format</label>
+                <select id="format" v-model="selectedFormat">
+                  <option v-for="format in support.formats" :key="format.mimeType" :value="format.mimeType" :disabled="!format.supported">
+                    {{ format.label }}{{ format.supported ? '' : ' — unsupported' }}
+                  </option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="resolution">Resolution</label>
+                <select id="resolution" :value="`${recording.width}x${recording.height}`" @change="setResolution(($event.target as HTMLSelectElement).value)">
+                  <option v-for="preset in RESOLUTION_PRESETS" :key="preset.label" :value="`${preset.width}x${preset.height}`">
+                    {{ preset.label }}
+                  </option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Frame rate · {{ recording.fps }} fps</label>
+                <input type="range" min="15" max="60" step="1" :value="recording.fps" @input="updateRecording({ fps: Number(($event.target as HTMLInputElement).value) })" />
+              </div>
+              <div class="field">
+                <label>Playback speed while recording · {{ recording.speed }}×</label>
+                <input type="range" min="0.25" max="16" step="0.25" :value="recording.speed" @input="updateRecording({ speed: Number(($event.target as HTMLInputElement).value) })" />
+              </div>
+              <label class="switch"><input type="checkbox" :checked="recording.stopAtEnd" @change="updateRecording({ stopAtEnd: ($event.target as HTMLInputElement).checked })" /> Stop at the end of the timeline</label>
+              <div class="field">
+                <label>Safety limit · {{ Math.round(recording.maxWallSeconds / 60) }} min</label>
+                <input type="range" min="60" max="3600" step="30" :value="recording.maxWallSeconds" @input="updateRecording({ maxWallSeconds: Number(($event.target as HTMLInputElement).value) })" />
+              </div>
+
+              <p class="faint note">
+                Live capture restarts the timeline and samples the canvas in real time: it can capture manual panning and
+                zooming, but the wall clock decides how many frames make it into the file. Use the deterministic render
+                above when the result has to be reproducible.
+              </p>
+
+              <div class="record-row">
+                <button v-if="!recording.active" class="btn primary" type="button" :disabled="!support.supported" @click="controller.startRecording()">
+                  ● Start recording
+                </button>
+                <button v-else class="btn danger" type="button" @click="controller.stopRecording()">■ Stop</button>
+                <button v-if="recording.active" class="btn small" type="button" @click="controller.cancelRecording()">Discard</button>
+              </div>
+
+              <div v-if="recording.active && progress" class="progress">
+                <div class="bar"><div class="bar-fill" :style="{ width: `${progress.percent}%` }" /></div>
+                <span class="faint mono">
+                  {{ progress.percent.toFixed(0) }}% · {{ progress.frames }} frames · {{ progress.elapsed.toFixed(0) }}s ·
+                  {{ formatBytes(progress.bytes) }}
+                </span>
+              </div>
+
+              <p v-if="recording.error" class="warn-box">{{ recording.error }}</p>
+
+              <div v-if="recording.lastUrl" class="result">
+                <video :src="recording.lastUrl" controls playsinline class="preview" />
+                <div class="row">
+                  <span class="faint mono">
+                    {{ recording.lastExtension.toUpperCase() }} · {{ formatBytes(recording.lastBytes) }} ·
+                    {{ recording.lastFrames }} frames · {{ formatDuration(recording.lastSeconds) }} simulated
+                  </span>
+                  <button class="btn small primary" type="button" @click="controller.downloadRecording()">Download</button>
+                </div>
+              </div>
+            </template>
           </template>
         </section>
       </template>
@@ -508,6 +652,17 @@ onMounted(() => {
   border: 1px solid rgba(255, 200, 87, 0.32);
   color: #ffe6b3;
   margin: 0;
+}
+
+.mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.mode-row .btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .record-row {

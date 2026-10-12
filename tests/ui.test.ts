@@ -394,10 +394,37 @@ describe('panels', () => {
       supported: false,
       formats: [{ mimeType: 'video/webm', label: 'WebM', extension: 'webm', supported: false }],
     })
+    const exportSupport = vi.spyOn(controller, 'exportSupport').mockReturnValue({ supported: false, codecs: [] })
     const wrapper = mount(SettingsPanel)
     await wrapper.findAll('.tabs button')[2].trigger('click')
+    // The deterministic render is the default mode and says what is missing.
+    expect(wrapper.text()).toContain('cannot encode video frame by frame')
+    // Live capture keeps its own message.
+    await wrapper.findAll('.mode-row button')[1].trigger('click')
     expect(wrapper.text()).toContain('cannot record canvas video')
     support.mockRestore()
+    exportSupport.mockRestore()
+  })
+
+  it('offers a deterministic 30 fps render with WebM by default', async () => {
+    const exportSupport = vi.spyOn(controller, 'exportSupport').mockReturnValue({
+      supported: true,
+      codecs: [
+        { container: 'webm', label: 'WebM · VP9', codec: 'vp09.00.10.08', supported: true, hardware: false },
+        { container: 'mp4', label: 'MP4 · H.264', codec: 'avc1.420028', supported: true, hardware: true },
+      ],
+    })
+    const wrapper = mount(SettingsPanel)
+    await wrapper.findAll('.tabs button')[2].trigger('click')
+    const text = wrapper.text()
+    // Frame rate is fixed, the end time is stated, and the format defaults to WebM.
+    expect(text).toContain('30 fps (fixed)')
+    expect(text).toContain('WebM · VP9 (default)')
+    expect(text).toContain('MP4 · H.264 (optional)')
+    expect(text).toContain('Render animation')
+    const format = wrapper.find('#export-format').element as HTMLSelectElement
+    expect(format.value).toBe('webm')
+    exportSupport.mockRestore()
   })
 
   it('help overlay documents shortcuts and limitations', () => {
