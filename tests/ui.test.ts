@@ -440,10 +440,14 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('Loaded data')
   })
 
-  it('authors panel points at the folder filters', () => {
+  it('authors panel keeps to authors and dates', () => {
     const wrapper = mount(AuthorsPanel)
-    expect(wrapper.text()).toContain('Settings → Filters')
+    // No folder-filter UI and no pointer to it: those live in Settings → Filters.
     expect(wrapper.find('input[list="ignored-folder-suggestions"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Open folder filters')
+    expect(wrapper.text()).not.toContain('Folder filters')
+    expect(wrapper.text()).toContain('Show commits between')
+    expect(wrapper.text()).toContain('Clear every filter')
   })
 
   it('settings panel reports when recording is unsupported', async () => {

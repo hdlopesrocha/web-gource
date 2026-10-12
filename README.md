@@ -145,7 +145,7 @@ trees. A rename that moves a file *out* of an ignored folder is kept as an addit
 path is not part of the visualization. The list is stored locally and survives a reload;
 **Clear every filter** (in Settings → Filters or the Authors panel) empties it along with the hidden-folder
 toggle, the author and the date filters. Per-author toggles and the date range stay in the Authors panel
-(`A`), which links to the folder filters.
+(`A`); the folder filters live in Settings → Filters.
 
 ### Personal access tokens
 

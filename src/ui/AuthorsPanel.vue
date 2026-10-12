@@ -74,12 +74,6 @@ function showAll(): void {
         </div>
         <span class="faint hint">Repository history spans {{ rangeLimits.min }} → {{ rangeLimits.max }}</span>
       </div>
-      <div class="field">
-        <span class="faint hint">
-          Folder filters — hidden folders and ignored folders — moved to Settings → Filters.
-        </span>
-        <button class="btn small" type="button" @click="store.ui.settingsOpen = true">Open folder filters</button>
-      </div>
       <div class="row">
         <input v-model="search" type="text" placeholder="Filter authors…" />
         <button class="btn small" type="button" @click="showAll">Show all</button>
