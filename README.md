@@ -185,6 +185,8 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Rendering
 
+![Files rendered as Gource's lit balls inside a folder's bloom halo](docs/screenshot-glow.png)
+
 * Files and directories are two `InstancedMesh` objects — Gource's lit ball sprite for files, rings
   for directories — viewed through an orthographic camera, with per-instance colour and matrix
   updates only for changed nodes. Layer order: branches (behind), circles, folder glow, activity
