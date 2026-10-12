@@ -43,11 +43,21 @@ export const LAYOUT = {
   /** Additional distance per level of depth. */
   distancePerDepth: 2.4,
   /** Innermost radius of the ring that holds a directory's files. */
-  fileRingRadius: 2.7,
+  fileRingRadius: 2.2,
+  /** Innermost radius of the ring that holds a directory's subdirectories. */
+  dirRingRadius: 6,
+  /** Free space kept between neighbouring directory clusters. */
+  clusterGap: 1.2,
+  /**
+   * A directory ring is closed beyond this radius and a new one started. Kept
+   * generous: cluster sizes dominate the radius anyway, and closing rings early
+   * would push folders into a long spiral instead of one ring.
+   */
+  maxDirRingRadius: 60,
   /** Gap kept between neighbouring file circles. */
-  fileGap: 0.55,
+  fileGap: 0.4,
   /** A ring is closed and a new one started beyond this radius. */
-  maxRingRadius: 7.5,
+  maxRingRadius: 5,
   /** Hard cap on concentric rings per directory. */
   maxRings: 5,
   /** How fast nodes ease towards a new layout position (per second). */
@@ -57,9 +67,13 @@ export const LAYOUT = {
   fileRadius: 0.34,
   /** Root node scale multiplier. */
   rootRadius: 1.1,
-  /** Smallest and largest file circle radii after size scaling. */
-  minFileRadius: 0.14,
-  maxFileRadius: 1.5,
+  /**
+   * Smallest and largest file circle radii after size scaling. Kept compact so a
+   * folder's cluster stays dense: ring packing is space hungry, and clusters are
+   * what separate folders from each other.
+   */
+  minFileRadius: 0.1,
+  maxFileRadius: 1.0,
 }
 
 export function depthOfPath(path: string): number {
@@ -165,36 +179,46 @@ export function placeOnRings(
   if (sorted.length === 0) return placements
 
   let ring: RingItem[] = []
-  let innerRadius = config.minRadius
+  /**
+   * Radius from the centre where the *circles* of the next ring may start.
+   * Kept as a clear radius (not a centre radius) so the rings cannot overlap
+   * each other either.
+   */
+  let clearRadius = config.minRadius
   let ringIndex = 0
 
-  /**
-   * Radius needed to hold `entries` on a single ring without touching.
-   *
-   * Two constraints: the total arc length must fit (packing by circumference)
-   * and neighbouring circles must not touch, which depends on the *chord*
-   * between adjacent slots rather than the arc.
-   */
-  const radiusFor = (entries: readonly RingItem[], inner: number): number => {
+  /** Centre radius a ring needs for `entries`, given where its circles may start. */
+  const radiusFor = (entries: readonly RingItem[], clear: number): number => {
     let demand = 0
     let widest = 0
     for (const entry of entries) {
       demand += entry.radius * 2 + config.gap
       widest = Math.max(widest, entry.radius)
     }
-    const arcRadius = demand / (2 * Math.PI)
-    if (entries.length < 2) return Math.max(inner, arcRadius)
-    const chordRadius = ((widest * 2 + config.gap) / (2 * Math.sin(Math.PI / entries.length))) * 1.05
-    return Math.max(inner, arcRadius, chordRadius)
+    // The ring's circles may not reach inside `clear`.
+    const packing = Math.max(clear + widest, demand / (2 * Math.PI))
+    if (entries.length < 2) return packing
+    // Neighbouring circles on the same ring must not touch either. That depends
+    // on the chord between *adjacent* slots, so use the widest adjacent pair
+    // rather than assuming every neighbour is as big as the largest item.
+    let widestPair = 0
+    for (let index = 0; index < entries.length; index += 1) {
+      const next = entries[(index + 1) % entries.length]
+      widestPair = Math.max(widestPair, entries[index].radius + next.radius)
+    }
+    const chord = ((widestPair + config.gap) / (2 * Math.sin(Math.PI / entries.length))) * 1.05
+    return Math.max(packing, chord)
   }
 
   const flush = (): void => {
     if (ring.length === 0) return
-    const radius = radiusFor(ring, innerRadius)
+    const radius = radiusFor(ring, clearRadius)
     const step = (Math.PI * 2) / ring.length
     // A per-ring phase offset keeps the layout from looking mechanical without
     // breaking the even spacing the packing math relies on.
     const phase = (hashUnit(ring[0].key, 23) - 0.5) * step
+    let widest = 0
+    for (const item of ring) widest = Math.max(widest, item.radius)
     for (let index = 0; index < ring.length; index += 1) {
       const angle = config.startAngle + phase + index * step
       placements.push({
@@ -204,10 +228,8 @@ export function placeOnRings(
         angle,
       })
     }
-    let widest = 0
-    for (const item of ring) widest = Math.max(widest, item.radius)
-    // The next ring sits outside this one.
-    innerRadius = radius + config.gap + widest
+    // The next ring starts outside this one, including this ring's own radii.
+    clearRadius = radius + widest + config.gap
     ring = []
     ringIndex += 1
   }
@@ -215,7 +237,7 @@ export function placeOnRings(
   for (const item of sorted) {
     if (ring.length > 0) {
       const candidate = [...ring, item]
-      const radius = radiusFor(candidate, innerRadius)
+      const radius = radiusFor(candidate, clearRadius)
       const ringsLeft = config.maxRings - ringIndex
       if (radius > config.maxRingRadius && ringsLeft > 1) {
         flush()

@@ -233,6 +233,7 @@ describe('BeamField', () => {
       position: { x, y, z: 0 },
       targetPosition: { x, y, z: 0 },
       radius: 0.4,
+      clusterRadius: 0.4,
       sizeBytes: 0,
       sizeKnown: false,
       activity: 1,

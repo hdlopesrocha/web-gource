@@ -209,8 +209,23 @@ Given the same history and settings, the same sequence of events is produced:
 
 ![Files packed on rings around their directories, with branches stopping at the circle edges](docs/screenshot-rings.png)
 
-Files are packed onto one or more concentric rings around their directory, and
-those rings reflow while history plays:
+The whole tree is packed hierarchically, and it reflows while history plays:
+
+* every folder knows the **cluster radius** of its whole subtree (its files plus
+  its subfolders, recursively), and its parent packs it by that radius — so a
+  folder that grows reserves the room it needs and its siblings slide outwards
+  instead of overlapping it;
+* inside a folder, files sit on the inner ring(s) and subfolders on the outer
+  ring(s), each packed by its cluster radius, so nesting never collides either;
+* a folder that moves takes its subtree with it, keeping every cluster rigid
+  while it slides to its new place;
+* rings are packed against the real geometry: the arc length that has to fit
+  *and* the chord between adjacent slots (using the actual adjacent pairs), and a
+  ring's circles must clear the previous ring's circles — which is what keeps
+  concentric rings from overlapping each other too.
+
+Inside a directory, files are packed onto one or more concentric rings and those
+rings reflow while history plays:
 
 * the ring radius follows the circles that have to fit (arc length *and* the
   chord between neighbouring slots), so a folder full of large files gets a
@@ -297,9 +312,11 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   the material stays opaque so the node pass occludes it, and the dimming is baked into the vertex
   colours;
 * dynamic layout: ring packing never overlaps circles, grows with item count and radius, uses
-  concentric rings for crowds, is deterministic and order independent; in the simulation, adding,
-  deleting or growing a file moves its siblings smoothly, seek and playback produce identical
-  layouts, and the static mode pins files to their path-derived positions;
+  concentric rings for crowds without the rings colliding, is deterministic and order independent;
+  in the simulation, adding, deleting or growing a file moves its siblings smoothly, folder
+  clusters (including nested ones) never overlap and stay inside their parent's cluster, growing a
+  folder pushes its siblings outwards, seek and playback produce identical layouts, and the static
+  mode pins nodes to their path-derived positions;
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes, edge buffers, particle
   pool limits and decay, camera panning/zooming;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,

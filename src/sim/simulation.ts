@@ -46,6 +46,12 @@ export interface SimNode {
   deletions: number
   /** True while the node is visible at the current playback position. */
   visible: boolean
+  /**
+   * Radius of everything that belongs to this node: for a file its circle, for a
+   * directory the extent of its whole subtree. The parent packs its children by
+   * this value, which is what keeps folder clusters from overlapping.
+   */
+  clusterRadius: number
   /** Previous position after a rename, so the renderer can animate the move. */
   movedFrom?: Vec3
 }
@@ -267,6 +273,7 @@ export class Simulation {
       position: { ...ORIGIN },
       targetPosition: { ...ORIGIN },
       radius: LAYOUT.dirRadius * LAYOUT.rootRadius,
+      clusterRadius: LAYOUT.dirRadius,
       sizeBytes: 0,
       sizeKnown: false,
       activity: 0,
@@ -288,51 +295,134 @@ export class Simulation {
    * ------------------------------------------------------------------ */
 
   /**
-   * Recompute where a directory's files sit.
+   * Recompute the layout of one directory's children.
    *
-   * Files are packed onto one or more concentric rings whose radius follows the
-   * current circle sizes, so adding a file — or a circle growing — pushes its
-   * neighbours outwards instead of overlapping them.
+   * Files go on the inner ring(s) and subdirectories on the outer ring(s), each
+   * packed by the radius of its whole cluster — so a folder with a large subtree
+   * reserves the room it needs and neighbouring folders never overlap. A child
+   * that moves takes its own subtree with it, which keeps every cluster rigid
+   * while it slides to its new place.
    */
   reflowDirectory(dirId: number): void {
     if (!this.dynamicLayout) return
     const dir = this.nodeList[dirId]
     if (!dir || dir.kind === 'file') return
+
     const files: SimNode[] = []
+    const subdirs: SimNode[] = []
     for (const childId of dir.children) {
       const child = this.nodeList[childId]
-      if (child && child.kind === 'file' && child.visible) files.push(child)
+      if (!child || !child.visible) continue
+      if (child.kind === 'file') files.push(child)
+      else if (child.kind === 'dir') subdirs.push(child)
     }
-    if (files.length === 0) return
 
-    const placements = placeOnRings(
+    // 1. Files on the inner ring(s).
+    const filePlacements = placeOnRings(
       files.map((node) => ({ key: node.path, radius: node.radius })),
       { minRadius: LAYOUT.fileRingRadius, gap: LAYOUT.fileGap },
     )
+    let fileExtent = 0
+    let widestFile = 0
     for (let index = 0; index < files.length; index += 1) {
-      const node = files[index]
-      const placement = placements[index]
+      const placement = filePlacements[index]
       if (!placement) continue
-      const target: Vec3 = {
-        x: dir.position.x + placement.x,
-        y: dir.position.y + placement.y,
+      fileExtent = Math.max(fileExtent, Math.hypot(placement.x, placement.y) + files[index].radius)
+      widestFile = Math.max(widestFile, files[index].radius)
+    }
+
+    // 2. Subdirectories on the outer ring(s), sized by their cluster radius so
+    //    their contents stay clear of everything else.
+    const innerForDirs =
+      files.length > 0 ? fileExtent + widestFile + LAYOUT.fileGap : LAYOUT.dirRingRadius
+    const dirPlacements = placeOnRings(
+      subdirs.map((node) => ({ key: node.path, radius: node.clusterRadius + LAYOUT.clusterGap })),
+      {
+        minRadius: innerForDirs,
+        gap: LAYOUT.clusterGap,
+        maxRingRadius: LAYOUT.maxDirRingRadius,
+        startAngle: hashUnit(dir.path, 31) * Math.PI * 2,
+      },
+    )
+
+    // 3. Apply the placements.
+    let extent = dir.radius
+    const base = dir.targetPosition
+    for (let index = 0; index < files.length; index += 1) {
+      const placement = filePlacements[index]
+      const node = files[index]
+      if (!placement) continue
+      this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })
+      extent = Math.max(extent, Math.hypot(placement.x, placement.y) + node.radius)
+    }
+    for (let index = 0; index < subdirs.length; index += 1) {
+      const placement = dirPlacements[index]
+      const node = subdirs[index]
+      if (!placement) continue
+      this.setNodeTarget(node, { x: base.x + placement.x, y: base.y + placement.y, z: 0 })
+      extent = Math.max(extent, Math.hypot(placement.x, placement.y) + node.clusterRadius)
+    }
+    dir.clusterRadius = extent
+  }
+
+  /** Move a node (and, for a directory, its whole subtree) to a new position. */
+  private setNodeTarget(node: SimNode, target: Vec3): void {
+    const dx = target.x - node.targetPosition.x
+    const dy = target.y - node.targetPosition.y
+    if (dx * dx + dy * dy < 0.0004) return
+    node.targetPosition = target
+    this.movingNodes.add(node.id)
+    if (node.kind === 'dir') this.offsetSubtree(node, dx, dy)
+  }
+
+  /** Keep a subtree rigid while its root slides to a new place. */
+  private offsetSubtree(node: SimNode, dx: number, dy: number): void {
+    for (const childId of node.children) {
+      const child = this.nodeList[childId]
+      if (!child) continue
+      child.targetPosition = {
+        x: child.targetPosition.x + dx,
+        y: child.targetPosition.y + dy,
         z: 0,
       }
-      const dx = node.targetPosition.x - target.x
-      const dy = node.targetPosition.y - target.y
-      if (dx * dx + dy * dy < 0.0004) continue
-      node.targetPosition = target
-      this.movingNodes.add(node.id)
+      this.movingNodes.add(child.id)
+      if (child.kind === 'dir') this.offsetSubtree(child, dx, dy)
     }
   }
 
-  /** Put every file back on its path-derived position (static layout). */
+  /**
+   * Reflow the changed directory and then walk up the tree: a folder that grew
+   * needs more room from its parent too.
+   */
+  reflowChain(dirId: number): void {
+    let current = dirId
+    let guard = 0
+    while (current >= 0 && guard < 64) {
+      this.reflowDirectory(current)
+      const node = this.nodeList[current]
+      current = node ? node.parent : -1
+      guard += 1
+    }
+  }
+
+  /** Put every node back on its path-derived position (static layout). */
   resetToStaticLayout(): void {
+    for (const node of this.nodeList) {
+      if (node.kind === 'dir' && node.parent >= 0) {
+        const parent = this.nodeList[node.parent]
+        const target = addVec(parent.targetPosition, directoryOffset(node.path, depthOfPath(node.path)))
+        const dx = node.targetPosition.x - target.x
+        const dy = node.targetPosition.y - target.y
+        if (dx * dx + dy * dy < 0.0004) continue
+        node.targetPosition = target
+        this.movingNodes.add(node.id)
+      }
+    }
     for (const node of this.nodeList) {
       if (node.kind !== 'file') continue
       const parent = this.nodeList[node.parent]
       if (!parent) continue
-      const target = addVec(parent.position, fileOffset(node.path))
+      const target = addVec(parent.targetPosition, fileOffset(node.path))
       const dx = node.targetPosition.x - target.x
       const dy = node.targetPosition.y - target.y
       if (dx * dx + dy * dy < 0.0004) continue
@@ -344,7 +434,10 @@ export class Simulation {
   /** Reflow every directory (after a seek, a size change or a filter). */
   reflowAll(): void {
     if (!this.dynamicLayout) return
-    for (const node of this.nodeList) {
+    // Post-order: a directory must know the extent of its children's clusters
+    // before it packs them.
+    for (let index = this.nodeList.length - 1; index >= 0; index -= 1) {
+      const node = this.nodeList[index]
       if (node.kind === 'file') continue
       this.reflowDirectory(node.id)
     }
@@ -663,7 +756,7 @@ export class Simulation {
         node.visible = false
         if (fresh) this.recordToggle(node.id, index)
         this.visibleFiles = Math.max(0, this.visibleFiles - 1)
-        this.reflowDirectory(node.parent)
+        this.reflowChain(node.parent)
       }
       if (fresh) {
         node.lastKind = 'delete'
@@ -693,8 +786,9 @@ export class Simulation {
       this.totalDeletions += change.deletions
       const previousRadius = node.radius
       node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+      node.clusterRadius = node.radius
       // A growing circle needs more room: let the ring adapt.
-      if (Math.abs(node.radius - previousRadius) > 0.01) this.reflowDirectory(node.parent)
+      if (Math.abs(node.radius - previousRadius) > 0.01) this.reflowChain(node.parent)
     }
     this.pushEvent({ type: 'node-changed', node, kind })
     this.pushEvent({ type: 'activity', node, kind, strength: change.additions + change.deletions + 1 })
@@ -747,9 +841,9 @@ export class Simulation {
     this.pushEvent({ type: 'node-changed', node, kind: 'rename' })
     this.pushEvent({ type: 'activity', node, kind: 'rename', strength: change.additions + change.deletions + 1 })
     if (author) author.lastKind = 'rename'
-    // Reflow both the old and the new directory.
-    if (previousParent !== node.parent) this.reflowDirectory(previousParent)
-    this.reflowDirectory(node.parent)
+    // Reflow both the old and the new directory (and their ancestors).
+    if (previousParent !== node.parent) this.reflowChain(previousParent)
+    this.reflowChain(node.parent)
     return node
   }
 
@@ -761,7 +855,7 @@ export class Simulation {
         existing.visible = true
         if (fresh) this.recordToggle(existing.id, index)
         this.visibleFiles += 1
-        this.reflowDirectory(existing.parent)
+        this.reflowChain(existing.parent)
         this.movingNodes.add(existing.id)
       }
       return existing
@@ -778,6 +872,7 @@ export class Simulation {
       position: addVec(parent.position, fileOffset(path)),
       targetPosition: addVec(parent.position, fileOffset(path)),
       radius: LAYOUT.fileRadius,
+      clusterRadius: LAYOUT.fileRadius,
       sizeBytes: 0,
       sizeKnown: false,
       activity: 0,
@@ -796,6 +891,7 @@ export class Simulation {
       this.maxBytes = Math.max(this.maxBytes, knownSize)
     }
     node.radius = this.fileRadiusFor(node.sizeBytes, node.activity, node.sizeKnown)
+    node.clusterRadius = node.radius
     this.nodeList.push(node)
     this.nodeByPath.set(path, node)
     parent.children.push(node.id)
@@ -803,7 +899,7 @@ export class Simulation {
     this.visibleFiles += 1
     this.pushEvent({ type: 'node-added', node })
     // The new file takes its slot and pushes its siblings outwards.
-    this.reflowDirectory(parent.id)
+    this.reflowChain(parent.id)
     this.snapToTarget(node)
     return node
   }
@@ -826,6 +922,7 @@ export class Simulation {
       position: addVec(parent.position, directoryOffset(path, depth)),
       targetPosition: addVec(parent.position, directoryOffset(path, depth)),
       radius: LAYOUT.dirRadius * (1 + Math.min(0.6, hashUnit(path, 7) * 0.6)),
+      clusterRadius: LAYOUT.dirRadius,
       sizeBytes: 0,
       sizeKnown: false,
       activity: 0,

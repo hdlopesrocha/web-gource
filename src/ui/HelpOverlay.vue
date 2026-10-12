@@ -63,11 +63,13 @@ const shortcuts: { keys: string; action: string }[] = [
       <section>
         <h3>Dynamic layout</h3>
         <p class="muted small">
-          Files are packed onto one or more rings around their directory. The ring radius follows the circles that
-          have to fit, so adding a file — or a circle growing with its size — smoothly pushes its neighbours outwards
-          instead of overlapping them, and the rings re-form as files are deleted. Positions are still derived from
+          The tree is packed hierarchically. Every folder knows the size of its whole cluster — its files plus its
+          subfolders, recursively — and its parent packs it by that size, so folders never overlap each other no
+          matter how much they grow. Inside a folder, files sit on the inner ring and subfolders on the outer ring,
+          each sized by what it has to hold. Adding a file, or a circle growing with its size, smoothly pushes the
+          neighbours outwards, and a folder that moves takes its subtree with it. Positions are still derived from
           the repository state alone, so the same history always produces the same map. Settings → Visual can pin
-          every file to its path-derived position instead.
+          every node to its path-derived position instead.
         </p>
       </section>
 
