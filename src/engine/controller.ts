@@ -686,11 +686,14 @@ export class VisualizerController {
       this.exporter = exporter
       engine.beginOfflineExport(settings.width, settings.height)
 
+      const speed = Math.max(0.05, store.hud?.speed ?? engine.currentSpeed ?? 1)
       const result = await exporter.run({
         duration: engine.duration,
         choice,
         width: settings.width,
         height: settings.height,
+        // The export follows the playback speed selected in the app.
+        speed,
         bitrate: store.export.bitrate > 0 ? store.export.bitrate : undefined,
         onProgress: (progress: ExportProgress) => {
           store.export.progress = {
@@ -712,6 +715,7 @@ export class VisualizerController {
       store.export.lastFrames = result.frames
       store.export.lastSeconds = result.seconds
       store.export.lastElapsed = result.elapsed
+      store.export.lastSpeed = result.speed
       store.export.lastHardware = result.choice.hardwareAccelerated
     } catch (error) {
       store.export.error =
@@ -774,7 +778,12 @@ export class VisualizerController {
       store.recording.lastUrl = null
     }
     store.recording.error = null
-    this.recorder = new VideoRecorder(this.engine.renderer.domElement)
+    // Live capture runs at 60 fps and follows the playback speed, capturing the
+    // composited canvas so the panels (timeline, overview, activity) are in the
+    // video exactly as they are in the deterministic render.
+    this.engine.beginRecording(EXPORT_FPS, settings.width, settings.height)
+    const source = this.engine.prepareRecordingCanvas(settings.width, settings.height) ?? this.engine.renderer.domElement
+    this.recorder = new VideoRecorder(source)
     try {
       this.engine.pause()
       this.engine.resizeTo(settings.width, settings.height)
@@ -782,11 +791,9 @@ export class VisualizerController {
       this.recorder.start({
         width: settings.width,
         height: settings.height,
-        fps: settings.fps,
-        speed: settings.speed,
+        fps: EXPORT_FPS,
         mimeType: format,
       })
-      this.engine.beginRecording(settings.fps, settings.speed)
       store.recording.active = true
       this.recordingStartedAt = performance.now()
       this.startProgressTimer()

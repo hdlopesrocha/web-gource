@@ -19,8 +19,6 @@ export interface RecordingOptions {
   width: number
   height: number
   fps: number
-  /** Playback speed multiplier applied while recording. */
-  speed: number
   mimeType: string
   /** Overrides the automatically derived bitrate (bits per second). */
   bitrate?: number

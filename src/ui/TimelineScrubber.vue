@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { drawActivityBars } from '../render/overlays'
 import type { ActivityBucket } from '../timeline/types'
 
 const props = defineProps<{
@@ -53,43 +54,19 @@ function draw(): void {
   const ctx = element.getContext('2d')
   if (!ctx) return
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  ctx.clearRect(0, 0, cssWidth, height)
-
-  const buckets = props.activity
-  const barWidth = buckets.length > 0 ? cssWidth / buckets.length : cssWidth
-  let max = 0
-  for (const bucket of buckets) max = Math.max(max, bucket.commits)
-  if (max === 0) max = 1
-
-  // Idle-friendly baseline.
-  ctx.fillStyle = 'rgba(255,255,255,0.04)'
-  ctx.fillRect(0, height - 2, cssWidth, 2)
-
-  for (let index = 0; index < buckets.length; index += 1) {
-    const bucket = buckets[index]
-    const ratio = bucket.commits / max
-    const barHeight = Math.max(bucket.commits > 0 ? 2 : 0.6, ratio * (height - 12))
-    const x = index * barWidth
-    const played = props.duration > 0 && bucket.t <= props.time
-    ctx.fillStyle = played ? 'rgba(120, 205, 255, 0.85)' : 'rgba(120, 160, 220, 0.35)'
-    ctx.fillRect(x, height - barHeight - 2, Math.max(1, barWidth - 1), barHeight)
-  }
-
-  // Recent activity inside the filter range gets a subtle highlight.
-  if (props.filterFrom !== null || props.filterTo !== null) {
-    const fromX = (fromPercent.value / 100) * cssWidth
-    const toX = (toPercent.value / 100) * cssWidth
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)'
-    ctx.fillRect(fromX, 0, Math.max(0, toX - fromX), height)
-    ctx.strokeStyle = 'rgba(94, 200, 255, 0.7)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(fromX + 0.5, 0)
-    ctx.lineTo(fromX + 0.5, height)
-    ctx.moveTo(toX - 0.5, 0)
-    ctx.lineTo(toX - 0.5, height)
-    ctx.stroke()
-  }
+  // The histogram itself is shared with the exported video, so both draw the
+  // same bars from the same code.
+  drawActivityBars(ctx, {
+    width: cssWidth,
+    height,
+    buckets: props.activity,
+    position: props.time,
+    duration: props.duration,
+    window:
+      props.filterFrom !== null || props.filterTo !== null
+        ? { from: props.filterFrom ?? 0, to: props.filterTo ?? props.duration }
+        : null,
+  })
 }
 
 function timeFromEvent(event: PointerEvent): number {

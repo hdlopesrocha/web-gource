@@ -1,16 +1,19 @@
 /**
  * Frame plan for a deterministic animation export.
  *
- * The export renders exactly {@link EXPORT_FPS} frames per *simulated* second,
- * independent of how long the machine takes, so the result is identical on fast
- * and slow hardware. Frame `i` always represents simulated time `i / fps`; the
- * last frame lands exactly on the animation's end.
+ * The video runs at {@link EXPORT_FPS} frames per second of *video*, and each
+ * frame advances the simulation by `speed / fps` seconds — so the export follows
+ * the playback speed the user selected, and a 2x export is half as long while
+ * showing exactly the same commits. Nothing here depends on wall-clock time, so
+ * the result is identical on fast and slow hardware.
  */
 
-export const EXPORT_FPS = 30
+export const EXPORT_FPS = 60
 
 export interface FramePlan {
   fps: number
+  /** Playback speed the export follows (1 = real time). */
+  speed: number
   /** Number of frames to render, including the final one at `duration`. */
   totalFrames: number
   /** Simulated duration of the animation in seconds. */
@@ -18,22 +21,25 @@ export interface FramePlan {
 }
 
 /**
- * Frames for an animation of `duration` simulated seconds.
+ * Frames for an animation of `duration` simulated seconds at `speed`.
  *
- * The end time is inclusive: a 4 s animation produces 121 frames (t = 0 … 4 s),
- * so the very last commit is always in the video even when it lands on the end.
+ * The end time is inclusive: a 4 s animation at 1x and 60 fps produces 241
+ * frames (t = 0 … 4 s), so the very last commit is always in the video even when
+ * it lands exactly on the end.
  */
-export function planFrames(duration: number, fps: number = EXPORT_FPS): FramePlan {
+export function planFrames(duration: number, fps: number = EXPORT_FPS, speed = 1): FramePlan {
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0
   const safeFps = Number.isFinite(fps) && fps > 0 ? fps : EXPORT_FPS
-  const totalFrames = safeDuration <= 0 ? 1 : Math.max(1, Math.floor(safeDuration * safeFps) + 1)
-  return { fps: safeFps, totalFrames, duration: safeDuration }
+  const safeSpeed = Number.isFinite(speed) && speed > 0 ? speed : 1
+  const totalFrames =
+    safeDuration <= 0 ? 1 : Math.max(1, Math.floor((safeDuration * safeFps) / safeSpeed) + 1)
+  return { fps: safeFps, speed: safeSpeed, totalFrames, duration: safeDuration }
 }
 
 /** Simulated time of a frame, clamped to the animation's end. */
 export function timeForFrame(plan: FramePlan, frame: number): number {
   const clamped = Math.max(0, Math.min(plan.totalFrames - 1, Math.floor(frame)))
-  return Math.min(plan.duration, clamped / plan.fps)
+  return Math.min(plan.duration, (clamped * plan.speed) / plan.fps)
 }
 
 /** Presentation timestamp of a frame in microseconds (exact, no drift). */
@@ -48,7 +54,7 @@ export function durationForFrame(plan: FramePlan, frame: number): number {
   return Math.max(1, next - start)
 }
 
-/** How many frames pass between keyframes: one per simulated second. */
+/** How many frames pass between keyframes: one per second of video. */
 export function keyFrameInterval(plan: FramePlan): number {
   return Math.max(1, Math.round(plan.fps))
 }

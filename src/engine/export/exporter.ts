@@ -60,6 +60,8 @@ export interface ExportResult {
   frames: number
   /** Simulated seconds covered. */
   seconds: number
+  /** Playback speed the export followed. */
+  speed: number
   bytes: number
   /** Wall-clock seconds the export took. */
   elapsed: number
@@ -78,6 +80,8 @@ export interface OfflineExportOptions {
   /** Overrides the derived bitrate. */
   bitrate?: number
   fps?: number
+  /** Playback speed to follow (the speed selected in the app). */
+  speed?: number
   onProgress?: (progress: ExportProgress) => void
   /** Injection point for tests; defaults to the WebCodecs backend. */
   backendFactory?: (plan: FramePlan, bitrate: number) => Promise<VideoEncoderBackend>
@@ -116,7 +120,7 @@ export class OfflineExporter {
     this.cancelled = false
     const startedAt = Date.now()
 
-    const plan = planFrames(options.duration, options.fps ?? EXPORT_FPS)
+    const plan = planFrames(options.duration, options.fps ?? EXPORT_FPS, options.speed ?? 1)
     const bitrate = options.bitrate ?? defaultBitrate(options.width, options.height, plan.fps)
     let encodedFrames = 0
     let simTime = 0
@@ -165,6 +169,7 @@ export class OfflineExporter {
           width: options.width,
           height: options.height,
           codec: options.choice.codec as WebmCodec,
+          frameDurationUs: Math.round(1_000_000 / plan.fps),
         })
         containerReady = true
       }
@@ -243,6 +248,7 @@ export class OfflineExporter {
         extension: options.choice.extension,
         frames: plan.totalFrames,
         seconds: plan.duration,
+        speed: plan.speed,
         bytes: blob.size,
         elapsed: (Date.now() - startedAt) / 1000,
         choice: options.choice,

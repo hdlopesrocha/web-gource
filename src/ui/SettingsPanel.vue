@@ -6,7 +6,7 @@ import { RESOLUTION_PRESETS } from '../engine/recorder'
 import { formatDuration } from '../timeline/schedule'
 import { formatBytes } from '../util/format'
 import { fileRadiusForActivity, fileRadiusForBytes } from '../sim/simulation'
-import { EXPORT_FPS } from '../engine/export/frames'
+import { EXPORT_FPS, planFrames } from '../engine/export/frames'
 import { COMMON_IGNORED_FOLDERS, HIDDEN_FOLDER_EXAMPLES, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
 import { formatBytes as formatExportBytes } from '../engine/recorder'
 import TokenField from './TokenField.vue'
@@ -66,8 +66,9 @@ const exportCodecs = computed(() => {
 const selectedExportCodec = computed(() => store.export.container)
 const exportResolution = computed(() => `${store.recording.width}x${store.recording.height}`)
 
-/** Frames the animation will produce at 30 fps, end inclusive. */
-const exportFramesEstimate = computed(() => Math.max(1, Math.floor(controller.duration() * EXPORT_FPS) + 1))
+/** The exact plan the exporter will use, so the UI cannot disagree with it. */
+const exportPlan = computed(() => planFrames(controller.duration(), EXPORT_FPS, playbackSpeed.value))
+const exportFramesEstimate = computed(() => exportPlan.value.totalFrames)
 
 const exportBitrateLabel = computed(() => {
   const value = store.export.bitrate
@@ -144,11 +145,8 @@ const pacingValues = computed(() =>
     minSpacing: store.settings.customMinSpacing,
   }),
 )
-const estimatedDuration = computed(() => {
-  const duration = controller.duration()
-  const speed = recording.value.speed || 1
-  return duration / speed
-})
+const playbackSpeed = computed(() => store.hud?.speed ?? 1)
+const estimatedDuration = computed(() => controller.duration() / Math.max(0.05, playbackSpeed.value))
 
 const selectedFormat = computed({
   get: () => recording.value.mimeType,
@@ -477,8 +475,9 @@ onMounted(() => {
               <div class="field">
                 <label>Frame rate · {{ EXPORT_FPS_LABEL }} fps (fixed)</label>
                 <span class="faint hint">
-                  Exactly {{ EXPORT_FPS_LABEL }} frames per simulated second, from t = 0 to the end of the animation:
-                  {{ exportFramesEstimate.toLocaleString() }} frames for {{ formatDuration(controller.duration()) }}.
+                  {{ exportFramesEstimate.toLocaleString() }} frames for
+                  {{ formatDuration(controller.duration()) }} of history at {{ playbackSpeed }}× — the export follows the
+                  playback speed you selected, so a faster speed means a shorter video.
                 </span>
               </div>
               <div class="field">
@@ -495,9 +494,10 @@ onMounted(() => {
               </div>
 
               <p class="faint note">
-                The render is frame-driven, not clock-driven: the simulation advances by exactly 1/30 s per frame and
-                every frame is encoded as soon as it is drawn, so the result does not depend on how fast this machine
-                is. Frames are never buffered — only the compressed stream is kept.
+                The render is frame-driven, not clock-driven: every frame advances the simulation by exactly
+                {{ playbackSpeed }}/{{ EXPORT_FPS_LABEL }} s and is encoded as soon as it is drawn, so the result does not
+                depend on how fast this machine is. Frames are never buffered — only the compressed stream is kept.
+                The video includes the timeline, the overview, the weekday/hour heatmap and the contribution calendar.
               </p>
 
               <div class="record-row">
@@ -525,7 +525,7 @@ onMounted(() => {
                   <span class="faint mono">
                     {{ exportState.lastLabel }} · {{ formatExportBytes(exportState.lastBytes) }} ·
                     {{ exportState.lastFrames.toLocaleString() }} frames ·
-                    {{ formatDuration(exportState.lastSeconds) }} simulated ·
+                    {{ formatDuration(exportState.lastSeconds) }} simulated at {{ exportState.lastSpeed }}× ·
                     {{ formatDuration(exportState.lastElapsed) }} to render
                   </span>
                   <button class="btn small primary" type="button" @click="controller.downloadExport()">Download</button>
@@ -556,12 +556,11 @@ onMounted(() => {
                 </select>
               </div>
               <div class="field">
-                <label>Frame rate · {{ recording.fps }} fps</label>
-                <input type="range" min="15" max="60" step="1" :value="recording.fps" @input="updateRecording({ fps: Number(($event.target as HTMLInputElement).value) })" />
-              </div>
-              <div class="field">
-                <label>Playback speed while recording · {{ recording.speed }}×</label>
-                <input type="range" min="0.25" max="16" step="0.25" :value="recording.speed" @input="updateRecording({ speed: Number(($event.target as HTMLInputElement).value) })" />
+                <label>Frame rate · {{ EXPORT_FPS_LABEL }} fps (fixed) · {{ playbackSpeed }}× speed</label>
+                <span class="faint hint">
+                  Live capture samples in real time at 60 fps and follows the playback speed, so at
+                  {{ playbackSpeed }}× the whole timeline takes about {{ formatDuration(estimatedDuration) }} of real time.
+                </span>
               </div>
               <label class="switch"><input type="checkbox" :checked="recording.stopAtEnd" @change="updateRecording({ stopAtEnd: ($event.target as HTMLInputElement).checked })" /> Stop at the end of the timeline</label>
               <div class="field">
@@ -570,9 +569,9 @@ onMounted(() => {
               </div>
 
               <p class="faint note">
-                Live capture restarts the timeline and samples the canvas in real time: it can capture manual panning and
-                zooming, but the wall clock decides how many frames make it into the file. Use the deterministic render
-                above when the result has to be reproducible.
+                Live capture restarts the timeline and samples the composited frame in real time: it can capture manual
+                panning and zooming, but the wall clock decides how many frames make it into the file. It includes the
+                same panels. Use the deterministic render above when the result has to be reproducible.
               </p>
 
               <div class="record-row">

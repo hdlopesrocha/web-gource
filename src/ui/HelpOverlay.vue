@@ -76,8 +76,10 @@ const shortcuts: { keys: string; action: string }[] = [
       <section>
         <h3>Video export</h3>
         <p class="muted small">
-          The default export renders the animation frame by frame from the beginning at exactly 30 frames per
-          simulated second, using the browser's WebCodecs encoders (hardware when available, software otherwise).
+          The default export renders the animation frame by frame from the beginning at exactly 60 fps, following the
+          playback speed you selected, using the browser's WebCodecs encoders (hardware when available, software
+          otherwise). The video includes the timeline, the overview, the weekday/hour heatmap and the contribution
+          calendar, drawn with the same code as the on-screen panels.
           Because the clock is driven by the frame index rather than by real time, a slow machine produces the same
           video as a fast one — it just takes longer. WebM (VP9) is the default; MP4 (H.264) is offered when the
           browser can encode it. Frames are streamed straight to the encoder, so memory stays flat, and the file is

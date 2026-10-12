@@ -24,6 +24,8 @@ export interface WebmVideoInfo {
   width: number
   height: number
   codec: WebmCodec
+  /** Nominal frame duration in microseconds (the export's frame rate). */
+  frameDurationUs?: number
 }
 
 const CODEC_IDS: Record<WebmCodec, string> = {
@@ -34,9 +36,8 @@ const CODEC_IDS: Record<WebmCodec, string> = {
 
 /** Matroska default: one timecode unit is a millisecond. */
 const TIMECODE_SCALE_NS = 1_000_000
-/** Track default frame duration, nanoseconds (30 fps). */
-const DEFAULT_FRAME_DURATION_NS = Math.round(1_000_000_000 / 30)
-const FRAME_DURATION_US = Math.round(1_000_000 / 30)
+/** Fallback frame duration when the caller does not state one (60 fps). */
+const FALLBACK_FRAME_DURATION_US = Math.round(1_000_000 / 60)
 
 /* ------------------------------------------------------------------ *
  * EBML primitives
@@ -247,7 +248,8 @@ export class WebmMuxer {
     if (!this.finished) {
       this.flushCluster()
       // Duration is measured in TimecodeScale units (milliseconds here).
-      const durationMs = (this.lastTimestamp + FRAME_DURATION_US) / 1000
+      const frameDurationUs = this.info.frameDurationUs ?? FALLBACK_FRAME_DURATION_US
+      const durationMs = (this.lastTimestamp + frameDurationUs) / 1000
       const payload = new Uint8Array(8)
       new DataView(payload.buffer).setFloat64(0, durationMs, false)
       if (this.header && this.durationOffset >= 0) this.header.set(payload, this.durationOffset)
@@ -296,7 +298,11 @@ export function buildHeader(
       uintElement(WEBM_ID.flagLacing, 0, 1),
       stringElement(WEBM_ID.language, 'und'),
       stringElement(WEBM_ID.codecId, CODEC_IDS[info.codec]),
-      uintElement(WEBM_ID.defaultDuration, DEFAULT_FRAME_DURATION_NS, 4),
+      uintElement(
+        WEBM_ID.defaultDuration,
+        Math.round((info.frameDurationUs ?? FALLBACK_FRAME_DURATION_US) * 1000),
+        4,
+      ),
       element(
         WEBM_ID.video,
         concat([uintElement(WEBM_ID.pixelWidth, info.width, 2), uintElement(WEBM_ID.pixelHeight, info.height, 2)]),

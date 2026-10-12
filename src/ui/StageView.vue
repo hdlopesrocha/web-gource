@@ -9,6 +9,7 @@ import ActivityPanel from './ActivityPanel.vue'
 import AuthorsPanel from './AuthorsPanel.vue'
 import MinimapPanel from './MinimapPanel.vue'
 import { loadingPercent } from '../state/store'
+import { EXPORT_FPS } from '../engine/export/frames'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const container = ref<HTMLDivElement | null>(null)
@@ -19,6 +20,9 @@ const repo = computed(() => store.repo)
 const stats = computed(() => store.timelineStats)
 const loading = computed(() => store.loading)
 const warnings = computed(() => store.warnings)
+const exportFps = EXPORT_FPS
+/** The recording follows the playback speed, so show what that is right now. */
+const speedLabel = computed(() => store.hud?.speed ?? 1)
 
 const summary = computed(() => {
   if (!stats.value) return ''
@@ -253,7 +257,7 @@ onBeforeUnmount(() => {
       <div v-if="store.recording.active" class="recording-overlay">
         <div class="rec-pill panel">
           <span class="rec-dot" />
-          <span>Recording {{ store.recording.width }}×{{ store.recording.height }} @ {{ store.recording.fps }}fps</span>
+          <span>Recording {{ store.recording.width }}×{{ store.recording.height }} @ {{ exportFps }}fps · {{ speedLabel }}×</span>
           <span class="mono muted">
             {{ store.recording.progress?.percent.toFixed(0) ?? 0 }}% ·
             {{ ((store.recording.progress?.elapsed ?? 0)).toFixed(0) }}s

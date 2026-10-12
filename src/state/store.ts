@@ -107,9 +107,6 @@ export interface LoadOptions {
 export interface RecordingSettings {
   width: number
   height: number
-  fps: number
-  /** Playback speed multiplier used while recording. */
-  speed: number
   mimeType: string
   /** Stop automatically at the end of the timeline. */
   stopAtEnd: boolean
@@ -217,6 +214,8 @@ export interface AppState {
     lastFrames: number
     lastSeconds: number
     lastElapsed: number
+    /** Playback speed the last export followed. */
+    lastSpeed: number
     /** True when the last export used a hardware encoder. */
     lastHardware: boolean
     /** Encoders this browser offers, probed by the controller. */
@@ -303,8 +302,6 @@ const defaultLoadOptions: LoadOptions = {
 const defaultRecording: RecordingSettings = {
   width: 1920,
   height: 1080,
-  fps: 30,
-  speed: 1,
   mimeType: 'video/webm;codecs=vp9',
   stopAtEnd: true,
   maxWallSeconds: 1800,
@@ -353,6 +350,7 @@ export const store = reactive<AppState>({
     lastFrames: 0,
     lastSeconds: 0,
     lastElapsed: 0,
+    lastSpeed: 1,
     lastHardware: false,
     codecs: [],
     probed: false,

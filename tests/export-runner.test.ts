@@ -120,6 +120,7 @@ function runExport(options: {
   choice?: CodecChoice
   backend?: StubBackend
   fps?: number
+  speed?: number
   onProgress?: Parameters<typeof OfflineExporter.prototype.run>[0]['onProgress']
 }) {
   const backend = options.backend ?? new StubBackend(options.choice ?? choice)
@@ -131,6 +132,7 @@ function runExport(options: {
     width: 640,
     height: 360,
     fps: options.fps,
+    speed: options.speed,
     onProgress: options.onProgress,
     backendFactory: async () => backend,
     frameFactory: (request) => {
@@ -142,22 +144,36 @@ function runExport(options: {
 }
 
 describe('planFrames', () => {
-  it('renders exactly 30 frames per simulated second, end inclusive', () => {
-    expect(EXPORT_FPS).toBe(30)
-    expect(planFrames(4).totalFrames).toBe(121)
-    expect(planFrames(2).totalFrames).toBe(61)
-    expect(planFrames(1).totalFrames).toBe(31)
-    expect(planFrames(1 / 30).totalFrames).toBe(2)
+  it('renders exactly 60 frames per second of video, end inclusive', () => {
+    expect(EXPORT_FPS).toBe(60)
+    expect(planFrames(4).totalFrames).toBe(241)
+    expect(planFrames(2).totalFrames).toBe(121)
+    expect(planFrames(1).totalFrames).toBe(61)
+    expect(planFrames(1 / 60).totalFrames).toBe(2)
     expect(planFrames(0).totalFrames).toBe(1)
     expect(planFrames(Number.NaN).totalFrames).toBe(1)
+  })
+
+  it('follows the playback speed: faster speed, shorter video', () => {
+    // At 2x the same history fits in half the frames and each frame steps twice
+    // as far through the simulation.
+    expect(planFrames(4, 60, 2).totalFrames).toBe(121)
+    expect(planFrames(4, 60, 4).totalFrames).toBe(61)
+    expect(planFrames(4, 60, 0.5).totalFrames).toBe(481)
+    const plan = planFrames(4, 60, 2)
+    expect(timeForFrame(plan, 0)).toBe(0)
+    expect(timeForFrame(plan, 60)).toBeCloseTo(2, 10)
+    expect(timeForFrame(plan, 120)).toBeCloseTo(4, 10)
+    // A broken speed falls back to real time rather than dividing by zero.
+    expect(planFrames(1, 60, 0).speed).toBe(1)
   })
 
   it('maps frame indices to simulated time without drift', () => {
     const plan = planFrames(4)
     expect(timeForFrame(plan, 0)).toBe(0)
-    expect(timeForFrame(plan, 30)).toBeCloseTo(1, 10)
-    expect(timeForFrame(plan, 60)).toBeCloseTo(2, 10)
-    expect(timeForFrame(plan, 120)).toBeCloseTo(4, 10)
+    expect(timeForFrame(plan, 60)).toBeCloseTo(1, 10)
+    expect(timeForFrame(plan, 120)).toBeCloseTo(2, 10)
+    expect(timeForFrame(plan, 240)).toBeCloseTo(4, 10)
     // The last frame lands exactly on the end and never past it.
     expect(timeForFrame(plan, 999)).toBe(4)
   })
@@ -166,22 +182,22 @@ describe('planFrames', () => {
     const plan = planFrames(600)
     let total = 0
     for (let frame = 0; frame < plan.totalFrames; frame += 1) total += durationForFrame(plan, frame)
-    expect(plan.totalFrames).toBe(18001)
+    expect(plan.totalFrames).toBe(36001)
     // Ten simulated minutes: 18001 frames cover [0, 600 s] plus the final frame,
     // so the total is one frame longer and drifts by less than a microsecond per
     // frame (each timestamp is derived from the frame index, never accumulated).
     const finalFrameDuration = durationForFrame(plan, plan.totalFrames - 1)
     expect(Math.abs(total - (600_000_000 + finalFrameDuration))).toBeLessThan(plan.totalFrames)
-    expect(timestampForFrame(plan, 30)).toBe(1_000_000)
-    expect(timestampForFrame(plan, 18_000)).toBe(600_000_000)
+    expect(timestampForFrame(plan, 60)).toBe(1_000_000)
+    expect(timestampForFrame(plan, 36_000)).toBe(600_000_000)
   })
 
-  it('keyframes once per simulated second and reports progress', () => {
+  it('keyframes once per second of video and reports progress', () => {
     const plan = planFrames(3)
-    expect(keyFrameInterval(plan)).toBe(30)
+    expect(keyFrameInterval(plan)).toBe(60)
     expect(isKeyFrame(plan, 0)).toBe(true)
-    expect(isKeyFrame(plan, 30)).toBe(true)
-    expect(isKeyFrame(plan, 31)).toBe(false)
+    expect(isKeyFrame(plan, 60)).toBe(true)
+    expect(isKeyFrame(plan, 61)).toBe(false)
     expect(framePercent(plan, 0)).toBe(0)
     expect(framePercent(plan, plan.totalFrames)).toBe(100)
     expect(framePercent(plan, plan.totalFrames / 2)).toBeCloseTo(50, 5)
@@ -192,18 +208,19 @@ describe('OfflineExporter', () => {
   it('renders one frame per step from t = 0 to the end', async () => {
     const { backend, requests, promise } = runExport({ duration: 2 })
     const result = await promise
-    expect(requests).toHaveLength(61)
-    expect(backend.encoded).toHaveLength(61)
+    expect(requests).toHaveLength(121)
+    expect(backend.encoded).toHaveLength(121)
     expect(requests[0].simTime).toBe(0)
-    expect(requests[30].simTime).toBeCloseTo(1, 10)
-    expect(requests[60].simTime).toBeCloseTo(2, 10)
-    // Timestamps advance by exactly one frame step.
+    expect(requests[60].simTime).toBeCloseTo(1, 10)
+    expect(requests[120].simTime).toBeCloseTo(2, 10)
+    // Timestamps advance by exactly one frame step (1/60 s).
     for (let index = 1; index < requests.length; index += 1) {
-      expect(requests[index].timestamp - requests[index - 1].timestamp).toBeGreaterThanOrEqual(33333)
-      expect(requests[index].timestamp - requests[index - 1].timestamp).toBeLessThanOrEqual(33334)
+      expect(requests[index].timestamp - requests[index - 1].timestamp).toBeGreaterThanOrEqual(16666)
+      expect(requests[index].timestamp - requests[index - 1].timestamp).toBeLessThanOrEqual(16667)
     }
-    expect(result.frames).toBe(61)
+    expect(result.frames).toBe(121)
     expect(result.seconds).toBe(2)
+    expect(result.speed).toBe(1)
     expect(result.blob.type).toBe('video/webm')
     expect(result.extension).toBe('webm')
     expect(backend.flushed).toBe(true)
@@ -217,7 +234,17 @@ describe('OfflineExporter', () => {
     expect(keyFrames.map((entry) => entry.timestamp)).toEqual([0, 1_000_000, 2_000_000, 3_000_000])
     // Frames are released as they are encoded: none stay alive.
     expect(backend.framesCreated).toBe(backend.framesClosed)
-    expect(backend.framesCreated).toBe(91)
+    expect(backend.framesCreated).toBe(181)
+  })
+
+  it('follows the playback speed it is given', async () => {
+    const { requests, promise } = runExport({ duration: 4, speed: 4 })
+    const result = await promise
+    // 4x speed: a quarter of the frames, each stepping 4/60 s of history.
+    expect(requests).toHaveLength(61)
+    expect(requests[1].simTime).toBeCloseTo(4 / 60, 10)
+    expect(requests[60].simTime).toBeCloseTo(4, 10)
+    expect(result.speed).toBe(4)
   })
 
   it('never keeps more than a few frames in the encoder queue', async () => {
@@ -239,7 +266,7 @@ describe('OfflineExporter', () => {
     const last = seen[seen.length - 1]
     expect(last.percent).toBe(100)
     expect(last.active).toBe(false)
-    expect(last.frames).toBe(61)
+    expect(last.frames).toBe(121)
     expect(last.simTime).toBe(2)
     // Progress is monotonic in frames.
     for (let index = 1; index < seen.length; index += 1) {

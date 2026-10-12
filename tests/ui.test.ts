@@ -463,7 +463,7 @@ describe('panels', () => {
     exportSupport.mockRestore()
   })
 
-  it('offers a deterministic 30 fps render with WebM by default', async () => {
+  it('offers a deterministic 60 fps render with WebM by default', async () => {
     const exportSupport = vi.spyOn(controller, 'exportSupport').mockReturnValue({
       supported: true,
       codecs: [
@@ -474,8 +474,11 @@ describe('panels', () => {
     const wrapper = mount(SettingsPanel)
     await openTab(wrapper, 'Recording')
     const text = wrapper.text()
-    // Frame rate is fixed, the end time is stated, and the format defaults to WebM.
-    expect(text).toContain('30 fps (fixed)')
+    // Frame rate is fixed at 60, the speed follows playback, and the panels are
+    // part of the video.
+    expect(text).toContain('60 fps (fixed)')
+    expect(text).toContain('follows the playback speed')
+    expect(text).toContain('the timeline, the overview, the weekday/hour heatmap and the contribution calendar')
     expect(text).toContain('WebM · VP9 (default)')
     expect(text).toContain('MP4 · H.264 (optional)')
     expect(text).toContain('Render animation')

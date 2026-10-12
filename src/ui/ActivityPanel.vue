@@ -7,18 +7,21 @@ import {
   contributionCalendar,
   dailyActivity,
   dayStartMs,
-  shadeLevel,
   weekdayHourGrid,
   WEEKDAY_LABELS,
   type DailyActivity,
   type WeekdayHourGrid,
 } from '../timeline/activity'
+import {
+  calendarLayout,
+  drawContributionCalendar,
+  drawWeekdayHour,
+  SHADES,
+  weekdayHourLayout,
+} from '../render/overlays'
 import { formatDate } from '../timeline/schedule'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
-
-/** Shade ramp for both charts: empty, then four steps of the accent. */
-const SHADES = ['rgba(255,255,255,0.06)', 'rgba(94,200,255,0.28)', 'rgba(94,200,255,0.5)', 'rgba(139,150,255,0.72)', 'rgba(185,140,255,0.95)']
 
 const gridCanvas = ref<HTMLCanvasElement | null>(null)
 const calendarCanvas = ref<HTMLCanvasElement | null>(null)
@@ -68,46 +71,22 @@ function prepare(canvas: HTMLCanvasElement, width: number, height: number): Canv
   return ctx
 }
 
-const GRID_LABEL_WIDTH = 30
-const GRID_LABEL_HEIGHT = 16
+/** Geometry of the two charts, so hover hit-testing matches the drawing. */
+const gridSize = { width: 360, height: 0 }
+const calendarSize = { width: 360, height: 0 }
 
 /** Weekday × hour density: horizontal is the hour of day, vertical the weekday. */
 function drawGrid(): void {
   const canvas = gridCanvas.value
   if (!canvas) return
   const width = canvas.clientWidth || 360
-  const columns = 24
-  const rows = 7
-  const cell = Math.max(6, Math.floor((width - GRID_LABEL_WIDTH) / columns) - 2)
-  const height = GRID_LABEL_HEIGHT + rows * (cell + 2)
+  const probe = weekdayHourLayout(width, 999)
+  const height = probe.labelHeight + 7 * (probe.cellHeight + probe.gap)
   const ctx = prepare(canvas, width, height)
   if (!ctx) return
-
-  ctx.font = '9px "Inter", system-ui, sans-serif'
-  ctx.textBaseline = 'middle'
-
-  // Hour labels every three hours.
-  ctx.fillStyle = 'rgba(255,255,255,0.45)'
-  ctx.textAlign = 'center'
-  for (let hour = 0; hour < columns; hour += 3) {
-    ctx.fillText(String(hour).padStart(2, '0'), GRID_LABEL_WIDTH + hour * (cell + 2) + cell / 2, 8)
-  }
-
-  for (let weekday = 0; weekday < rows; weekday += 1) {
-    const y = GRID_LABEL_HEIGHT + weekday * (cell + 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.45)'
-    ctx.textAlign = 'right'
-    ctx.fillText(WEEKDAY_LABELS[weekday], GRID_LABEL_WIDTH - 6, y + cell / 2)
-    for (let hour = 0; hour < columns; hour += 1) {
-      const count = gridData.value.counts[weekday]?.[hour] ?? 0
-      ctx.fillStyle = SHADES[shadeLevel(count, gridData.value.max)]
-      ctx.beginPath()
-      const x = GRID_LABEL_WIDTH + hour * (cell + 2)
-      ctx.roundRect?.(x, y, cell, cell, 2)
-      if (!ctx.roundRect) ctx.rect(x, y, cell, cell)
-      ctx.fill()
-    }
-  }
+  gridSize.width = width
+  gridSize.height = height
+  drawWeekdayHour(ctx, { width, height, grid: gridData.value })
 }
 
 /** GitHub-style contribution calendar, anchored to the current week. */
@@ -115,40 +94,14 @@ function drawCalendar(): void {
   const canvas = calendarCanvas.value
   if (!canvas) return
   const width = canvas.clientWidth || 360
-  const rows = 7
-  const value = calendar.value
-  const labelHeight = 14
-  const weekdayWidth = 22
-  const cell = Math.max(4, Math.min(11, Math.floor((width - weekdayWidth) / CALENDAR_WEEKS) - 2))
-  const height = labelHeight + rows * (cell + 2) + 4
+  const columns = calendar.value.weeks.length
+  const probe = calendarLayout(width, 999, columns)
+  const height = probe.labelHeight + 7 * (probe.cellHeight + probe.gap) + 4
   const ctx = prepare(canvas, width, height)
   if (!ctx) return
-
-  ctx.font = '9px "Inter", system-ui, sans-serif'
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'left'
-  ctx.fillStyle = 'rgba(255,255,255,0.45)'
-  for (const { column, label } of value.months) {
-    ctx.fillText(label, weekdayWidth + column * (cell + 2), 7)
-  }
-  ctx.textAlign = 'right'
-  for (const weekday of [1, 3, 5]) {
-    ctx.fillText(WEEKDAY_LABELS[weekday], weekdayWidth - 6, labelHeight + weekday * (cell + 2) + cell / 2)
-  }
-
-  for (let column = 0; column < value.weeks.length; column += 1) {
-    const week = value.weeks[column]
-    for (let offset = 0; offset < rows; offset += 1) {
-      const cellValue = week[offset]
-      const x = weekdayWidth + column * (cell + 2)
-      const y = labelHeight + offset * (cell + 2)
-      ctx.fillStyle = cellValue.future ? 'rgba(255,255,255,0.03)' : SHADES[shadeLevel(cellValue.count, value.max)]
-      ctx.beginPath()
-      ctx.roundRect?.(x, y, cell, cell, 2)
-      if (!ctx.roundRect) ctx.rect(x, y, cell, cell)
-      ctx.fill()
-    }
-  }
+  calendarSize.width = width
+  calendarSize.height = height
+  drawContributionCalendar(ctx, { width, height, calendar: calendar.value })
 }
 
 function draw(): void {
@@ -156,13 +109,17 @@ function draw(): void {
   drawCalendar()
 }
 
-function cellAt(event: MouseEvent, canvas: HTMLCanvasElement, cell: number, labelWidth: number, labelHeight: number): { column: number; row: number } | null {
+function cellAt(
+  event: MouseEvent,
+  canvas: HTMLCanvasElement,
+  layout: { cellWidth: number; cellHeight: number; gap: number; labelWidth: number; labelHeight: number },
+): { column: number; row: number } | null {
   const rect = canvas.getBoundingClientRect()
-  const x = event.clientX - rect.left - labelWidth
-  const y = event.clientY - rect.top - labelHeight
+  const x = event.clientX - rect.left - layout.labelWidth
+  const y = event.clientY - rect.top - layout.labelHeight
   if (x < 0 || y < 0) return null
-  const column = Math.floor(x / (cell + 2))
-  const row = Math.floor(y / (cell + 2))
+  const column = Math.floor(x / (layout.cellWidth + layout.gap))
+  const row = Math.floor(y / (layout.cellHeight + layout.gap))
   if (row < 0 || row > 6) return null
   return { column, row }
 }
@@ -170,9 +127,7 @@ function cellAt(event: MouseEvent, canvas: HTMLCanvasElement, cell: number, labe
 function onGridMove(event: MouseEvent): void {
   const canvas = gridCanvas.value
   if (!canvas) return
-  const width = canvas.clientWidth || 360
-  const cell = Math.max(6, Math.floor((width - GRID_LABEL_WIDTH) / 24) - 2)
-  const hit = cellAt(event, canvas, cell, GRID_LABEL_WIDTH, GRID_LABEL_HEIGHT)
+  const hit = cellAt(event, canvas, weekdayHourLayout(gridSize.width, gridSize.height))
   if (!hit || hit.column < 0 || hit.column > 23) {
     gridHover.value = null
     return
@@ -184,9 +139,7 @@ function onGridMove(event: MouseEvent): void {
 function onCalendarMove(event: MouseEvent): void {
   const canvas = calendarCanvas.value
   if (!canvas) return
-  const width = canvas.clientWidth || 360
-  const cell = Math.max(4, Math.min(11, Math.floor((width - 22) / CALENDAR_WEEKS) - 2))
-  const hit = cellAt(event, canvas, cell, 22, 14)
+  const hit = cellAt(event, canvas, calendarLayout(calendarSize.width, calendarSize.height, calendar.value.weeks.length))
   if (!hit || hit.column < 0 || hit.column >= calendar.value.weeks.length) {
     calendarHover.value = null
     return

@@ -8,6 +8,7 @@ import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
 import { EXPORT_FPS } from './export/frames'
 import type { ExportFrame, ExportFrameRequest } from './export/exporter'
+import { ExportOverlay, type OverlayOptions } from './export/overlay'
 
 export interface HudCommitInfo {
   sha: string
@@ -108,8 +109,10 @@ export class Engine {
   private speed = 1
   private disposed = false
   private resizeObserver: ResizeObserver | null = null
-  private recording: { fps: number; speed: number; frames: number } | null = null
+  private recording: { fps: number; frames: number; width: number; height: number } | null = null
   private authorColorLookup: (id: string) => string
+  /** Size of the current export, used when compositing frames. */
+  private exportSize = { width: 1920, height: 1080 }
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -453,7 +456,7 @@ export class Engine {
     }
 
     if (this.playing && this.timeline.commits.length > 0) {
-      this.simTime += simDt * this.speed * (this.recording ? this.recording.speed : 1)
+      this.simTime += simDt * this.speed
       if (this.simTime >= this.schedule.duration) {
         this.simTime = this.schedule.duration
         const index = this.schedule.indexAt(this.simTime)
@@ -476,6 +479,12 @@ export class Engine {
     this.renderer.consumeEvents(this.sim, clock)
     this.renderer.update(simDt, clock, this.sim, this.rig)
     this.renderer.render(this.rig.camera)
+
+    // While recording, keep the composite (scene + panels) up to date so the
+    // capture stream sees the same overlay the exported video gets.
+    if (this.recording) {
+      this.composeFrame(this.recording.width, this.recording.height)
+    }
 
     // FPS tracking for the HUD.
     this.fpsAccumulator += wallDt
@@ -601,8 +610,59 @@ export class Engine {
    * is a pure function of the timeline and the settings — not of whatever the
    * user happened to do before pressing export.
    */
+  /**
+   * Off-screen canvas the export and the live recording composite into: the
+   * WebGL frame plus the panel overlay (timeline, overview, activity charts).
+   */
+  private composite: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null
+  private overlay: ExportOverlay | null = null
+
+  private ensureComposite(width: number, height: number, options?: OverlayOptions): CanvasRenderingContext2D | null {
+    if (!this.composite || this.composite.canvas.width !== width || this.composite.canvas.height !== height) {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(width))
+      canvas.height = Math.max(1, Math.round(height))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      this.composite = { canvas, ctx }
+    }
+    if (!this.overlay) this.overlay = new ExportOverlay(this.timeline.commits, options)
+    else this.overlay.setCommits(this.timeline.commits)
+    return this.composite.ctx
+  }
+
+  /** Draw the scene plus the panel overlay into the composite canvas. */
+  private composeFrame(
+    width: number,
+    height: number,
+    overlayOptions?: OverlayOptions,
+  ): HTMLCanvasElement | null {
+    const ctx = this.ensureComposite(width, height, overlayOptions)
+    if (!ctx || !this.composite) return null
+    const canvas = this.composite.canvas
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    // The WebGL canvas is read in the same task as the render, so no
+    // preserveDrawingBuffer is needed.
+    ctx.drawImage(this.canvas, 0, 0, canvas.width, canvas.height)
+    this.overlay?.draw(ctx, {
+      width: canvas.width,
+      height: canvas.height,
+      simTime: this.simTime,
+      duration: this.schedule.duration,
+      sim: this.sim,
+      cameraTarget: this.rig.focusPoint,
+      date: this.computeDate(),
+      commit: this.timeline.commits[this.sim.currentIndex] ?? null,
+      buckets: this.schedule.activity(240, this.timeline.commits),
+    })
+    return canvas
+  }
+
   beginOfflineExport(width: number, height: number): void {
     this.pause()
+    this.exportSize = { width, height }
+    this.overlay = null
     this.sim.reset()
     this.simTime = 0
     this.boundsCacheTime = -Infinity
@@ -620,6 +680,7 @@ export class Engine {
 
   /** Restore responsive sizing and the pre-export position. */
   endOfflineExport(restoreTime: number): void {
+    this.overlay = null
     this.clearFixedSize()
     this.seek(Math.max(0, Math.min(this.schedule.duration, restoreTime)))
     this.boundsCacheTime = -Infinity
@@ -633,7 +694,7 @@ export class Engine {
    * simulated second) regardless of how long the frame took to render, which is
    * what makes the export independent of hardware speed.
    */
-  renderExportFrame(request: ExportFrameRequest): ExportFrame {
+  renderExportFrame(request: ExportFrameRequest, overlayOptions?: OverlayOptions): ExportFrame {
     const dt = 1 / EXPORT_FPS
     this.simTime = Math.max(0, Math.min(this.schedule.duration, request.simTime))
 
@@ -654,7 +715,9 @@ export class Engine {
     this.renderer.update(dt, this.simTime, this.sim, this.rig)
     this.renderer.render(this.rig.camera)
 
-    return new VideoFrame(this.canvas, {
+    // Composite the panel overlay (timeline, overview, activity) into the frame.
+    const composed = this.composeFrame(this.exportSize.width, this.exportSize.height, overlayOptions)
+    return new VideoFrame(composed ?? this.canvas, {
       timestamp: request.timestamp,
       duration: request.duration,
     })
@@ -664,9 +727,19 @@ export class Engine {
    * Recording hooks
    * ------------------------------------------------------------------ */
 
-  /** Called by the recorder; enables fixed-step clock advancement. */
-  beginRecording(fps: number, speed: number): void {
-    this.recording = { fps, speed, frames: 0 }
+  /**
+   * Called by the recorder: fixed-step clock advancement at the given frame
+   * rate, compositing the panels at that resolution. The simulation follows the
+   * playback speed, so the video matches what is on screen.
+   */
+  beginRecording(fps: number, width: number, height: number): void {
+    this.recording = { fps, frames: 0, width, height }
+  }
+
+  /** Composite canvas (scene + panels) used as the live capture source. */
+  prepareRecordingCanvas(width: number, height: number): HTMLCanvasElement | null {
+    this.ensureComposite(width, height)
+    return this.composite?.canvas ?? null
   }
 
   endRecording(): void {

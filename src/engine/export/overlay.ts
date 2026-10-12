@@ -1,0 +1,215 @@
+/**
+ * Composite overlay for exported video.
+ *
+ * The on-screen panels are DOM, and a video frame can only come from a canvas,
+ * so the export draws the same panel content into the frame with the shared
+ * canvas routines from `render/overlays.ts`: the timeline histogram along the
+ * bottom, the overview (minimap) in the bottom-right corner, and the activity
+ * charts — commits per weekday and hour, plus the sliding contribution calendar
+ * — in the right column.
+ *
+ * All geometry is derived from the frame size, so 720p, 1080p and portrait
+ * exports all lay out sensibly, and nothing here touches the DOM.
+ */
+
+import type { Simulation } from '../../sim/simulation'
+import type { ActivityBucket, TimelineCommit } from '../../timeline/types'
+import {
+  contributionCalendar,
+  dailyActivity,
+  dayStartMs,
+  weekdayHourGrid,
+  type DailyActivity,
+  type WeekdayHourGrid,
+} from '../../timeline/activity'
+import { MinimapDrawer } from '../../render/minimap'
+import {
+  drawActivityBars,
+  drawContributionCalendar,
+  drawPanel,
+  drawWeekdayHour,
+  TEXT_COLOR,
+  TEXT_STRONG,
+} from '../../render/overlays'
+import { formatDate, formatDateTime } from '../../timeline/schedule'
+
+export interface OverlayFrame {
+  /** Frame size in pixels. */
+  width: number
+  height: number
+  /** Playback state. */
+  simTime: number
+  duration: number
+  sim: Simulation
+  cameraTarget: { x: number; y: number; z?: number }
+  /** Interpolated real-world date at the current position (epoch ms). */
+  date: number
+  commit: TimelineCommit | null
+  /** Commits per activity bucket, for the timeline histogram. */
+  buckets: ActivityBucket[]
+}
+
+export interface OverlayOptions {
+  /** Draw the overview (minimap). */
+  overview?: boolean
+  /** Draw the timeline histogram. */
+  timeline?: boolean
+  /** Draw the weekday × hour heatmap. */
+  heatmap?: boolean
+  /** Draw the contribution calendar. */
+  contributions?: boolean
+}
+
+/**
+ * Draws the export chrome. One instance per export: the overview keeps its
+ * smoothing state between frames, exactly like the on-screen minimap.
+ */
+export class ExportOverlay {
+  private minimap = new MinimapDrawer()
+  private daily: DailyActivity
+  private grid: WeekdayHourGrid
+
+  constructor(
+    commits: readonly TimelineCommit[],
+    private readonly options: OverlayOptions = {},
+  ) {
+    this.daily = dailyActivity(commits)
+    this.grid = weekdayHourGrid(commits)
+  }
+
+  /** Update the aggregates after the timeline changes. */
+  setCommits(commits: readonly TimelineCommit[]): void {
+    this.daily = dailyActivity(commits)
+    this.grid = weekdayHourGrid(commits)
+  }
+
+  draw(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
+    const { width, height } = frame
+    const unit = Math.max(8, Math.round(Math.min(width, height) * 0.014))
+    const font = `${unit}px "Inter", system-ui, sans-serif`
+    const smallFont = `${Math.max(7, Math.round(unit * 0.72))}px "Inter", system-ui, sans-serif`
+
+    ctx.save()
+    ctx.textBaseline = 'middle'
+
+    const padding = Math.round(unit * 0.9)
+    const columnWidth = Math.round(Math.min(width * 0.3, Math.max(180, width * 0.26)))
+    const timelineHeight = Math.round(Math.min(height * 0.12, Math.max(26, unit * 2.6)))
+    const timelineY = height - timelineHeight - padding
+    const overviewSize = Math.round(Math.min(columnWidth, Math.max(80, height * 0.24)))
+    const overviewY = timelineY - overviewSize - padding
+
+    // ---- timeline -------------------------------------------------------
+    if (this.options.timeline !== false) {
+      const barsHeight = Math.round(timelineHeight * 0.62)
+      const labelHeight = timelineHeight - barsHeight
+      drawPanel(ctx, padding, timelineY, width - padding * 2, timelineHeight, {
+        background: 'rgba(9,13,24,0.68)',
+      })
+
+      ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.fillStyle = TEXT_STRONG
+      ctx.fillText(formatDateTime(frame.date), padding * 2, timelineY + labelHeight * 0.5)
+      if (frame.commit) {
+        const subject = frame.commit.subject
+        const label = `${frame.commit.shortSha} · ${subject.length > 58 ? `${subject.slice(0, 57)}…` : subject}`
+        ctx.fillStyle = TEXT_COLOR
+        ctx.fillText(label, padding * 2 + unit * 11, timelineY + labelHeight * 0.5)
+      }
+      ctx.textAlign = 'right'
+      ctx.fillStyle = TEXT_COLOR
+      const percent = frame.duration > 0 ? Math.round((frame.simTime / frame.duration) * 100) : 0
+      ctx.fillText(`${percent}%`, width - padding * 2, timelineY + labelHeight * 0.5)
+
+      ctx.save()
+      ctx.translate(padding * 2, timelineY + labelHeight)
+      drawActivityBars(ctx, {
+        width: width - padding * 4,
+        height: barsHeight,
+        buckets: frame.buckets,
+        position: frame.simTime,
+        duration: frame.duration,
+      })
+      ctx.restore()
+    }
+
+    // ---- overview -------------------------------------------------------
+    if (this.options.overview !== false) {
+      const x = width - padding - overviewSize
+      drawPanel(ctx, x, overviewY, overviewSize, overviewSize, { radius: Math.round(unit * 0.6) })
+      ctx.save()
+      ctx.beginPath()
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(x + 1, overviewY + 1, overviewSize - 2, overviewSize - 2, unit * 0.5)
+      } else {
+        ctx.rect(x + 1, overviewY + 1, overviewSize - 2, overviewSize - 2)
+      }
+      ctx.clip()
+      // The drawer works in its own square, so move to the panel first.
+      ctx.translate(x + 1, overviewY + 1)
+      this.minimap.draw(ctx, {
+        size: overviewSize - 2,
+        sim: frame.sim,
+        cameraTarget: frame.cameraTarget,
+      })
+      ctx.restore()
+      ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.fillStyle = TEXT_COLOR
+      ctx.fillText('Overview', x + unit * 0.6, overviewY - unit * 0.7)
+    }
+
+    // ---- activity column ------------------------------------------------
+    const columnX = width - padding - columnWidth
+    let cursorY = padding
+
+    if (this.options.heatmap !== false) {
+      const chartHeight = Math.round(columnWidth * 0.4)
+      const panelHeight = chartHeight + unit * 2.6
+      drawPanel(ctx, columnX, cursorY, columnWidth, panelHeight, { radius: Math.round(unit * 0.6) })
+      ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.fillStyle = TEXT_STRONG
+      ctx.fillText('Commits per weekday and hour', columnX + unit * 0.8, cursorY + unit * 1.1)
+      ctx.save()
+      ctx.translate(columnX + unit * 0.8, cursorY + unit * 1.8)
+      drawWeekdayHour(ctx, {
+        width: columnWidth - unit * 1.6,
+        height: chartHeight,
+        grid: this.grid,
+        font: smallFont,
+      })
+      ctx.restore()
+      cursorY += panelHeight + padding
+    }
+
+    if (this.options.contributions !== false) {
+      const chartHeight = Math.round(columnWidth * 0.34)
+      const panelHeight = chartHeight + unit * 3.4
+      const calendar = contributionCalendar(this.daily, frame.date)
+      drawPanel(ctx, columnX, cursorY, columnWidth, panelHeight, { radius: Math.round(unit * 0.6) })
+      ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.fillStyle = TEXT_STRONG
+      ctx.fillText('Contributions · last 53 weeks', columnX + unit * 0.8, cursorY + unit * 1.1)
+      ctx.fillStyle = TEXT_COLOR
+      ctx.fillText(
+        `${calendar.total.toLocaleString()} commits · ${formatDate(dayStartMs(calendar.start))} → ${formatDate(dayStartMs(calendar.end))}`,
+        columnX + unit * 0.8,
+        cursorY + unit * 2.4,
+      )
+      ctx.save()
+      ctx.translate(columnX + unit * 0.8, cursorY + unit * 3.2)
+      drawContributionCalendar(ctx, {
+        width: columnWidth - unit * 1.6,
+        height: chartHeight,
+        calendar,
+        font: smallFont,
+      })
+      ctx.restore()
+    }
+
+    ctx.restore()
+  }
+}

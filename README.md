@@ -70,13 +70,20 @@ On GitHub, Pages must point at the branch once: **Settings → Pages → Source:
 Two export modes live in Settings → Recording:
 
 **Deterministic render (default).** The animation is rendered frame by frame from
-simulated time `t = 0` to the end of the timeline at **exactly 30 frames per
-simulated second**, so the file does not depend on how fast the machine is:
+simulated time `t = 0` to the end of the timeline at **exactly 60 fps**, following
+the **playback speed selected in the app**, so the file does not depend on how
+fast the machine is:
 
-* the simulation advances by exactly `1/30 s` per frame and the commit index is
+* every frame advances the simulation by `speed / 60 s` and the commit index is
   derived from that time, so every frame is the same on every machine — a slow
-  machine just takes longer (a 51 s animation rendered in software here took
-  ~170 s of wall clock and produced the same 1,530 frames as a fast one);
+  machine just takes longer (a 51 s animation at 4× rendered in software here
+  took ~105 s of wall clock and produced the same 765 frames as a fast one);
+* the video **contains the panels**: the timeline histogram along the bottom, the
+  overview (minimap) in the bottom-right corner, and the activity charts — commits
+  per weekday and hour, plus the sliding contribution calendar — in the right
+  column. They are drawn with the same canvas routines the on-screen panels use
+  (`render/overlays.ts`), composited into each frame, and laid out from the frame
+  size so 720p, 1080p and portrait exports all work;
 * frames are drawn by the existing WebGL pipeline (`Engine.renderExportFrame`),
   at the resolution you pick, with the camera stepping on a fixed frame cadence
   rather than a wall clock;
@@ -88,22 +95,27 @@ simulated second**, so the file does not depend on how fast the machine is:
   flat for long exports. Only the compressed stream is retained;
 * **WebM (VP9)** is the default output; **MP4 (H.264)** is offered when the
   browser has an AVC encoder. Containers are written in this repository
-  (`src/engine/export/webm.ts`, `mp4.ts`) — no muxer dependency;
+  (`src/engine/export/webm.ts`, `mp4.ts`) — no muxer dependency, and the track
+  declares the export's frame duration so players report the real frame rate;
 * progress reports frames rendered, the total frame count, and the simulated
   time reached; cancelling stops cleanly and leaves the session where it was;
 * at the end the encoder is flushed and the container is finalised (cluster
   flush, duration patched, MP4 durations patched), so the file is playable and
-  contains every frame. `ffprobe` on a 51 s export reports `vp9`/`h264`,
-  `640x360`, `30/1`, `1530` frames, `duration=51.000000`.
+  contains every frame. `ffprobe` on a 51 s export at 4× reports `vp9`/`h264`,
+  `1280x720`, `29999/500` (60 fps), `765` frames, `duration=12.750000`.
 
 The *rendering* is deterministic; the encoder itself is not required to be
 bit-exact (parallel VP9/H.264 encoders may vary by a few bytes), so two runs
 produce the same frames and duration, not necessarily identical files.
 
 **Live capture.** The older `MediaRecorder` + `captureStream` path samples the
-canvas in real time. It can capture manual panning and zooming, but the wall
+composited frame in real time at 60 fps, following the same playback speed. It can
+capture manual panning and zooming and includes the same panels, but the wall
 clock decides how many frames reach the file — use the deterministic render when
 the result has to be reproducible.
+
+Both modes share the frame rate (60 fps) and the speed: there is no separate
+recording speed setting, because the video should look like what you are watching.
 
 ### Ignoring folders
 

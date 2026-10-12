@@ -105,15 +105,16 @@ function join(parts: Uint8Array[]): Uint8Array {
 }
 
 describe('WebmMuxer', () => {
-  const frame = (index: number, size = 8, keyFrame = index % 30 === 0): { data: Uint8Array; timestamp: number; keyFrame: boolean } => ({
+  const frame = (index: number, size = 8, keyFrame = index % 60 === 0): { data: Uint8Array; timestamp: number; keyFrame: boolean } => ({
     data: new Uint8Array(size).fill(index & 0xff),
-    timestamp: Math.round((index * 1_000_000) / 30),
+    timestamp: Math.round((index * 1_000_000) / 60),
     keyFrame,
   })
 
   it('writes an EBML header, tracks and patched duration', () => {
     const muxer = new WebmMuxer()
-    muxer.initialize({ width: 1280, height: 720, codec: 'vp9' })
+    // 60 fps, as the exporter configures it.
+    muxer.initialize({ width: 1280, height: 720, codec: 'vp9', frameDurationUs: 16_667 })
     const total = 121
     for (let index = 0; index < total; index += 1) muxer.addFrame(frame(index))
     const bytes = join(muxer.finish())
@@ -136,13 +137,15 @@ describe('WebmMuxer', () => {
     expect(readUint(bytes, info.find((element) => element.id === WEBM_ID.timecodeScale)!)).toBe(1_000_000)
     const duration = info.find((element) => element.id === WEBM_ID.duration)
     expect(duration).toBeDefined()
-    // 121 frames at 30 fps, inclusive of t = 0 → 4.033 s.
-    expect(readFloat(bytes, duration!)).toBeCloseTo(4033.3, 0)
+    // 121 frames at 60 fps, inclusive of t = 0 → 2.0167 s.
+    expect(readFloat(bytes, duration!)).toBeCloseTo(2016.7, 0)
 
     const tracks = childrenWithId(children(bytes, segmentBody, segment.end), WEBM_ID.tracks)
     const trackEntry = children(bytes, tracks[0].bodyStart, tracks[0].end)[0]
     const trackChildren = children(bytes, trackEntry.bodyStart, trackEntry.end)
     expect(readString(bytes, trackChildren.find((element) => element.id === WEBM_ID.codecId)!)).toBe('V_VP9')
+    // The track declares the export's frame duration (60 fps → 16 667 µs).
+    expect(readUint(bytes, trackChildren.find((element) => element.id === WEBM_ID.defaultDuration)!)).toBe(16_667_000)
     const video = trackChildren.find((element) => element.id === WEBM_ID.video)!
     const videoChildren = children(bytes, video.bodyStart, video.end)
     expect(readUint(bytes, videoChildren.find((element) => element.id === WEBM_ID.pixelWidth)!)).toBe(1280)
@@ -161,8 +164,8 @@ describe('WebmMuxer', () => {
     const segment = top[1]
     const segmentChildren = children(bytes, segment.bodyStart, segment.end)
     const clusters = childrenWithId(segmentChildren, WEBM_ID.cluster)
-    // 70 frames at one keyframe per 30 frames → 3 clusters (0, 30, 60).
-    expect(clusters).toHaveLength(3)
+    // 70 frames at one keyframe per 60 frames → 2 clusters (0, 60).
+    expect(clusters).toHaveLength(2)
 
     let blocks = 0
     let lastTimecode = -1
