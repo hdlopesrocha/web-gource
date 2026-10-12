@@ -6,6 +6,8 @@ import { Camera2D, type CameraOptions } from '../render/camera'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
 import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
+import { EXPORT_FPS } from './export/frames'
+import type { ExportFrame, ExportFrameRequest } from './export/exporter'
 
 export interface HudCommitInfo {
   sha: string
@@ -585,6 +587,77 @@ export class Engine {
       filesTotal: commit.filesTotal,
       timestamp: commit.timestamp,
     }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Deterministic export
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Prepare for an offline export.
+   *
+   * The simulation is reset to a clean state (an empty repository at t = 0) and
+   * the camera is put back to its automatic framing, so the exported animation
+   * is a pure function of the timeline and the settings — not of whatever the
+   * user happened to do before pressing export.
+   */
+  beginOfflineExport(width: number, height: number): void {
+    this.pause()
+    this.sim.reset()
+    this.simTime = 0
+    this.boundsCacheTime = -Infinity
+    this.sim.scheduleTime = (index) => this.scheduleTime(index)
+    this.sim.setSizeMode(this.sizeMode)
+    this.sim.setFileSizes(this.timeline.fileSizes)
+    this.renderer.setNodes(this.sim.nodes)
+    this.renderer.clearEffects()
+    this.renderer.requestFullSync()
+    this.resizeTo(width, height)
+    this.rig.recenter(this.sim.bounds())
+    this.rig.frame(this.sim.bounds(), true)
+    this.emitHud(true)
+  }
+
+  /** Restore responsive sizing and the pre-export position. */
+  endOfflineExport(restoreTime: number): void {
+    this.clearFixedSize()
+    this.seek(Math.max(0, Math.min(this.schedule.duration, restoreTime)))
+    this.boundsCacheTime = -Infinity
+    this.emitHud(true)
+  }
+
+  /**
+   * Render one export frame and wrap it for the encoder.
+   *
+   * The clock advances by exactly one frame step ({@link EXPORT_FPS} frames per
+   * simulated second) regardless of how long the frame took to render, which is
+   * what makes the export independent of hardware speed.
+   */
+  renderExportFrame(request: ExportFrameRequest): ExportFrame {
+    const dt = 1 / EXPORT_FPS
+    this.simTime = Math.max(0, Math.min(this.schedule.duration, request.simTime))
+
+    const index = this.schedule.indexAt(this.simTime)
+    if (index > this.sim.currentIndex) this.sim.applyUpTo(index)
+
+    this.sim.update(dt, this.simTime)
+    this.sim.pruneAuthors(this.simTime, 72)
+
+    const focus = this.sim.recentActivityCenter(4) ?? this.sim.authorCentroid()
+    // Bounds are recomputed on a fixed frame cadence (never on wall-clock time)
+    // so the camera follows the same path on every machine.
+    if (request.frame % 15 === 0) this.boundsValue = this.sim.bounds()
+    this.rig.update(dt, this.cameraOptions, focus, this.boundsValue)
+
+    // `now` is the simulated time: every time-based effect is deterministic.
+    this.renderer.consumeEvents(this.sim, this.simTime)
+    this.renderer.update(dt, this.simTime, this.sim, this.rig)
+    this.renderer.render(this.rig.camera)
+
+    return new VideoFrame(this.canvas, {
+      timestamp: request.timestamp,
+      duration: request.duration,
+    })
   }
 
   /* ------------------------------------------------------------------ *
