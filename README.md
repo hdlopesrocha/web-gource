@@ -188,7 +188,11 @@ Given the same history and settings, the same sequence of events is produced:
   directories — viewed through an orthographic camera, with per-instance colour and matrix updates
   only for changed nodes. Both grow by reallocating and copying instance buffers when a repository
   turns out to be larger than expected.
-* Branch edges share one `LineSegments` buffer with two vertices per node.
+* Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
+  depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
+  behind a file circle or a directory ring instead of being painted across it — and every segment is
+  trimmed by the radius of both endpoints, so it starts at the parent's edge and stops at the child's
+  edge. A branch whose two circles already touch is dropped rather than drawn as a stub inside one.
 * Activity effects and author trails come from a single additive `Points` pool with a free-list (no
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
   at any zoom level.
@@ -203,7 +207,7 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Dynamic layout
 
-![Files packed on rings around their directories](docs/screenshot-rings.png)
+![Files packed on rings around their directories, with branches stopping at the circle edges](docs/screenshot-rings.png)
 
 Files are packed onto one or more concentric rings around their directory, and
 those rings reflow while history plays:
@@ -289,6 +293,9 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * activity: avatar motion is continuous and bounded by the speed limit, tethers are created per
   changed file, refreshed, expired and capped, beams fade, follow both endpoints, scale with zoom
   and respect their capacity;
+* branch lines: endpoints stay outside both circles, a branch between touching circles is dropped,
+  the material stays opaque so the node pass occludes it, and the dimming is baked into the vertex
+  colours;
 * dynamic layout: ring packing never overlaps circles, grows with item count and radius, uses
   concentric rings for crowds, is deterministic and order independent; in the simulation, adding,
   deleting or growing a file moves its siblings smoothly, seek and playback produce identical

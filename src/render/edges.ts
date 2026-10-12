@@ -9,9 +9,19 @@ const scratch = new THREE.Color()
 /**
  * Branch edges between directories and their children.
  *
- * Implemented as a single `LineSegments` buffer with two vertices per node,
- * written in place. Dead nodes collapse to a zero-length segment, so the buffer
- * never has to be rebuilt while scrubbing through history.
+ * Two things make the branches read like Gource's tree:
+ *
+ *  - they are **opaque and depth tested**, drawn in the opaque pass *before* the
+ *    nodes, so a line that crosses a file circle or a directory ring disappears
+ *    behind it instead of being painted over it (a transparent material would be
+ *    rendered after the circles, which is what made lines look like they cut
+ *    through them);
+ *  - each segment is **trimmed by the radius of both endpoints**, so it starts at
+ *    the edge of the parent and stops at the edge of the child rather than
+ *    running into the middle of a circle or through the hollow of a ring.
+ *
+ * One `LineSegments` buffer holds every edge with two vertices per node, written
+ * in place; dead nodes collapse to a zero-length segment.
  */
 export class EdgeField {
   readonly lines: THREE.LineSegments
@@ -19,6 +29,7 @@ export class EdgeField {
   private colors: Float32Array
   private capacity: number
   private count = 0
+  private opacity = 0.55
   private recent = new Map<number, { kind: ChangeKind; until: number; start: number }>()
 
   constructor(capacity: number) {
@@ -31,17 +42,30 @@ export class EdgeField {
     geometry.setDrawRange(0, 0)
     const material = new THREE.LineBasicMaterial({
       vertexColors: true,
-      transparent: true,
-      opacity: 0.5,
-      depthWrite: false,
+      // Opaque on purpose: keeps the lines in the opaque pass so the node
+      // circles occlude them. The dimming is baked into the vertex colours.
+      transparent: false,
+      depthTest: true,
+      depthWrite: true,
       toneMapped: false,
     })
     this.lines = new THREE.LineSegments(geometry, material)
     this.lines.frustumCulled = false
+    // Behind the nodes in the opaque queue.
+    this.lines.renderOrder = -1
   }
 
+  /**
+   * Dimming factor for the branch lines. Because the material is opaque, the
+   * value is baked into the vertex colours, so changing it needs a full rewrite
+   * (the renderer requests one).
+   */
   setOpacity(opacity: number): void {
-    ;(this.lines.material as THREE.LineBasicMaterial).opacity = opacity
+    this.opacity = Math.max(0.05, Math.min(1, opacity))
+  }
+
+  get currentOpacity(): number {
+    return this.opacity
   }
 
   private ensureCapacity(nodes: number): void {
@@ -78,29 +102,65 @@ export class EdgeField {
     geometry.setDrawRange(0, this.count * 2)
   }
 
+  private collapse(index: number): void {
+    for (let offset = 0; offset < 6; offset += 1) {
+      this.positions[index + offset] = 0
+      this.colors[index + offset] = 0
+    }
+  }
+
   private writeEdge(node: SimNode, nodes: readonly SimNode[]): void {
     const index = node.id * 6
     const parent = node.parent >= 0 ? nodes[node.parent] : undefined
     if (!node.visible || !parent || parent.kind === 'file') {
-      for (let offset = 0; offset < 6; offset += 1) {
-        this.positions[index + offset] = 0
-        this.colors[index + offset] = 0
-      }
+      this.collapse(index)
       return
     }
+
+    let dx = node.position.x - parent.position.x
+    let dy = node.position.y - parent.position.y
+    const length = Math.hypot(dx, dy)
+    if (length < 0.0001) {
+      this.collapse(index)
+      return
+    }
+    dx /= length
+    dy /= length
+
+    // Trim both ends by the radius of the node they belong to (plus a hair of
+    // margin), so a branch starts at the parent's edge and stops at the child's
+    // edge instead of running into a circle or through the hollow of a ring.
+    const startOffset = Math.max(0, parent.radius) + 0.02
+    const endOffset = Math.max(0, node.radius) + 0.02
+    // If the two circles already cover the gap there is no visible branch to
+    // draw: collapsing avoids a stub that would sit inside a circle.
+    if (startOffset + endOffset > length * 0.92) {
+      this.collapse(index)
+      return
+    }
+    const ax = parent.position.x + dx * startOffset
+    const ay = parent.position.y + dy * startOffset
+    const bx = node.position.x - dx * endOffset
+    const by = node.position.y - dy * endOffset
+
     const color = this.baseColor(node)
-    this.positions[index] = parent.position.x
-    this.positions[index + 1] = parent.position.y
-    this.positions[index + 2] = parent.position.z
-    this.positions[index + 3] = node.position.x
-    this.positions[index + 4] = node.position.y
-    this.positions[index + 5] = node.position.z
-    this.colors[index] = color.r * 0.3
-    this.colors[index + 1] = color.g * 0.3
-    this.colors[index + 2] = color.b * 0.3
-    this.colors[index + 3] = color.r
-    this.colors[index + 4] = color.g
-    this.colors[index + 5] = color.b
+    this.positions[index] = ax
+    this.positions[index + 1] = ay
+    this.positions[index + 2] = 0
+    this.positions[index + 3] = bx
+    this.positions[index + 4] = by
+    this.positions[index + 5] = 0
+
+    // Dim at the parent end, brighter at the child end, all scaled by the
+    // configured opacity.
+    const near = this.opacity * 0.45
+    const far = this.opacity
+    this.colors[index] = color.r * near
+    this.colors[index + 1] = color.g * near
+    this.colors[index + 2] = color.b * near
+    this.colors[index + 3] = color.r * far
+    this.colors[index + 4] = color.g * far
+    this.colors[index + 5] = color.b * far
   }
 
   private baseColor(node: SimNode): THREE.Color {
@@ -129,12 +189,12 @@ export class EdgeField {
         this.recent.delete(nodeId)
         if (node.visible && node.parent >= 0) {
           const base = this.baseColor(node)
-          this.colors[index] = base.r * 0.3
-          this.colors[index + 1] = base.g * 0.3
-          this.colors[index + 2] = base.b * 0.3
-          this.colors[index + 3] = base.r
-          this.colors[index + 4] = base.g
-          this.colors[index + 5] = base.b
+          this.colors[index] = base.r * this.opacity * 0.45
+          this.colors[index + 1] = base.g * this.opacity * 0.45
+          this.colors[index + 2] = base.b * this.opacity * 0.45
+          this.colors[index + 3] = base.r * this.opacity
+          this.colors[index + 4] = base.g * this.opacity
+          this.colors[index + 5] = base.b * this.opacity
           dirty = true
         }
         continue

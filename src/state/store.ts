@@ -203,7 +203,7 @@ function persist(key: string, value: unknown): void {
 const defaultSettings: AppState['settings'] = {
   fileColorMode: 'extension',
   showEdges: true,
-  edgeOpacity: 0.5,
+  edgeOpacity: 0.6,
   showDirs: true,
   radiusScale: 1,
   particleIntensity: 1,

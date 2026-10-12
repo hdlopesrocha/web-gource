@@ -51,6 +51,16 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Branches</h3>
+        <p class="muted small">
+          The branch lines follow the Gource convention: they are drawn behind the nodes, so a line
+          passing across a file circle or a directory ring disappears behind it, and each line starts
+          at the edge of its parent and stops at the edge of its child instead of running into the
+          middle of a circle. Edge dimming is adjustable in Settings → Visual.
+        </p>
+      </section>
+
+      <section>
         <h3>Dynamic layout</h3>
         <p class="muted small">
           Files are packed onto one or more rings around their directory. The ring radius follows the circles that

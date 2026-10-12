@@ -80,6 +80,7 @@ export class VisualizerController {
       particles: info.liveParticles,
       beams: info.beams,
       beamSample: this.engine.renderer.beamSample(),
+      lineClearance: this.engine.renderer.lineClearance(),
       nodes: this.simulation?.nodes.length ?? 0,
       sizes: {
         mapSize: this.fileSizes.size,

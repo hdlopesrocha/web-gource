@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { ChangeKind } from '../timeline/types'
 import type { SimEvent, SimNode, Simulation } from '../sim/simulation'
-import { NodeField, type FileColorMode } from './nodes'
+import { EFFECT_Z, NodeField, type FileColorMode } from './nodes'
 import { EdgeField } from './edges'
 import { ParticleField } from './particles'
 import { AuthorField } from './authors'
@@ -40,7 +40,7 @@ export interface RendererSettings {
 export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   fileColorMode: 'extension',
   showEdges: true,
-  edgeOpacity: 0.5,
+  edgeOpacity: 0.6,
   showDirs: true,
   radiusScale: 1,
   particleIntensity: 1,
@@ -257,7 +257,9 @@ export class SceneRenderer {
     if (
       previous.fileColorMode !== this.settings.fileColorMode ||
       previous.showDirs !== this.settings.showDirs ||
-      previous.radiusScale !== this.settings.radiusScale
+      previous.radiusScale !== this.settings.radiusScale ||
+      // The edge dimming is baked into the vertex colours.
+      previous.edgeOpacity !== this.settings.edgeOpacity
     ) {
       this.fullSyncPending = true
     }
@@ -363,7 +365,8 @@ export class SceneRenderer {
     const worldPerPixel = camera.worldPerPixel(this.size.height)
     this.authors.sync(authors, worldPerPixel * MIN_AVATAR_PIXELS)
 
-    // Beams from each author to the files of the current commit.
+    // Beams from each author to the files of the current commit (drawn on top:
+    // they are the activity highlight, not scenery).
     this.beams.update(simTime, authors, nodes, worldPerPixel)
 
     // Trail particles for avatars that are travelling.
@@ -371,7 +374,7 @@ export class SceneRenderer {
       const last = this.trailCooldown.get(author.author.id) ?? 0
       if (now - last < 0.05) continue
       this.trailCooldown.set(author.author.id, now)
-      this.particles.trail({ x: author.position.x, y: author.position.y + 1.4, z: 0 }, color)
+      this.particles.trail({ x: author.position.x, y: author.position.y + 1.4, z: EFFECT_Z }, color)
     }
     if (this.trailCooldown.size > 256) {
       for (const [id, time] of this.trailCooldown) if (now - time > 5) this.trailCooldown.delete(id)
@@ -398,6 +401,41 @@ export class SceneRenderer {
   render(camera: THREE.Camera): void {
     if (this.disposed) return
     this.gl.render(this.scene, camera)
+  }
+
+  /**
+   * Diagnostics for the branch lines: how far every drawn endpoint sits outside
+   * the circle it belongs to. A negative clearance would mean a line running
+   * into a node.
+   */
+  lineClearance(): { edges: number; minChildClearance: number; minParentClearance: number } | null {
+    const nodes = this.pendingNodes
+    if (!nodes) return null
+    const positions = this.edges.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+    const array = positions.array as Float32Array
+    let edges = 0
+    let minChild = Number.POSITIVE_INFINITY
+    let minParent = Number.POSITIVE_INFINITY
+    for (const node of nodes) {
+      if (node.parent < 0 || !node.visible) continue
+      const parent = nodes[node.parent]
+      if (!parent || parent.kind === 'file') continue
+      const index = node.id * 6
+      const ax = array[index]
+      const ay = array[index + 1]
+      const bx = array[index + 3]
+      const by = array[index + 4]
+      if (ax === 0 && ay === 0 && bx === 0 && by === 0) continue
+      edges += 1
+      minChild = Math.min(minChild, Math.hypot(bx - node.position.x, by - node.position.y) - node.radius)
+      minParent = Math.min(minParent, Math.hypot(ax - parent.position.x, ay - parent.position.y) - parent.radius)
+    }
+    if (edges === 0) return { edges: 0, minChildClearance: 0, minParentClearance: 0 }
+    return {
+      edges,
+      minChildClearance: Math.round(minChild * 1000) / 1000,
+      minParentClearance: Math.round(minParent * 1000) / 1000,
+    }
   }
 
   /** Diagnostics for the beam layer. */

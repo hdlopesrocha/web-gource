@@ -22,6 +22,14 @@ const HIGHLIGHT_THRESHOLD = 0.92
 const scratchColor = new THREE.Color()
 
 /**
+ * Depth offsets that keep the layers unambiguous with the orthographic camera
+ * (which looks down the -Z axis): nodes sit in front of the branch lines, and
+ * effects sit in front of the nodes.
+ */
+export const NODE_Z = 0.25
+export const EFFECT_Z = 0.5
+
+/**
  * Instanced renderer for the 2D tree.
  *
  * Files are flat discs and directories are rings, both on the XY plane facing
@@ -223,7 +231,7 @@ export class NodeField {
     if (instance === undefined) return
     const mesh = isFile ? this.fileMesh : this.dirMesh
 
-    this.position.set(node.position.x, node.position.y, 0)
+    this.position.set(node.position.x, node.position.y, NODE_Z)
     if (!node.visible) {
       this.matrix.compose(this.position, this.quaternion, this.scale.set(0, 0, 0))
       mesh.setMatrixAt(instance, this.matrix)
@@ -256,7 +264,7 @@ export class NodeField {
     const mesh = isFile ? this.fileMesh : this.dirMesh
     const pulse = 1 + 0.45 * amount
     const radius = Math.max(0.02, node.radius * (isFile ? this.radiusScale : 1) * pulse)
-    this.position.set(node.position.x, node.position.y, 0)
+    this.position.set(node.position.x, node.position.y, NODE_Z)
     this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, 1))
     mesh.setMatrixAt(instance, this.matrix)
     mesh.instanceMatrix.needsUpdate = true

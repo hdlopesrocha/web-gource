@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { NodeField } from '../src/render/nodes'
+import { NODE_Z, NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
 import { ParticleField, pointSizePixels } from '../src/render/particles'
 import { Camera2D } from '../src/render/camera'
@@ -107,30 +107,117 @@ describe('NodeField', () => {
 })
 
 describe('EdgeField', () => {
-  it('writes one segment per visible node and collapses hidden ones', () => {
+  it('draws one trimmed segment per visible node and collapses hidden ones', () => {
     const field = new EdgeField(16)
-    const parent = node(0, { kind: 'root', path: '', position: { x: 0, y: 0, z: 0 } })
-    const child = node(1, { parent: 0, position: { x: 10, y: 0, z: 0 } })
+    const parent = node(0, { kind: 'root', path: '', radius: 0.5, position: { x: 0, y: 0, z: 0 } })
+    const child = node(1, { parent: 0, radius: 0.2, position: { x: 10, y: 0, z: 0 } })
     const nodes = [parent, child]
     field.sync(nodes, true)
     const geometry = field.lines.geometry
     expect(geometry.drawRange.count).toBe(4)
 
     const positions = geometry.getAttribute('position') as THREE.BufferAttribute
-    // Second segment (the child) spans from the parent to the child position.
-    expect(positions.getX(2)).toBe(0)
-    expect(positions.getX(3)).toBe(10)
+    // The branch starts at the parent's edge and stops at the child's edge, so
+    // it never runs into a circle (a 0.02 margin keeps it off the outline).
+    expect(positions.getX(2)).toBeCloseTo(0.52, 5)
+    expect(positions.getX(3)).toBeCloseTo(9.78, 5)
+    expect(positions.getY(2)).toBeCloseTo(0, 5)
+    expect(positions.getY(3)).toBeCloseTo(0, 5)
 
+    // Hidden nodes collapse to a zero-length segment.
     child.visible = false
     field.sync(nodes, false, [1])
     expect((geometry.getAttribute('position') as THREE.BufferAttribute).getX(3)).toBe(0)
     field.dispose()
   })
 
+  it('sits behind the node circles and is opaque so they occlude it', () => {
+    const field = new EdgeField(8)
+    const material = field.lines.material as THREE.LineBasicMaterial
+    // A transparent material would be rendered after the circles, which is what
+    // made lines look like they crossed them.
+    expect(material.transparent).toBe(false)
+    expect(material.depthTest).toBe(true)
+    expect(field.lines.renderOrder).toBeLessThan(0)
+
+    const parent = node(0, { kind: 'root', path: '', radius: 0.4, position: { x: 0, y: 0, z: 0 } })
+    const child = node(1, { parent: 0, radius: 0.3, position: { x: 8, y: 0, z: 0 } })
+    field.sync([parent, child], true)
+    const positions = field.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+    // Branch lines live on the z = 0 plane, the nodes in front of them.
+    expect(positions.getZ(0)).toBe(0)
+    expect(positions.getZ(1)).toBe(0)
+    expect(NODE_Z).toBeGreaterThan(0)
+    field.dispose()
+  })
+
+  it('bakes the configured dimming into the vertex colours', () => {
+    const field = new EdgeField(8)
+    const parent = node(0, { kind: 'root', path: '', radius: 0.4, position: { x: 0, y: 0, z: 0 } })
+    const child = node(1, { parent: 0, radius: 0.3, position: { x: 8, y: 0, z: 0 } })
+
+    // Node 1 owns vertex slots 2 and 3; slot 3 is the (brighter) child end.
+    field.setOpacity(1)
+    field.sync([parent, child], true)
+    const bright = (field.lines.geometry.getAttribute('color') as THREE.BufferAttribute).getX(3)
+
+    field.setOpacity(0.2)
+    field.sync([parent, child], true)
+    const dim = (field.lines.geometry.getAttribute('color') as THREE.BufferAttribute).getX(3)
+    expect(dim).toBeLessThan(bright * 0.4)
+    expect(field.currentOpacity).toBeCloseTo(0.2, 6)
+    field.dispose()
+  })
+
+  it('drops a branch when the two circles already touch', () => {
+    const field = new EdgeField(4)
+    const parent = node(0, { kind: 'root', path: '', radius: 1.2, position: { x: 0, y: 0, z: 0 } })
+    const child = node(1, { parent: 0, radius: 1.2, position: { x: 1, y: 0, z: 0 } })
+    field.sync([parent, child], true)
+    const positions = field.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+    // Both vertices collapsed: no stub inside the circles.
+    expect(positions.getX(2)).toBe(0)
+    expect(positions.getX(3)).toBe(0)
+    field.dispose()
+  })
+
+  it('keeps every endpoint outside the circle it belongs to', () => {
+    const field = new EdgeField(32)
+    const nodes: SimNode[] = [node(0, { kind: 'root', path: '', radius: 0.5, position: { x: 0, y: 0, z: 0 } })]
+    for (let index = 1; index < 24; index += 1) {
+      nodes.push(
+        node(index, {
+          parent: 0,
+          radius: 0.4 + (index % 5) * 0.25,
+          position: { x: Math.cos(index) * (3 + (index % 4)), y: Math.sin(index) * (3 + (index % 4)), z: 0 },
+        }),
+      )
+    }
+    field.sync(nodes, true)
+    const positions = field.lines.geometry.getAttribute('position') as THREE.BufferAttribute
+    for (const entry of nodes) {
+      if (entry.parent < 0) continue
+      const index = entry.id * 6
+      const ax = positions.getX(index / 3 + 0)
+      const ay = positions.getY(index / 3 + 0)
+      const bx = positions.getX(index / 3 + 1)
+      const by = positions.getY(index / 3 + 1)
+      if (ax === 0 && ay === 0 && bx === 0 && by === 0) continue
+      const childClearance = Math.hypot(bx - entry.position.x, by - entry.position.y) - entry.radius
+      expect(childClearance).toBeGreaterThan(0)
+      const parentNode = nodes[entry.parent]
+      const parentClearance = Math.hypot(ax - parentNode.position.x, ay - parentNode.position.y) - parentNode.radius
+      expect(parentClearance).toBeGreaterThan(0)
+    }
+    field.dispose()
+  })
+
   it('grows its buffers for large trees', () => {
     const field = new EdgeField(8)
-    const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
-    for (let index = 1; index < 200; index += 1) nodes.push(node(index, { parent: index - 1 }))
+    const nodes: SimNode[] = [node(0, { kind: 'root', path: '', radius: 0.4 })]
+    for (let index = 1; index < 200; index += 1) {
+      nodes.push(node(index, { parent: index - 1, radius: 0.3, position: { x: index * 2, y: 0, z: 0 } }))
+    }
     field.sync(nodes, true)
     expect(field.lines.geometry.drawRange.count).toBe(400)
     field.dispose()
