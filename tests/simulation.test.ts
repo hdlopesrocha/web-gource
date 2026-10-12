@@ -290,3 +290,55 @@ describe('Simulation', () => {
     expect(sim.bounds().radius).toBeGreaterThan(0)
   })
 })
+
+describe('restart', () => {
+  const commits: RawCommit[] = [
+    raw({ sha: 'a', timestamp: 1000, files: [{ path: 'src/core/one.ts', kind: 'add', additions: 5, deletions: 0 }] }),
+    raw({ sha: 'b', timestamp: 2000, files: [{ path: 'src/ui/two.ts', kind: 'add', additions: 3, deletions: 0 }] }),
+    raw({ sha: 'c', timestamp: 3000, files: [{ path: 'src/core/three.ts', kind: 'add', additions: 4, deletions: 0 }] }),
+  ]
+
+  it('brings the folders back when a restart replays the history', () => {
+    const { sim } = makeSimulation(commits)
+    sim.applyUpTo(2)
+    const dirs = () => sim.nodes.filter((node) => node.kind !== 'file')
+    expect(dirs().every((dir) => dir.visible)).toBe(true)
+
+    // A restart rewinds to before the first commit: everything hides.
+    sim.seek(-1)
+    expect(dirs().some((dir) => dir.visible)).toBe(false)
+
+    // Replaying (fresh = false, so no new toggles) must restore the folders
+    // along with the files that live in them.
+    sim.applyUpTo(1)
+    const visibleDirs = dirs().filter((dir) => dir.visible)
+    expect(visibleDirs.length).toBeGreaterThan(0)
+    expect(sim.find('src')!.visible).toBe(true)
+    expect(sim.find('src/core')!.visible).toBe(true)
+    // The root is the origin and comes back too.
+    expect(sim.root.visible).toBe(true)
+    // Every visible file has a fully visible folder chain above it.
+    for (const file of sim.nodes.filter((node) => node.kind === 'file' && node.visible)) {
+      let parentId = file.parent
+      while (parentId >= 0) {
+        const parent = sim.nodes[parentId]
+        expect(parent.visible).toBe(true)
+        parentId = parent.parent
+      }
+    }
+  })
+
+  it('does not resurrect folders whose files are all gone', () => {
+    const withDelete: RawCommit[] = [
+      ...commits,
+      raw({ sha: 'd', timestamp: 4000, files: [{ path: 'src/ui/two.ts', kind: 'delete', additions: 0, deletions: 3 }] }),
+    ]
+    const { sim } = makeSimulation(withDelete)
+    sim.applyUpTo(3)
+    expect(sim.find('src/ui')!.visible).toBe(true)
+    sim.seek(-1)
+    sim.applyUpTo(0) // only the first commit has happened again
+    expect(sim.find('src/ui')!.visible).toBe(false)
+    expect(sim.find('src/core')!.visible).toBe(true)
+  })
+})

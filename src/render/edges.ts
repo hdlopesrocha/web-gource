@@ -118,7 +118,7 @@ export class EdgeField {
   private writeEdge(node: SimNode, nodes: readonly SimNode[]): void {
     const index = node.id * 6
     const parent = node.parent >= 0 ? nodes[node.parent] : undefined
-    if (!node.visible || !parent || parent.kind === 'file') {
+    if (!node.visible || !parent || parent.kind === 'file' || !parent.visible) {
       this.collapse(index)
       return
     }

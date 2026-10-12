@@ -1084,6 +1084,11 @@ export class Simulation {
         existing.visible = true
         if (fresh) this.recordToggle(existing.id, index)
         this.visibleFiles += 1
+        // The folders on its path may still be hidden — a restart rewinds to
+        // before the first commit, which hides everything — so bring them back
+        // with the file that is being touched.
+        const { parent: parentPath } = splitPath(path)
+        this.ensureDirectory(parentPath, index, fresh)
         this.pendingReflow.add(existing.parent)
         this.movingNodes.add(existing.id)
       }
@@ -1140,9 +1145,30 @@ export class Simulation {
 
   /** Get or create a directory node. */
   ensureDirectory(path: string, index: number, fresh: boolean): SimNode {
-    if (!path) return this.root
+    // A directory that was hidden (a restart rewinds to before the first
+    // commit, which hides everything) becomes visible again as soon as one of
+    // its files is touched — otherwise the files come back without their
+    // folders.
+    if (!path) {
+      if (!this.root.visible) {
+        this.root.visible = true
+        if (fresh) this.recordToggle(this.root.id, index)
+      }
+      return this.root
+    }
     const existing = this.nodeByPath.get(path)
-    if (existing) return existing
+    if (existing) {
+      if (!existing.visible) {
+        existing.visible = true
+        if (fresh) this.recordToggle(existing.id, index)
+        this.pendingReflow.add(existing.id)
+        this.movingNodes.add(existing.id)
+        // The whole chain above may still be hidden, so walk it up.
+        const { parent: parentPath } = splitPath(path)
+        this.ensureDirectory(parentPath, index, fresh)
+      }
+      return existing
+    }
     const { parent: parentPath, name } = splitPath(path)
     const parent = this.ensureDirectory(parentPath, index, fresh)
     const depth = depthOfPath(path)
