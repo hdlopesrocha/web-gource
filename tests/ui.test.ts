@@ -359,6 +359,25 @@ describe('panels', () => {
     expect(wrapper.findAll('.author-row').length).toBe(1)
   })
 
+  it('authors panel adds and removes ignored folders', async () => {
+    store.ignoredFolders = []
+    const wrapper = mount(AuthorsPanel)
+    const input = wrapper.find('input[list="ignored-folder-suggestions"]')
+    expect(input.exists()).toBe(true)
+
+    await input.setValue('third_party')
+    await input.trigger('keydown.enter')
+    expect(store.ignoredFolders).toEqual(['third_party'])
+    // The list renders as a removable chip, and the suggestion disappears.
+    expect(wrapper.find('.chips').text()).toContain('third_party')
+    const suggestions = wrapper.findAll('#ignored-folder-suggestions option').map((option) => option.attributes('value'))
+    expect(suggestions).not.toContain('third_party')
+
+    await wrapper.find('.chips li button').trigger('click')
+    expect(store.ignoredFolders).toEqual([])
+    expect(wrapper.find('.chips').exists()).toBe(false)
+  })
+
   it('settings panel exposes visualization, camera and recording tabs', async () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')

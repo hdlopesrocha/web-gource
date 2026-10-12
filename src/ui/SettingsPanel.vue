@@ -404,6 +404,10 @@ onMounted(() => {
             <li><span class="faint">Size source</span><span>{{ sizeSourceLabel }}</span></li>
             <li><span class="faint">Merges</span><span>{{ store.timelineStats?.merges ?? 0 }}</span></li>
             <li><span class="faint">Without file data</span><span>{{ store.timelineStats?.withoutFileData ?? 0 }}</span></li>
+            <li v-if="store.ignoredFolders.length > 0">
+              <span class="faint">Ignored folders</span>
+              <span>{{ store.timelineStats?.ignoredFiles ?? 0 }} files · {{ store.ignoredFolders.join(', ') }}</span>
+            </li>
             <li><span class="faint">Line changes</span><span>+{{ (store.timelineStats?.additions ?? 0).toLocaleString() }} / −{{ (store.timelineStats?.deletions ?? 0).toLocaleString() }}</span></li>
           </ul>
           <div v-if="store.timelineStats?.topExtensions.length" class="extensions">

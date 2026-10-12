@@ -28,6 +28,7 @@ const summary = computed(() => {
   ]
   if (stats.value.merges > 0) parts.push(`${stats.value.merges} merges`)
   if (stats.value.withoutFileData > 0) parts.push(`${stats.value.withoutFileData} without file data`)
+  if (stats.value.ignoredFiles) parts.push(`${stats.value.ignoredFiles} ignored files`)
   return parts.join(' · ')
 })
 
