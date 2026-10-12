@@ -92,6 +92,9 @@ export interface TimelineStats {
   merges: number
   /** Commits that arrived without file-level data. */
   withoutFileData: number
+  /** File changes dropped by the ignore list, and the distinct paths they cover. */
+  ignoredFileChanges?: number
+  ignoredFiles?: number
   additions: number
   deletions: number
   /** Epoch ms of the first and last commit. */

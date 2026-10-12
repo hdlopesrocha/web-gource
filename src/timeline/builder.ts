@@ -1,4 +1,4 @@
-import type { RawCommit, RepoInfo } from '../git/types'
+import type { RawCommit, RawFileChange, RepoInfo } from '../git/types'
 import {
   authorKey,
   type ActivityBucket,
@@ -229,6 +229,13 @@ export function extensionOf(path: string): string {
 export interface BuildTimelineOptions {
   /** Keep only commits matching this predicate (author/date filters). */
   filter?: (commit: RawCommit) => boolean
+  /**
+   * Drop individual file changes whose path matches (the folder ignore list).
+   * A commit keeps its other changes, its message and its author; a rename whose
+   * *new* path is ignored disappears, and one that moves a file *out* of an
+   * ignored folder is kept as an addition.
+   */
+  fileFilter?: (path: string) => boolean
   truncated?: boolean
   warnings?: string[]
   /** Host-reported file sizes for this snapshot. */
@@ -247,8 +254,22 @@ export interface BuildTimelineOptions {
  */
 export function buildTimeline(repo: RepoInfo, commits: readonly RawCommit[], options: BuildTimelineOptions = {}): Timeline {
   const builder = new TimelineBuilder(repo)
-  const selected = options.filter ? commits.filter(options.filter) : commits
-  builder.addCommits(selected as RawCommit[])
+  let selected = options.filter ? commits.filter(options.filter) : (commits as RawCommit[])
+  let ignoredFileChanges = 0
+  const ignoredPaths = new Set<string>()
+  if (options.fileFilter) {
+    const filtered: RawCommit[] = []
+    for (const commit of selected) {
+      const result = filterCommitFiles(commit, options.fileFilter)
+      if (result.dropped > 0) {
+        ignoredFileChanges += result.dropped
+        for (const path of result.ignoredPaths) ignoredPaths.add(path)
+      }
+      filtered.push(result.commit)
+    }
+    selected = filtered
+  }
+  builder.addCommits(selected)
   builder.markTruncated(Boolean(options.truncated))
   if (options.warnings) builder.addWarnings(options.warnings)
   const timeline = builder.build(options.activity)
@@ -283,5 +304,53 @@ export function buildTimeline(repo: RepoInfo, commits: readonly RawCommit[], opt
   timeline.stats.filesWithSize = filesWithSize
   timeline.stats.totalBytes = totalBytes
   timeline.stats.largestFileBytes = largestFileBytes
+  if (options.fileFilter) {
+    timeline.stats.ignoredFileChanges = ignoredFileChanges
+    timeline.stats.ignoredFiles = ignoredPaths.size
+  }
   return timeline
+}
+
+/**
+ * Drop the file changes of one commit that the ignore list matches.
+ *
+ * The commit itself is kept (its author and message are still part of history),
+ * and its additions/deletions are recomputed from the changes that remain, so
+ * the counters never include ignored folders.
+ */
+function filterCommitFiles(
+  commit: RawCommit,
+  ignore: (path: string) => boolean,
+): { commit: RawCommit; dropped: number; ignoredPaths: string[] } {
+  if (!commit.files || commit.files.length === 0) return { commit, dropped: 0, ignoredPaths: [] }
+  const kept: RawFileChange[] = []
+  const ignoredPaths: string[] = []
+  let dropped = 0
+  let rewritten = false
+  for (const file of commit.files) {
+    const path = file.path?.trim()
+    if (!path) continue
+    if (ignore(path)) {
+      dropped += 1
+      ignoredPaths.push(path)
+      continue
+    }
+    // A rename out of an ignored folder reads as an addition of the new path.
+    if (file.previousPath && ignore(file.previousPath)) {
+      // The old path is hidden, so the rename cannot be followed: the file
+      // simply appears at its new path.
+      kept.push({ ...file, previousPath: undefined, kind: file.kind === 'rename' ? 'add' : file.kind })
+      rewritten = true
+      continue
+    }
+    kept.push(file)
+  }
+  if (dropped === 0 && !rewritten) return { commit, dropped: 0, ignoredPaths: [] }
+  const additions = kept.reduce((sum, file) => sum + file.additions, 0)
+  const deletions = kept.reduce((sum, file) => sum + file.deletions, 0)
+  return {
+    commit: dropped > 0 ? { ...commit, files: kept, stats: { additions, deletions } } : { ...commit, files: kept },
+    dropped,
+    ignoredPaths,
+  }
 }

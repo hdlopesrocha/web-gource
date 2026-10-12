@@ -162,6 +162,99 @@ describe('buildTimeline filters', () => {
     expect(timeline.stats.end).toBe(3000)
   })
 
+  it('drops ignored folders from the file changes and the counters', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        stats: { additions: 30, deletions: 4 },
+        files: [
+          { path: 'src/app.ts', kind: 'modify', additions: 10, deletions: 1 },
+          { path: 'third_party/lib/dep.ts', kind: 'modify', additions: 20, deletions: 3 },
+        ],
+      }),
+      raw({
+        sha: 'b',
+        timestamp: 2000,
+        files: [
+          { path: 'third_party/lib/other.ts', kind: 'add', additions: 5, deletions: 0 },
+          { path: 'vendor/x.ts', kind: 'modify', additions: 2, deletions: 2 },
+        ],
+      }),
+    ]
+    const ignore = (path: string): boolean => path.startsWith('third_party/') || path.startsWith('vendor/')
+    const timeline = buildTimeline(repo, commits, { fileFilter: ignore })
+
+    // Both commits survive: they still carry history, they just lose files.
+    expect(timeline.commits).toHaveLength(2)
+    expect(timeline.commits[0].changes.map((change) => change.path)).toEqual(['src/app.ts'])
+    expect(timeline.commits[1].changes).toEqual([])
+    // Counters are recomputed from the remaining changes, never from the total.
+    expect(timeline.commits[0].additions).toBe(10)
+    expect(timeline.commits[0].deletions).toBe(1)
+    expect(timeline.stats.additions).toBe(10)
+    expect(timeline.stats.deletions).toBe(1)
+    expect(timeline.stats.files).toBe(1)
+    expect(timeline.stats.ignoredFileChanges).toBe(3)
+    expect(timeline.stats.ignoredFiles).toBe(3)
+  })
+
+  it('keeps a rename that moves a file out of an ignored folder, as an addition', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        files: [
+          {
+            path: 'src/app.ts',
+            previousPath: 'third_party/app.ts',
+            kind: 'rename',
+            additions: 0,
+            deletions: 0,
+          },
+        ],
+      }),
+    ]
+    const timeline = buildTimeline(repo, commits, { fileFilter: (path) => path.startsWith('third_party/') })
+    const change = timeline.commits[0].changes[0]
+    // The new path is visible; it appears as an addition because the old path is
+    // hidden, so the rename cannot be followed into the ignored tree.
+    expect(change.path).toBe('src/app.ts')
+    expect(change.from).toBeUndefined()
+    expect(change.kind).toBe('add')
+    expect(timeline.stats.ignoredFileChanges ?? 0).toBe(0)
+  })
+
+  it('drops a rename whose new path is ignored', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        files: [
+          { path: 'third_party/app.ts', previousPath: 'src/app.ts', kind: 'rename', additions: 0, deletions: 0 },
+        ],
+      }),
+    ]
+    const timeline = buildTimeline(repo, commits, { fileFilter: (path) => path.startsWith('third_party/') })
+    expect(timeline.commits[0].changes).toEqual([])
+    expect(timeline.stats.ignoredFileChanges).toBe(1)
+  })
+
+  it('leaves everything untouched when no path filter is given', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        stats: { additions: 7, deletions: 3 },
+        files: [{ path: 'third_party/x.ts', kind: 'modify', additions: 4, deletions: 1 }],
+      }),
+    ]
+    const timeline = buildTimeline(repo, commits)
+    expect(timeline.commits[0].additions).toBe(7)
+    expect(timeline.stats.ignoredFileChanges).toBeUndefined()
+    expect(timeline.stats.ignoredFiles).toBeUndefined()
+  })
+
   it('filters by date range', () => {
     const commits: RawCommit[] = [
       raw({ sha: 'a', timestamp: 1000 }),
