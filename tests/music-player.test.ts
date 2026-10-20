@@ -7,7 +7,10 @@ import { BackgroundMusic, type MusicClockState } from '../src/engine/audio/music
  * element records the `currentTime` writes made when the timeline is seeked.
  */
 
-function fakeAudio(duration = 30): HTMLAudioElement {
+type FakeAudio = HTMLAudioElement & { emit(type: string): void }
+
+function fakeAudio(duration = 30): FakeAudio {
+  const listeners = new Map<string, EventListener>()
   return {
     src: '',
     loop: false,
@@ -19,7 +22,16 @@ function fakeAudio(duration = 30): HTMLAudioElement {
     pause: vi.fn(),
     removeAttribute: vi.fn(),
     load: vi.fn(),
-  } as unknown as HTMLAudioElement
+    addEventListener: vi.fn((type: string, listener: EventListener) => {
+      listeners.set(type, listener)
+    }),
+    removeEventListener: vi.fn((type: string) => {
+      listeners.delete(type)
+    }),
+    emit(type: string) {
+      listeners.get(type)?.(new Event(type))
+    },
+  } as unknown as FakeAudio
 }
 
 function clock(patch: Partial<MusicClockState> = {}): MusicClockState {
@@ -89,5 +101,20 @@ describe('BackgroundMusic', () => {
     state = clock({ time: 120 })
     player.sync()
     expect(element.currentTime).toBe(0)
+  })
+
+  it('loops the track', () => {
+    expect(element.loop).toBe(true)
+  })
+
+  it('restarts the track if the browser reports the end instead of looping', () => {
+    state = clock({ playing: true })
+    player.sync()
+    element.currentTime = 29
+
+    ;(element as FakeAudio).emit('ended')
+
+    expect(element.currentTime).toBe(0)
+    expect(element.play).toHaveBeenCalledTimes(2)
   })
 })

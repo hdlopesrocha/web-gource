@@ -215,6 +215,17 @@ export class BackgroundMusic {
   private currentVolume = 0
   private playbackError: string | null = null
   private retryAt = 0
+  /** Fallback for browsers that stop at the end despite `loop = true`. */
+  private readonly handleEnded = (): void => {
+    if (!this.active || !this.element) return
+    try {
+      this.element.currentTime = 0
+      const promise = this.element.play()
+      if (promise) void promise.catch(() => undefined)
+    } catch {
+      /* The next sync retries when playback is allowed again. */
+    }
+  }
 
   private context: AudioContext | null = null
   private sourceNode: MediaElementAudioSourceNode | null = null
@@ -253,6 +264,7 @@ export class BackgroundMusic {
     element.loop = true
     element.preload = 'auto'
     element.volume = 0
+    element.addEventListener('ended', this.handleEnded)
     this.element = element
     this.trackDuration = Number.isFinite(duration) && duration > 0 ? duration : 0
     this.playbackError = null
@@ -265,6 +277,7 @@ export class BackgroundMusic {
     this.active = false
     this.stopVolumeLoop()
     if (this.element) {
+      this.element.removeEventListener('ended', this.handleEnded)
       this.element.pause()
       this.element.removeAttribute('src')
       this.element.load()
