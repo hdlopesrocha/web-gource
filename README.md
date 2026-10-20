@@ -78,8 +78,8 @@ On GitHub, Pages must point at the branch once: **Settings → Pages → Source:
 The landing page can load several repositories into one shared scene. **Add repository** adds a row,
 the **✕** button removes one, and the primary button becomes **Load N repositories** once more than
 one row is filled. The Examples area also has **Fill all 11 repositories**, which replaces the rows
-with the `hdlopesrocha` project set in one click (it fills the form without starting a load). A
-single row still loads exactly as before, with unscoped paths and authors.
+with the oldest-first `hdlopesrocha` project set in one click (it fills the form without starting a
+load). A single row still loads exactly as before, with unscoped paths and authors.
 
 Each project keeps its own file tree and its own author instances, so identical paths or the same
 contributor in two repositories never collide. Paths are prefixed with `owner/name/`, and the same

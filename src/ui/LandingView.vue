@@ -12,19 +12,21 @@ const SNAPSHOT_CHOICES = [
   { value: 4000, label: '4000 commits', hint: 'Very large snapshot. Expect a long load and heavy GPU usage.' },
 ]
 
-// A one-click set of projects for the multi-repository scene. The bare
-// `hdlopesrocha/` owner page is not a repository, so it is intentionally left out.
+// A one-click set of projects for the multi-repository scene, oldest first by
+// repository creation date. The bare `hdlopesrocha/` owner page is not a
+// repository, so it is intentionally left out; `cardgame` is not currently
+// public, so it has no date and stays last.
 const BULK_REPOSITORIES = [
-  'hdlopesrocha/lithos-engine',
-  'hdlopesrocha/vulkan-engine',
-  'hdlopesrocha/infinity-edge-web',
-  'hdlopesrocha/card-generator',
-  'hdlopesrocha/lora-control',
-  'hdlopesrocha/opencode-talk',
-  'hdlopesrocha/web-gource',
-  'hdlopesrocha/hdlopesrocha.github.io',
-  'hdlopesrocha/sdf-smoke',
-  'hdlopesrocha/hydrogen-vulkan',
+  'hdlopesrocha/hydrogen-vulkan', // 2021-06-30
+  'hdlopesrocha/lora-control', // 2024-08-17
+  'hdlopesrocha/lithos-engine', // 2024-12-09
+  'hdlopesrocha/vulkan-engine', // 2025-12-06
+  'hdlopesrocha/card-generator', // 2026-09-30
+  'hdlopesrocha/sdf-smoke', // 2026-10-05
+  'hdlopesrocha/opencode-talk', // 2026-10-07
+  'hdlopesrocha/hdlopesrocha.github.io', // 2026-10-08
+  'hdlopesrocha/web-gource', // 2026-10-11
+  'hdlopesrocha/infinity-edge-web', // 2026-10-14
   'hdlopesrocha/cardgame',
 ]
 const bulkFillLabel = `Fill all ${BULK_REPOSITORIES.length} repositories`
@@ -157,11 +159,12 @@ function fillAllRepositories(): void {
   syncUrl()
 }
 
+// Oldest first by repository creation date.
 const examples = [
-  { url: 'https://github.com/hdlopesrocha/vulkan-engine', label: 'hdlopesrocha/vulkan-engine' },
-  { url: 'https://github.com/hdlopesrocha/opencode-talk', label: 'hdlopesrocha/opencode-talk' },
-  { url: 'https://github.com/vuejs/core', label: 'vuejs/core' },
-  { url: 'https://gitlab.com/gitlab-org/gitlab-foss', label: 'gitlab-foss (GitLab, beta)' },
+  { url: 'https://gitlab.com/gitlab-org/gitlab-foss', label: 'gitlab-foss (GitLab, beta)' }, // 2013-09-26
+  { url: 'https://github.com/vuejs/core', label: 'vuejs/core' }, // 2018-06-12
+  { url: 'https://github.com/hdlopesrocha/vulkan-engine', label: 'hdlopesrocha/vulkan-engine' }, // 2025-12-06
+  { url: 'https://github.com/hdlopesrocha/opencode-talk', label: 'hdlopesrocha/opencode-talk' }, // 2026-10-07
 ]
 </script>
 

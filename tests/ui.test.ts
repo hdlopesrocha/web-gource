@@ -189,9 +189,19 @@ describe('LandingView', () => {
     const values = wrapper
       .findAll('input[aria-label="Repository URL"]')
       .map((input) => (input.element as HTMLInputElement).value)
-    expect(values).toHaveLength(11)
-    expect(values[0]).toBe('hdlopesrocha/lithos-engine')
-    expect(values.at(-1)).toBe('hdlopesrocha/cardgame')
+    expect(values).toEqual([
+      'hdlopesrocha/hydrogen-vulkan',
+      'hdlopesrocha/lora-control',
+      'hdlopesrocha/lithos-engine',
+      'hdlopesrocha/vulkan-engine',
+      'hdlopesrocha/card-generator',
+      'hdlopesrocha/sdf-smoke',
+      'hdlopesrocha/opencode-talk',
+      'hdlopesrocha/hdlopesrocha.github.io',
+      'hdlopesrocha/web-gource',
+      'hdlopesrocha/infinity-edge-web',
+      'hdlopesrocha/cardgame',
+    ])
     expect(values.every((value) => value.startsWith('hdlopesrocha/'))).toBe(true)
     expect(values).not.toContain('hdlopesrocha/')
     expect(wrapper.text()).toContain('Load 11 repositories')
@@ -430,11 +440,15 @@ describe('LandingView', () => {
     expect(wrapper.find('input[aria-label="Personal access token"]').exists()).toBe(true)
   })
 
-  it('offers the configured example repositories', () => {
+  it('offers the example repositories oldest first', () => {
     const wrapper = mount(LandingView)
-    const text = wrapper.text()
-    expect(text).toContain('hdlopesrocha/vulkan-engine')
-    expect(text).toContain('hdlopesrocha/opencode-talk')
+    expect(wrapper.findAll('.examples button').map((button) => button.text())).toEqual([
+      'gitlab-foss (GitLab, beta)',
+      'vuejs/core',
+      'hdlopesrocha/vulkan-engine',
+      'hdlopesrocha/opencode-talk',
+      'Fill all 11 repositories',
+    ])
   })
 
   it('fills the input when an example is clicked', async () => {
