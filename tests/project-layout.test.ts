@@ -6,8 +6,9 @@ import type { RawCommit, RepoInfo } from '../src/git/types'
 
 /**
  * Multi-project layout: every repository is one top-level volume, even when
- * several repositories share an owner. The volumes relax with the normal tree
- * forces, so growing one pushes the others away.
+ * several repositories share an owner. Project roots occupy stable, evenly
+ * spaced slots on a ring; the ring widens as volumes grow instead of letting
+ * the groups push each other around.
  */
 
 const repo: RepoInfo = {
@@ -47,7 +48,7 @@ function makeSimulation(commits: RawCommit[]) {
 }
 
 describe('multi-project volumes', () => {
-  it('puts each project directly under the root and repels their volumes', () => {
+  it('puts each project directly under the root in a stable slot', () => {
     const commits: RawCommit[] = []
     for (let index = 0; index < 8; index += 1) {
       commits.push(commit(`w${index}`, 1000 + index * 1000, 'acme/widget', `acme/widget/src/w${index}.ts`))
@@ -77,6 +78,10 @@ describe('multi-project volumes', () => {
       (widget!.volumeRadius ?? widget!.clusterRadius) -
       (service!.volumeRadius ?? service!.clusterRadius)
     expect(gap).toBeGreaterThan(0)
+    expect(Math.hypot(widget!.targetPosition.x, widget!.targetPosition.y)).toBeCloseTo(
+      Math.hypot(service!.targetPosition.x, service!.targetPosition.y),
+      5,
+    )
   })
 
   it('keeps three same-owner projects apart', () => {
@@ -93,6 +98,10 @@ describe('multi-project volumes', () => {
 
     const volumes = ['acme/alpha', 'acme/beta', 'acme/gamma'].map((path) => sim.find(path)!)
     expect(volumes.every((volume) => volume.parent === sim.root.id)).toBe(true)
+    const ring = Math.hypot(volumes[0].targetPosition.x, volumes[0].targetPosition.y)
+    for (const volume of volumes) {
+      expect(Math.hypot(volume.targetPosition.x, volume.targetPosition.y)).toBeCloseTo(ring, 5)
+    }
     for (let a = 0; a < volumes.length; a += 1) {
       for (let b = a + 1; b < volumes.length; b += 1) {
         const gap =
@@ -145,7 +154,7 @@ describe('multi-project volumes', () => {
     }
   })
 
-  it('pushes the other project away when one volume grows', () => {
+  it('keeps stable opposing slots when one volume grows', () => {
     const commits: RawCommit[] = []
     for (let index = 0; index < 6; index += 1) {
       commits.push(commit(`w${index}`, 1000 + index * 1000, 'acme/widget', `acme/widget/src/w${index}.ts`))
@@ -157,6 +166,9 @@ describe('multi-project volumes', () => {
     sim.reflowAll()
     const beforeWidget = sim.find('acme/widget')!
     const beforeService = sim.find('acme/service')!
+    const beforeWidgetAngle = Math.atan2(beforeWidget.targetPosition.y, beforeWidget.targetPosition.x)
+    const beforeServiceAngle = Math.atan2(beforeService.targetPosition.y, beforeService.targetPosition.x)
+    const beforeRing = Math.hypot(beforeWidget.targetPosition.x, beforeWidget.targetPosition.y)
     const beforeGap =
       Math.hypot(
         beforeWidget.targetPosition.x - beforeService.targetPosition.x,
@@ -185,6 +197,17 @@ describe('multi-project volumes', () => {
     const afterWidget = sim.find('acme/widget')!
     const afterService = sim.find('acme/service')!
     expect(afterWidget.volumeRadius ?? afterWidget.clusterRadius).toBeGreaterThan(beforeWidgetRadius)
+    expect(Math.atan2(afterWidget.targetPosition.y, afterWidget.targetPosition.x)).toBeCloseTo(
+      beforeWidgetAngle,
+      5,
+    )
+    expect(Math.atan2(afterService.targetPosition.y, afterService.targetPosition.x)).toBeCloseTo(
+      beforeServiceAngle,
+      5,
+    )
+    const afterRing = Math.hypot(afterWidget.targetPosition.x, afterWidget.targetPosition.y)
+    expect(afterRing).toBeGreaterThan(beforeRing)
+    expect(Math.hypot(afterService.targetPosition.x, afterService.targetPosition.y)).toBeCloseTo(afterRing, 5)
     const afterGap =
       Math.hypot(
         afterWidget.targetPosition.x - afterService.targetPosition.x,

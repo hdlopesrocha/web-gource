@@ -76,8 +76,8 @@ export interface SimNode {
   projectKey?: string
   /**
    * Tight radius that encloses every node in this project volume, measured from
-   * the project root. Only set on project volume roots; project roots move as
-   * rigid bodies and repel each other using this radius.
+   * the project root. Only set on project volume roots; the stable ring layout
+   * uses it to reserve room around each project slot.
    */
   volumeRadius?: number
 }
@@ -429,9 +429,8 @@ export class Simulation {
    * Measure each project's tight enclosing radius from its volume root.
    *
    * The radius follows the actual placed nodes, not the area estimate, so the
-   * volume is as small as the current tree allows. Project roots use it as their
-   * collision body: whole volumes repel each other without reserving space for
-   * an imaginary circle.
+   * volume is as small as the current tree allows. The ring anchors use it to
+   * reserve exactly enough room for neighbouring project slots.
    */
   private updateProjectVolumeRadii(): void {
     if (this.projectRoots.size === 0) return
@@ -458,12 +457,56 @@ export class Simulation {
     }
   }
 
-  /** Collision body for a directory, including the extra project-volume gap. */
+  /**
+   * Give every project a stable slot on a ring around the scene root.
+   *
+   * Slots are ordered by project key and evenly spaced. The ring is just large
+   * enough for the current volumes; it grows evenly when a project grows instead
+   * of letting volumes push each other around. A lone project sits at the
+   * centre.
+   */
+  private updateProjectAnchors(): void {
+    const roots = [...this.projectRoots]
+      .sort()
+      .map((key) => this.nodeByPath.get(key))
+      .filter((node): node is SimNode => Boolean(node && node.kind === 'dir'))
+    if (roots.length === 0) return
+    if (roots.length === 1) {
+      this.anchorProject(roots[0], 0, 0)
+      return
+    }
+
+    const radii = roots.map((node) => node.volumeRadius ?? node.clusterRadius)
+    let ring = Math.max(...radii) + GOURCE.projectGap
+    const sinStep = Math.sin(Math.PI / roots.length)
+    if (sinStep > 1e-4) {
+      for (let index = 0; index < roots.length; index += 1) {
+        const next = (index + 1) % roots.length
+        const needed = (radii[index] + radii[next] + GOURCE.projectGap) / (2 * sinStep)
+        ring = Math.max(ring, needed)
+      }
+    }
+
+    const angleStep = (Math.PI * 2) / roots.length
+    for (let index = 0; index < roots.length; index += 1) {
+      const angle = -Math.PI / 2 + angleStep * index
+      this.anchorProject(roots[index], Math.cos(angle) * ring, Math.sin(angle) * ring)
+    }
+  }
+
+  /** Move a project root to a slot, carrying its whole subtree. */
+  private anchorProject(node: SimNode, x: number, y: number): void {
+    const dx = x - node.targetPosition.x
+    const dy = y - node.targetPosition.y
+    if (dx * dx + dy * dy < 1e-6) return
+    node.targetPosition = { x, y, z: 0 }
+    this.movingNodes.add(node.id)
+    this.offsetSubtree(node, dx, dy)
+  }
+
+  /** Collision body for a directory. Project roots are anchored, not collided. */
   private collisionRadiusFor(node: SimNode): number {
-    return (
-      Math.max(node.clusterRadius, node.contentRadius, node.volumeRadius ?? 0) +
-      (node.projectKey ? GOURCE.projectGap : 0)
-    )
+    return Math.max(node.clusterRadius, node.contentRadius, node.volumeRadius ?? 0)
   }
 
   /** True while a directory still has a subfolder without a starting position. */
@@ -583,9 +626,10 @@ export class Simulation {
    */
   relaxLayout(steps?: number, budget = GOURCE.relaxBudget, forces = true, sweeps = GOURCE.relaxSweeps): void {
     if (!this.dynamicLayout) return
-    // Project volumes repel by their tight current envelope, not by the area
-    // estimate. Measure them before the projection uses their collision radii.
+    // Measure the current volumes, then place each project in its stable slot
+    // before the internal tree relaxes. Project roots themselves stay fixed.
     this.updateProjectVolumeRadii()
+    this.updateProjectAnchors()
     // One entry per directory, reused between reflows: the buffer is rebuilt only
     // when directories are added.
     const nodes = this.forceBuffer
@@ -604,6 +648,7 @@ export class Simulation {
           x: node.targetPosition.x,
           y: node.targetPosition.y,
           visible: node.visible,
+          fixed: Boolean(node.projectKey),
         })
       }
       this.forceBufferDirCount = this.dirCount
@@ -624,6 +669,7 @@ export class Simulation {
         entry.x = node.targetPosition.x
         entry.y = node.targetPosition.y
         entry.visible = node.visible
+        entry.fixed = Boolean(node.projectKey)
       }
     }
     if (nodes.length < 2) return
@@ -632,23 +678,10 @@ export class Simulation {
     relaxDirectories(nodes, { steps: stepCount, gap: GOURCE.collisionGap, sweeps })
     this.applyRelaxedEntries(nodes)
 
-    // Moving a project volume rigidly changes the tight envelope of its
-    // contents. Projection is cheap compared with the forces, so measure the
-    // new envelopes and resolve any overlap they introduced.
-    if (this.projectRoots.size > 1) {
-      this.updateProjectVolumeRadii()
-      for (const entry of nodes) {
-        const node = this.nodeList[entry.id]
-        if (!node) continue
-        entry.collisionRadius = this.collisionRadiusFor(node)
-        entry.ownCollisionRadius = Math.max(node.ownDiscRadius, node.contentRadius)
-        entry.x = node.targetPosition.x
-        entry.y = node.targetPosition.y
-      }
-      relaxDirectories(nodes, { steps: 0, gap: GOURCE.collisionGap, sweeps })
-      this.applyRelaxedEntries(nodes)
-    }
+    // Internal growth can enlarge a volume; widen the ring evenly so the slots
+    // remain separated without any project pushing its neighbours.
     this.updateProjectVolumeRadii()
+    this.updateProjectAnchors()
   }
 
   /** Copy relaxed force entries back onto their nodes. */

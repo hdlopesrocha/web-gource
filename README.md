@@ -90,9 +90,10 @@ but use different emails each get their own avatar and colour, and different log
 also stay separate, while a display-name change from the same account remains one author. Hiding an
 author hides that instance only in its project; the same person in another project stays visible.
 Each repository is laid out as its own minimal volume directly under the scene root, with every file
-and folder inside it. Volumes move rigidly and repel each other through the normal force layout, so
-projects sharing an owner never merge into one cluster. The stage header reports the repository/project
-count, and Settings → Data lists each project's commit and author counts.
+and folder inside it. Projects occupy stable, evenly spaced slots on a ring; the ring widens evenly as
+volumes grow, so groups never push each other around or merge into one cluster. The stage header
+reports the repository/project count, and Settings → Data lists each project's commit and author
+counts.
 
 Projects load sequentially: the first streams live, and later ones merge into the scene when complete.
 Tokens are per host, and a **Token host** selector appears when the rows span providers. A failed

@@ -57,8 +57,9 @@ const shortcuts: { keys: string; action: string }[] = [
           projects share one scene but keep separate trees and separate author instances: paths are
           prefixed with <code>owner/name/</code>, so the same file path in two repositories stays
           distinct, and the same person appears once per project. Each project forms one compact
-          volume directly under the scene root; volumes move as rigid clusters and repel each other,
-          so repositories sharing an owner never merge. The Authors panel counts
+          volume directly under the scene root. Projects get stable, evenly spaced ring slots; the
+          ring grows evenly instead of pushing groups around, so repositories sharing an owner never
+          merge. The Authors panel counts
           <em>author instances</em> and badges each with its project.
         </p>
         <p class="muted small">

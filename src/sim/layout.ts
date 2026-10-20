@@ -260,6 +260,12 @@ export interface ForceNode {
   x: number
   y: number
   visible: boolean
+  /**
+   * Keep this node at its assigned position. Used for project volume roots,
+   * whose slots are laid out explicitly instead of being pushed around by
+   * sibling repulsion.
+   */
+  fixed?: boolean
 }
 
 /**
@@ -340,7 +346,7 @@ export function relaxDirectories(
   // Visible children per parent: the sibling force needs them every step.
   const siblingList = new Map<number, ForceNode[]>()
   for (const node of nodes) {
-    if (!node.visible) continue
+    if (!node.visible || node.fixed) continue
     const parent = byId.get(node.parent)
     if (!parent) continue
     const list = siblingList.get(node.parent)
@@ -350,7 +356,7 @@ export function relaxDirectories(
 
   for (let step = 0; step < steps; step += 1) {
     for (const node of nodes) {
-      if (!node.visible || node.parent < 0) continue
+      if (!node.visible || node.parent < 0 || node.fixed) continue
       const parent = byId.get(node.parent)
       if (!parent) continue
       const nodeRadius = collide.get(node.id) ?? node.dirRadius
@@ -462,7 +468,7 @@ export function relaxDirectories(
                 else if (related(other, node)) sum = (ownCollide.get(node.id) ?? node.ownRadius) + otherRadius + gap
               }
               if (length >= sum) continue
-              if (length >= sum) continue
+              if (node.fixed && other.fixed) continue
               if (length < 1e-4) {
                 // Coincident bodies: push them apart deterministically.
                 const angle = hashUnit(String(node.id), 7) * Math.PI * 2
@@ -470,13 +476,20 @@ export function relaxDirectories(
                 oy = Math.sin(angle)
                 length = 1e-4
               }
-              const push = (sum - length) * 0.5
+              // Anchored project roots never move; their neighbours take the
+              // whole correction instead of splitting it.
+              const share = node.fixed || other.fixed ? 1 : 0.5
+              const push = (sum - length) * share
               const ux = (ox / length) * push
               const uy = (oy / length) * push
-              node.x -= ux
-              node.y -= uy
-              other.x += ux
-              other.y += uy
+              if (!node.fixed) {
+                node.x -= ux
+                node.y -= uy
+              }
+              if (!other.fixed) {
+                other.x += ux
+                other.y += uy
+              }
               resolved += 1
             }
           }
