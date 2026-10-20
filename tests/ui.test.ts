@@ -179,10 +179,10 @@ describe('LandingView', () => {
     expect(wrapper.text()).toContain('Load 2 repositories')
   })
 
-  it('fills the form with the two multi-repository samples', async () => {
+  it('fills the form with the four multi-repository samples', async () => {
     store.loading.error = 'old error'
     const wrapper = mount(LandingView)
-    const fill = wrapper.findAll('button').find((button) => button.text().includes('Fill 2 repositories'))
+    const fill = wrapper.findAll('button').find((button) => button.text().includes('Fill 4 repositories'))
     expect(fill).toBeTruthy()
     await fill!.trigger('click')
 
@@ -192,8 +192,10 @@ describe('LandingView', () => {
     expect(values).toEqual([
       'hdlopesrocha/lithos-engine',
       'hdlopesrocha/vulkan-engine',
+      'hdlopesrocha/opencode-talk',
+      'hdlopesrocha/infinity-edge-web',
     ])
-    expect(wrapper.text()).toContain('Load 2 repositories')
+    expect(wrapper.text()).toContain('Load 4 repositories')
     expect(store.url).toBe(values[0])
     expect(store.loading.error).toBeNull()
   })
@@ -436,7 +438,7 @@ describe('LandingView', () => {
       'vuejs/core',
       'hdlopesrocha/vulkan-engine',
       'hdlopesrocha/opencode-talk',
-      'Fill 2 repositories',
+      'Fill 4 repositories',
     ])
   })
 

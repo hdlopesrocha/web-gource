@@ -12,11 +12,13 @@ const SNAPSHOT_CHOICES = [
   { value: 4000, label: '4000 commits', hint: 'Very large snapshot. Expect a long load and heavy GPU usage.' },
 ]
 
-// A one-click pair of projects for the multi-repository scene, oldest first by
+// A one-click set of projects for the multi-repository scene, oldest first by
 // repository creation date.
 const SAMPLE_REPOSITORIES = [
   'hdlopesrocha/lithos-engine', // 2024-12-09
   'hdlopesrocha/vulkan-engine', // 2025-12-06
+  'hdlopesrocha/opencode-talk', // 2026-10-07
+  'hdlopesrocha/infinity-edge-web', // 2026-10-14
 ]
 const sampleFillLabel = `Fill ${SAMPLE_REPOSITORIES.length} repositories`
 
