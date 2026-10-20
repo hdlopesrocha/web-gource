@@ -20,8 +20,20 @@ export interface TimelineFileChange {
 
 /** An author identity as used by the visualization. */
 export interface TimelineAuthor {
-  /** Stable key: login > email > name. */
+  /**
+   * Stable key: login > email > name.
+   *
+   * With several projects loaded the same person appears once per project, so
+   * this key is scoped with the project key (see {@link scopedAuthorId}). The
+   * unscoped identity is kept in {@link baseId}.
+   */
   id: string
+  /** Identity without the project scope: login > email > name. */
+  baseId?: string
+  /** Project (repository) this author instance belongs to, when scoped. */
+  projectKey?: string
+  /** `owner/name` of that project, for labels. */
+  projectName?: string
   name: string
   email?: string
   login?: string
@@ -43,6 +55,10 @@ export interface TimelineCommit {
   /** Position in the timeline (assigned by the builder, chronological). */
   index: number
   sha: string
+  /** Project this commit belongs to, when several repositories are loaded. */
+  projectKey?: string
+  /** `owner/name` of the project, for labels. */
+  projectName?: string
   shortSha: string
   parents: string[]
   isMerge: boolean
@@ -108,9 +124,33 @@ export interface TimelineStats {
   topExtensions: { extension: string; count: number }[]
 }
 
+/**
+ * One loaded project (repository) inside a multi-repository scene.
+ *
+ * Its commits are namespaced with {@link key} in every file path and author id,
+ * so identical paths or people from different projects stay separate.
+ */
+export interface TimelineProject {
+  /** Unique project key; empty for a single-repository load. */
+  key: string
+  repo: RepoInfo
+  /** Commits from this project in the current (filtered) timeline. */
+  commits: number
+  /** Author instances belonging to this project. */
+  authors: number
+  /** True when this project's history window is incomplete. */
+  truncated: boolean
+  warnings: string[]
+  /** Where this project's file sizes came from. */
+  sizeSource: string
+}
+
 /** The complete normalized history handed to the engine. */
 export interface Timeline {
+  /** Primary repository: the first successful source (kept for compatibility). */
   repo: RepoInfo
+  /** Every loaded project. One entry for a single-repository load. */
+  projects: TimelineProject[]
   commits: TimelineCommit[]
   authors: TimelineAuthor[]
   authorById: Map<string, TimelineAuthor>
@@ -129,4 +169,15 @@ export function authorKey(parts: { login?: string; email?: string; name: string 
   if (parts.login) return `login:${parts.login.toLowerCase()}`
   if (parts.email) return `email:${parts.email.toLowerCase()}`
   return `name:${parts.name.trim().toLowerCase()}`
+}
+
+/** Scope an author identity to a project (no-op for single-repository loads). */
+export function scopedAuthorId(projectKey: string | undefined, baseId: string): string {
+  return projectKey ? `${projectKey}::${baseId}` : baseId
+}
+
+/** Prefix a repository-relative path with the project key. */
+export function projectPath(projectKey: string | undefined, path: string): string {
+  const prefix = projectKey?.replace(/\/+$/, '')
+  return prefix ? `${prefix}/${path.replace(/^\/+/, '')}` : path
 }

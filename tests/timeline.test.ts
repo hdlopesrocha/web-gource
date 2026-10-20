@@ -266,6 +266,337 @@ describe('buildTimeline filters', () => {
   })
 })
 
+describe('multi-project scoping', () => {
+  const widgetRepo: RepoInfo = { ...repo }
+  const gadgetRepo: RepoInfo = {
+    ...repo,
+    name: 'gadget',
+    fullName: 'acme/gadget',
+    htmlUrl: 'https://github.com/acme/gadget',
+  }
+  const projectInputs = [
+    { key: 'acme/widget', repo: widgetRepo },
+    { key: 'acme/gadget', repo: gadgetRepo },
+  ]
+  const ada = { name: 'Ada Lovelace', email: 'ada@example.com', login: 'ada' }
+  const bob = { name: 'Bob Stone', email: 'bob@example.com', login: 'bob' }
+
+  it('keeps one author instance per project with shared base identity and colour', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'w1',
+        timestamp: 1000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: ada,
+        stats: { additions: 10, deletions: 2 },
+      }),
+      raw({
+        sha: 'w2',
+        timestamp: 3000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: ada,
+        stats: { additions: 5, deletions: 1 },
+      }),
+      raw({
+        sha: 'g1',
+        timestamp: 2000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        author: ada,
+        stats: { additions: 7, deletions: 3 },
+      }),
+    ]
+
+    const timeline = buildTimeline(repo, commits, { projects: projectInputs })
+    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada')
+    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada')
+
+    expect(timeline.authors).toHaveLength(2)
+    expect(widgetAda).toMatchObject({
+      id: 'acme/widget::login:ada',
+      baseId: 'login:ada',
+      projectKey: 'acme/widget',
+      projectName: 'acme/widget',
+      commits: 2,
+      additions: 15,
+      deletions: 3,
+      first: 1000,
+      last: 3000,
+    })
+    expect(gadgetAda).toMatchObject({
+      id: 'acme/gadget::login:ada',
+      baseId: 'login:ada',
+      projectKey: 'acme/gadget',
+      projectName: 'acme/gadget',
+      commits: 1,
+      additions: 7,
+      deletions: 3,
+      first: 2000,
+      last: 2000,
+    })
+    expect(widgetAda?.id).not.toBe(gadgetAda?.id)
+    expect(widgetAda?.colorIndex).toBe(gadgetAda?.colorIndex)
+    expect(timeline.commits.find((commit) => commit.sha === 'w1')?.authorId).toBe('acme/widget::login:ada')
+    expect(timeline.commits.find((commit) => commit.sha === 'g1')?.authorId).toBe('acme/gadget::login:ada')
+  })
+
+  it('namespaces file paths, including rename sources', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'w-rename',
+        timestamp: 1000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        files: [
+          { path: 'src/new.ts', previousPath: 'src/old.ts', kind: 'rename', additions: 1, deletions: 1 },
+          { path: 'README.md', kind: 'add', additions: 2, deletions: 0 },
+        ],
+      }),
+      raw({
+        sha: 'g-add',
+        timestamp: 2000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        files: [{ path: 'src/new.ts', kind: 'add', additions: 3, deletions: 0 }],
+      }),
+    ]
+
+    const timeline = buildTimeline(repo, commits, { projects: projectInputs })
+    const widgetChanges = timeline.commits[0].changes
+    const gadgetChange = timeline.commits[1].changes[0]
+
+    expect(widgetChanges[0]).toMatchObject({
+      path: 'acme/widget/src/new.ts',
+      from: 'acme/widget/src/old.ts',
+      kind: 'rename',
+    })
+    expect(widgetChanges.map((change) => change.path)).toEqual(['acme/widget/src/new.ts', 'acme/widget/README.md'])
+    expect(gadgetChange).toMatchObject({ path: 'acme/gadget/src/new.ts', kind: 'add' })
+    expect(gadgetChange.from).toBeUndefined()
+    // The same repository-relative path in two projects counts as two files.
+    expect(timeline.stats.files).toBe(3)
+  })
+
+  it('deduplicates SHAs per project while keeping the same SHA across projects', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'shared',
+        timestamp: 1000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        message: 'widget shared',
+      }),
+      raw({
+        sha: 'only-widget',
+        timestamp: 1500,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        message: 'first copy',
+      }),
+      raw({
+        sha: 'shared',
+        timestamp: 2000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        message: 'gadget shared',
+      }),
+      raw({
+        sha: 'only-widget',
+        timestamp: 2500,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        message: 'duplicate copy',
+      }),
+      raw({
+        sha: 'shared',
+        timestamp: 3000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        message: 'widget shared duplicate',
+      }),
+    ]
+
+    const timeline = buildTimeline(repo, commits, { projects: projectInputs })
+
+    expect(timeline.commits.map((commit) => [commit.sha, commit.projectKey])).toEqual([
+      ['shared', 'acme/widget'],
+      ['only-widget', 'acme/widget'],
+      ['shared', 'acme/gadget'],
+    ])
+    expect(timeline.commits[1].subject).toBe('first copy')
+    expect(timeline.commits[0].subject).toBe('widget shared')
+    expect(timeline.commits[2].subject).toBe('gadget shared')
+    expect(timeline.projects.find((project) => project.key === 'acme/widget')).toMatchObject({
+      commits: 2,
+      authors: 1,
+    })
+    expect(timeline.projects.find((project) => project.key === 'acme/gadget')).toMatchObject({
+      commits: 1,
+      authors: 1,
+    })
+  })
+
+  it('derives per-project counts and recomputes them after filtering', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'w1',
+        timestamp: 1000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: ada,
+      }),
+      raw({
+        sha: 'w2',
+        timestamp: 2000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: ada,
+      }),
+      raw({
+        sha: 'w3',
+        timestamp: 3000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: bob,
+      }),
+      raw({
+        sha: 'g1',
+        timestamp: 4000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        author: ada,
+      }),
+    ]
+    const projects = [
+      {
+        key: 'acme/widget',
+        repo: widgetRepo,
+        truncated: true,
+        warnings: ['history truncated'],
+        sizeSource: 'git-tree',
+      },
+      { key: 'acme/gadget', repo: gadgetRepo },
+    ]
+
+    const timeline = buildTimeline(repo, commits, { projects })
+    const widget = timeline.projects.find((project) => project.key === 'acme/widget')
+    const gadget = timeline.projects.find((project) => project.key === 'acme/gadget')
+
+    expect(timeline.projects.map((project) => project.key)).toEqual(['acme/widget', 'acme/gadget'])
+    expect(widget).toMatchObject({
+      repo: widgetRepo,
+      commits: 3,
+      authors: 2,
+      truncated: true,
+      warnings: ['history truncated'],
+      sizeSource: 'git-tree',
+    })
+    expect(gadget).toMatchObject({
+      repo: gadgetRepo,
+      commits: 1,
+      authors: 1,
+      truncated: false,
+      warnings: [],
+      sizeSource: 'unavailable',
+    })
+    // Project author counts are author instances, not unique base identities.
+    expect(timeline.stats.commits).toBe(4)
+    expect(timeline.stats.authors).toBe(3)
+
+    const filtered = buildTimeline(repo, commits, {
+      projects,
+      filter: (commit) => commit.projectKey === 'acme/widget' && commit.author.login === 'ada',
+    })
+    expect(filtered.commits.map((commit) => commit.sha)).toEqual(['w1', 'w2'])
+    expect(filtered.stats.commits).toBe(2)
+    expect(filtered.stats.authors).toBe(1)
+    expect(filtered.projects.find((project) => project.key === 'acme/widget')).toMatchObject({
+      commits: 2,
+      authors: 1,
+    })
+    expect(filtered.projects.find((project) => project.key === 'acme/gadget')).toMatchObject({
+      commits: 0,
+      authors: 0,
+    })
+  })
+
+  it('keeps legacy single-project output unscoped when no projects are supplied', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        author: ada,
+        files: [
+          { path: 'src/new.ts', previousPath: 'src/old.ts', kind: 'rename', additions: 1, deletions: 1 },
+        ],
+      }),
+    ]
+
+    const timeline = buildTimeline(repo, commits)
+    const commit = timeline.commits[0]
+    const author = timeline.authors[0]
+
+    expect(timeline.projects).toEqual([])
+    expect(commit.projectKey).toBeUndefined()
+    expect(commit.projectName).toBeUndefined()
+    expect(commit.authorId).toBe('login:ada')
+    expect(commit.changes[0]).toMatchObject({ path: 'src/new.ts', from: 'src/old.ts', kind: 'rename' })
+    expect(author).toMatchObject({ id: 'login:ada', baseId: 'login:ada', colorIndex: 0 })
+    expect(author.projectKey).toBeUndefined()
+    expect(author.projectName).toBeUndefined()
+    expect(timeline.authorById.get('login:ada')).toBe(author)
+  })
+
+  it('shares one colour per person without merging project author rows', () => {
+    const commits: RawCommit[] = [
+      raw({
+        sha: 'w1',
+        timestamp: 1000,
+        projectKey: 'acme/widget',
+        projectName: 'acme/widget',
+        author: ada,
+      }),
+      raw({
+        sha: 'g1',
+        timestamp: 2000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        author: ada,
+      }),
+      raw({
+        sha: 'g2',
+        timestamp: 3000,
+        projectKey: 'acme/gadget',
+        projectName: 'acme/gadget',
+        author: bob,
+      }),
+    ]
+
+    const timeline = buildTimeline(repo, commits, { projects: projectInputs })
+    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada')
+    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada')
+    const gadgetBob = timeline.authors.find((author) => author.id === 'acme/gadget::login:bob')
+
+    expect(timeline.authors).toHaveLength(3)
+    expect(new Set(timeline.authors.map((author) => author.id)).size).toBe(3)
+    expect(widgetAda?.baseId).toBe('login:ada')
+    expect(gadgetAda?.baseId).toBe('login:ada')
+    expect(widgetAda?.id).not.toBe(gadgetAda?.id)
+    expect(widgetAda?.projectKey).toBe('acme/widget')
+    expect(gadgetAda?.projectKey).toBe('acme/gadget')
+    expect(widgetAda?.colorIndex).toBe(gadgetAda?.colorIndex)
+    expect(gadgetBob?.baseId).toBe('login:bob')
+    expect(gadgetBob?.id).toBe('acme/gadget::login:bob')
+    expect(gadgetBob?.projectKey).toBe('acme/gadget')
+    expect(gadgetBob?.colorIndex).not.toBe(widgetAda?.colorIndex)
+    expect(timeline.authorById.get('acme/widget::login:ada')).toBe(widgetAda)
+    expect(timeline.authorById.get('acme/gadget::login:ada')).toBe(gadgetAda)
+    expect(widgetAda).not.toBe(gadgetAda)
+  })
+})
+
 describe('extensionOf', () => {
   it('extracts extensions', () => {
     expect(extensionOf('src/file.ts')).toBe('ts')

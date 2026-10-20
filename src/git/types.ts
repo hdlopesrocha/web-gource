@@ -32,6 +32,14 @@ export type FilesMissingReason =
 
 export interface RawCommit {
   sha: string
+  /**
+   * Project this commit belongs to when several repositories share one scene.
+   * Set by the controller, never by a provider. Its file paths and author id are
+   * scoped with this key while the timeline is built.
+   */
+  projectKey?: string
+  /** `owner/name` of that project, for labels. */
+  projectName?: string
   /** Parent SHAs, in order. Empty for the root commit. */
   parents: string[]
   /** True when the commit has more than one parent. */

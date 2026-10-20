@@ -1,11 +1,14 @@
 import type { RawCommit, RawFileChange, RepoInfo } from '../git/types'
 import {
   authorKey,
+  projectPath,
+  scopedAuthorId,
   type ActivityBucket,
   type Timeline,
   type TimelineAuthor,
   type TimelineCommit,
   type TimelineFileChange,
+  type TimelineProject,
 } from './types'
 
 /**
@@ -25,6 +28,8 @@ export class TimelineBuilder {
   private filePaths = new Set<string>()
   private dirPaths = new Set<string>()
   private extensions = new Map<string, number>()
+  /** Avatars keep their colour across projects: base identity → colour index. */
+  private baseColors = new Map<string, number>()
 
   constructor(private readonly repo: Timeline['repo']) {}
 
@@ -32,8 +37,10 @@ export class TimelineBuilder {
   addCommits(raw: RawCommit[]): number {
     let added = 0
     for (const commit of raw) {
-      if (this.seen.has(commit.sha)) continue
-      this.seen.add(commit.sha)
+      // The same SHA can exist in two projects (forks, mirrors): dedupe per project.
+      const seenKey = commit.projectKey ? `${commit.projectKey}\u0000${commit.sha}` : commit.sha
+      if (this.seen.has(seenKey)) continue
+      this.seen.add(seenKey)
       const timelineCommit = this.normalize(commit)
       this.commits.push(timelineCommit)
       this.trackAuthor(timelineCommit, commit)
@@ -67,26 +74,38 @@ export class TimelineBuilder {
   private sort(): void {
     this.commits.sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp
+      // Stable across projects: the project key breaks ties when two projects
+      // share a SHA or commit exactly at the same instant.
+      const projectA = a.projectKey ?? ''
+      const projectB = b.projectKey ?? ''
+      if (projectA !== projectB) return projectA < projectB ? -1 : 1
       return a.sha < b.sha ? -1 : a.sha > b.sha ? 1 : 0
     })
     for (let index = 0; index < this.commits.length; index += 1) this.commits[index].index = index
   }
 
   private normalize(commit: RawCommit): TimelineCommit {
+    const projectKey = commit.projectKey?.trim() || undefined
+    const projectName = commit.projectName?.trim() || projectKey
     const changes: TimelineFileChange[] = []
     for (const change of commit.files ?? []) {
       const path = change.path?.trim()
       if (!path) continue
       const mapped: TimelineFileChange = {
-        path,
+        // Namespacing paths here means every downstream consumer (layout,
+        // nodes, beams, labels, sizes) gets project separation for free.
+        path: projectPath(projectKey, path),
         kind: change.kind,
         additions: change.additions ?? 0,
         deletions: change.deletions ?? 0,
       }
       // A rename without a previous path is really a modification.
       if (change.kind === 'rename') {
-        if (change.previousPath && change.previousPath !== path) mapped.from = change.previousPath
-        else mapped.kind = 'modify'
+        if (change.previousPath && change.previousPath !== path) {
+          mapped.from = projectPath(projectKey, change.previousPath)
+        } else {
+          mapped.kind = 'modify'
+        }
       }
       changes.push(mapped)
     }
@@ -103,11 +122,16 @@ export class TimelineBuilder {
     return {
       index: 0,
       sha: commit.sha,
+      projectKey,
+      projectName,
       shortSha: commit.sha.slice(0, 7),
       parents: commit.parents,
       isMerge: Boolean(commit.isMerge ?? commit.parents.length > 1),
       timestamp: commit.timestamp,
-      authorId: authorKey({ login: commit.author.login, email: commit.author.email, name: commit.author.name }),
+      authorId: scopedAuthorId(
+        projectKey,
+        authorKey({ login: commit.author.login, email: commit.author.email, name: commit.author.name }),
+      ),
       message,
       subject,
       body,
@@ -123,6 +147,7 @@ export class TimelineBuilder {
 
   private trackAuthor(commit: TimelineCommit, raw: RawCommit): void {
     const id = commit.authorId
+    const baseId = authorKey({ login: raw.author.login, email: raw.author.email, name: raw.author.name })
     const existing = this.authors.get(id)
     if (existing) {
       existing.commits += 1
@@ -135,8 +160,18 @@ export class TimelineBuilder {
       if (!existing.login && raw.author.login) existing.login = raw.author.login
       return
     }
+    // The same person keeps the same colour in every project they appear in,
+    // while remaining a separate node and stats row per project.
+    let colorIndex = this.baseColors.get(baseId)
+    if (colorIndex === undefined) {
+      colorIndex = this.baseColors.size
+      this.baseColors.set(baseId, colorIndex)
+    }
     this.authors.set(id, {
       id,
+      baseId,
+      projectKey: commit.projectKey,
+      projectName: commit.projectName,
       name: raw.author.name || 'Unknown author',
       email: raw.author.email,
       login: raw.author.login,
@@ -146,7 +181,7 @@ export class TimelineBuilder {
       last: commit.timestamp,
       additions: commit.additions,
       deletions: commit.deletions,
-      colorIndex: this.authors.size,
+      colorIndex,
       unattributed: !raw.author.login && !raw.author.email,
     })
   }
@@ -163,6 +198,7 @@ export class TimelineBuilder {
 
     return {
       repo: this.repo,
+      projects: [],
       commits,
       authors,
       authorById,
@@ -226,6 +262,15 @@ export function extensionOf(path: string): string {
   return name.slice(dot + 1).toLowerCase()
 }
 
+/** Project metadata supplied by the loader (counts are derived after filtering). */
+export interface TimelineProjectInput {
+  key: string
+  repo: RepoInfo
+  truncated?: boolean
+  warnings?: string[]
+  sizeSource?: string
+}
+
 export interface BuildTimelineOptions {
   /** Keep only commits matching this predicate (author/date filters). */
   filter?: (commit: RawCommit) => boolean
@@ -244,6 +289,8 @@ export interface BuildTimelineOptions {
   sizeSource?: string
   /** Custom activity bucketing, e.g. based on a schedule in simulated time. */
   activity?: (commits: TimelineCommit[]) => ActivityBucket[]
+  /** Projects loaded in this run, in load order. */
+  projects?: TimelineProjectInput[]
 }
 
 /**
@@ -273,6 +320,33 @@ export function buildTimeline(repo: RepoInfo, commits: readonly RawCommit[], opt
   builder.markTruncated(Boolean(options.truncated))
   if (options.warnings) builder.addWarnings(options.warnings)
   const timeline = builder.build(options.activity)
+  if (options.projects) {
+    // Counts are derived from the filtered commits, so the project list in the
+    // UI always agrees with the statistics above it.
+    const perProject = new Map<string, { commits: number; authors: Set<string> }>()
+    for (const commit of timeline.commits) {
+      const key = commit.projectKey ?? ''
+      let entry = perProject.get(key)
+      if (!entry) {
+        entry = { commits: 0, authors: new Set() }
+        perProject.set(key, entry)
+      }
+      entry.commits += 1
+      entry.authors.add(commit.authorId)
+    }
+    timeline.projects = options.projects.map((project): TimelineProject => {
+      const entry = perProject.get(project.key)
+      return {
+        key: project.key,
+        repo: project.repo,
+        commits: entry?.commits ?? 0,
+        authors: entry?.authors.size ?? 0,
+        truncated: Boolean(project.truncated),
+        warnings: project.warnings ?? [],
+        sizeSource: project.sizeSource ?? 'unavailable',
+      }
+    })
+  }
   const fileSizes = options.fileSizes ?? new Map<string, number>()
   timeline.fileSizes = fileSizes
   if (fileSizes.size > 0) {
