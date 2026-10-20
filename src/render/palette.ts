@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { AudioLevels } from '../engine/audio/analysis'
 import type { ChangeKind } from '../timeline/types'
 
 /**
@@ -34,16 +35,19 @@ const scratch = new THREE.Color()
 
 export function colorForExtension(extension: string, target = new THREE.Color()): THREE.Color {
   const hue = EXTENSION_HUES[extension]
-  if (hue !== undefined) return target.setHSL(hue, 0.72, 0.62)
+  // The HSL values are authored in sRGB. `setHSL` defaults to the linear
+  // working space, which would turn every file into a washed-out pastel once
+  // the renderer converts the result back to sRGB.
+  if (hue !== undefined) return target.setHSL(hue, 0.72, 0.62, THREE.SRGBColorSpace)
   // Unknown extensions: derive a stable hue from the string.
   let hash = 0
   for (let index = 0; index < extension.length; index += 1) hash = (hash * 31 + extension.charCodeAt(index)) % 997
-  return target.setHSL((hash % 360) / 360, 0.55, 0.6)
+  return target.setHSL((hash % 360) / 360, 0.55, 0.6, THREE.SRGBColorSpace)
 }
 
 export function colorForAuthor(colorIndex: number, target = new THREE.Color()): THREE.Color {
   const hue = AUTHOR_HUES[colorIndex % AUTHOR_HUES.length]
-  return target.setHSL(hue, 0.85, 0.62)
+  return target.setHSL(hue, 0.85, 0.62, THREE.SRGBColorSpace)
 }
 
 export function authorCssColor(colorIndex: number): string {
@@ -63,6 +67,31 @@ export const DIR_COLOR = new THREE.Color(0x9fd0ff)
 /** Colour used when a node was just touched: bright and near-white. */
 export const HIGHLIGHT_COLOR = new THREE.Color(0xffffff)
 export const ROOT_COLOR = new THREE.Color(0xfff1c9)
+
+/**
+ * The activity tint shared by the folder glow and the plasma volume.
+ *
+ * The two layers are meant to read as one light: the same directory colour,
+ * scaled by the layer's own intensity and the bass gain, with the hue rotated
+ * by the bass. Using one function for both is what keeps the halos and the
+ * plasma the same colour — including when the music moves them.
+ */
+export function activityTint(
+  intensity: number,
+  audio: AudioLevels | null,
+  target = new THREE.Color(),
+): THREE.Color {
+  const gain = audio ? 1 + audio.bass * 0.45 : 1
+  const brightness = intensity * gain
+  target.setRGB(
+    Math.min(1.5, DIR_COLOR.r * brightness),
+    Math.min(1.5, DIR_COLOR.g * brightness),
+    Math.min(1.5, DIR_COLOR.b * brightness),
+  )
+  const hue = audio ? audio.bass * 0.25 : 0
+  if (hue !== 0) target.offsetHSL(hue, 0, 0)
+  return target
+}
 
 export function backgroundColor(): THREE.Color {
   return new THREE.Color(0x05070e)
