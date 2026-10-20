@@ -2,6 +2,16 @@ import type { Simulation } from '../sim/simulation'
 import { colorForChange, DIR_COLOR } from './palette'
 import type { ChangeKind } from '../timeline/types'
 
+/**
+ * Dot colours shared by the on-screen overview, the export overlay and its
+ * legend row, so a directory/file/author dot always reads the same colour.
+ */
+export const MINIMAP_DOT_COLORS = {
+  dir: 'rgba(120,170,235,0.75)',
+  file: 'rgba(255,235,180,0.9)',
+  author: '#ffffff',
+} as const
+
 export interface MinimapOptions {
   size: number
   showCamera: boolean
@@ -34,6 +44,8 @@ export interface MinimapDrawOptions {
 export class MinimapDrawer {
   private extent = 60
   private lastCenter = { x: 0, y: 0 }
+  /** The first draw snaps the framing instead of easing in from the defaults. */
+  private primed = false
 
   draw(ctx: CanvasRenderingContext2D, options: MinimapDrawOptions): void {
     const { sim, cameraTarget } = options
@@ -44,9 +56,19 @@ export class MinimapDrawer {
     // Track the visible extent so the minimap keeps the tree in frame.
     const bounds = sim.bounds()
     const targetExtent = Math.max(24, bounds.radius * 1.15)
-    this.extent += (targetExtent - this.extent) * 0.08
-    this.lastCenter.x += (bounds.center.x - this.lastCenter.x) * 0.08
-    this.lastCenter.y += (bounds.center.y - this.lastCenter.y) * 0.08
+    if (this.primed) {
+      this.extent += (targetExtent - this.extent) * 0.08
+      this.lastCenter.x += (bounds.center.x - this.lastCenter.x) * 0.08
+      this.lastCenter.y += (bounds.center.y - this.lastCenter.y) * 0.08
+    } else {
+      // The first frame of an export must already show the tree, not ease in
+      // from the defaults: an exported overview used to start clustered at the
+      // centre (the on-screen panel has long since converged).
+      this.extent = targetExtent
+      this.lastCenter.x = bounds.center.x
+      this.lastCenter.y = bounds.center.y
+      this.primed = true
+    }
     const scale = half / this.extent
 
     ctx.clearRect(0, 0, size, size)
@@ -66,12 +88,12 @@ export class MinimapDrawer {
       const y = toY(node.position.y)
       if (x < -4 || y < -4 || x > size + 4 || y > size + 4) continue
       if (node.kind === 'dir') {
-        ctx.fillStyle = 'rgba(120,170,235,0.5)'
+        ctx.fillStyle = MINIMAP_DOT_COLORS.dir
         ctx.fillRect(x - 1.2 * dpr, y - 1.2 * dpr, 2.4 * dpr, 2.4 * dpr)
       } else {
         const kind = (node.lastKind ?? 'modify') as ChangeKind
         const alpha = node.lastChangeIndex > sim.currentIndex - 6 ? 0.95 : 0.4
-        ctx.fillStyle = alpha > 0.5 ? `rgba(255,235,180,${alpha})` : 'rgba(150,190,255,0.35)'
+        ctx.fillStyle = alpha > 0.5 ? MINIMAP_DOT_COLORS.file : 'rgba(150,190,255,0.35)'
         void kind
         ctx.fillRect(x, y, 1.4 * dpr, 1.4 * dpr)
       }

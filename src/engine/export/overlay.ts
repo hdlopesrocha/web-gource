@@ -17,7 +17,7 @@ import type { ActivityBucket, TimelineAuthor, TimelineCommit } from '../../timel
 import type { HudCommitInfo } from '../engine'
 import { authorCssColor as authorColorCss } from '../../render/palette'
 import { ActivityCursor, contributionCalendar, dayStartMs } from '../../timeline/activity'
-import { MinimapDrawer } from '../../render/minimap'
+import { MINIMAP_DOT_COLORS, MinimapDrawer } from '../../render/minimap'
 import {
   drawActivityBars,
   drawContributionCalendar,
@@ -71,6 +71,104 @@ export interface OverlayOptions {
   heatmap?: boolean
   /** Draw the contribution calendar. */
   contributions?: boolean
+  /** Repository label shown in the overview heading, like the on-screen panel. */
+  repository?: string
+}
+
+/** A pixel rectangle in the frame. */
+export interface OverlayRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Geometry of the overview panel: its square map plus the title/legend bands. */
+export interface OverviewLayout extends OverlayRect {
+  /** The inner square the tree dots and crosshair are drawn into. */
+  map: OverlayRect
+  /** Space reserved for the OVERVIEW heading above the map. */
+  headerHeight: number
+  /** Space reserved for the directories/files/authors legend below the map. */
+  legendHeight: number
+  /** Padding between the panel edge and its content. */
+  innerPad: number
+}
+
+/** All panel rectangles for a frame, derived from its size alone. */
+export interface OverlayLayout {
+  unit: number
+  padding: number
+  columnWidth: number
+  timeline: OverlayRect
+  info: OverlayRect
+  /** The right-hand activity column (heatmap + contribution calendar). */
+  charts: OverlayRect
+  overview: OverviewLayout
+}
+
+/**
+ * Lay out every export panel for a frame size.
+ *
+ * Kept separate from the drawing so the geometry can be asserted directly: the
+ * overview sits in the bottom-right, below the activity column and above the
+ * timeline, and never overlaps the info panel on the left.
+ */
+export function overlayLayout(width: number, height: number, options: OverlayOptions = {}): OverlayLayout {
+  const unit = Math.max(8, Math.round(Math.min(width, height) * 0.014))
+  const padding = Math.round(unit * 0.9)
+  const columnWidth = Math.round(Math.min(width * 0.3, Math.max(180, width * 0.26)))
+  const timelineHeight = Math.round(Math.min(height * 0.12, Math.max(26, unit * 2.6)))
+  const timelineY = height - timelineHeight - padding
+
+  // The activity column grows downwards from the top-right; its bottom edge
+  // bounds how high the overview may reach.
+  let cursorY = padding
+  if (options.heatmap !== false) cursorY += Math.round(columnWidth * 0.46) + unit * 3 + padding
+  if (options.contributions !== false) cursorY += Math.round(columnWidth * 0.42) + unit * 5.2
+  const chartsBottom = cursorY
+
+  const infoHeight = Math.round(Math.min(height * 0.46, unit * 17))
+  const infoY = Math.max(padding, timelineY - infoHeight - padding)
+
+  // Overview: a square map with an OVERVIEW heading and the legend row, so the
+  // exported panel reads like the on-screen one instead of a bare dark square.
+  const innerPad = Math.max(4, Math.round(unit * 0.5))
+  const headerHeight = Math.round(unit * 1.5)
+  const legendHeight = Math.round(unit * 1.5)
+  const minMap = Math.max(44, Math.round(unit * 4.5))
+  const availTop = chartsBottom + padding
+  const availBottom = timelineY - padding
+  let mapSize = Math.max(minMap, Math.round(Math.min(columnWidth - innerPad * 2, Math.max(72, height * 0.24))))
+  let panelHeight = headerHeight + mapSize + legendHeight + innerPad
+  const available = availBottom - availTop
+  if (panelHeight > available) {
+    // Shrink the map rather than overlap the timeline or the activity charts.
+    mapSize = Math.max(minMap, mapSize - (panelHeight - available))
+    panelHeight = headerHeight + mapSize + legendHeight + innerPad
+  }
+  const panelWidth = mapSize + innerPad * 2
+  const panelTop = Math.max(availTop, availBottom - panelHeight)
+  const overviewX = width - padding - panelWidth
+
+  return {
+    unit,
+    padding,
+    columnWidth,
+    timeline: { x: padding, y: timelineY, width: width - padding * 2, height: timelineHeight },
+    info: { x: padding, y: infoY, width: columnWidth, height: infoHeight },
+    charts: { x: width - padding - columnWidth, y: padding, width: columnWidth, height: chartsBottom - padding },
+    overview: {
+      x: overviewX,
+      y: panelTop,
+      width: panelWidth,
+      height: panelHeight,
+      headerHeight,
+      legendHeight,
+      innerPad,
+      map: { x: overviewX + innerPad, y: panelTop + headerHeight, width: mapSize, height: mapSize },
+    },
+  }
 }
 
 /**
@@ -143,7 +241,8 @@ export class ExportOverlay {
 
   draw(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
     const { width, height } = frame
-    const unit = Math.max(8, Math.round(Math.min(width, height) * 0.014))
+    const layout = overlayLayout(width, height, this.options)
+    const { unit, padding, columnWidth } = layout
     const font = `${unit}px "Inter", system-ui, sans-serif`
     const smallFont = `${chartLabelSize(unit)}px "Inter", system-ui, sans-serif`
     const titleFont = `600 ${Math.round(unit * 1.1)}px "Inter", system-ui, sans-serif`
@@ -156,40 +255,34 @@ export class ExportOverlay {
     ctx.save()
     ctx.textBaseline = 'middle'
 
-    const padding = Math.round(unit * 0.9)
-    const columnWidth = Math.round(Math.min(width * 0.3, Math.max(180, width * 0.26)))
-    const timelineHeight = Math.round(Math.min(height * 0.12, Math.max(26, unit * 2.6)))
-    const timelineY = height - timelineHeight - padding
-    const overviewSize = Math.round(Math.min(columnWidth, Math.max(80, height * 0.24)))
-    const overviewY = timelineY - overviewSize - padding
-
     // ---- timeline -------------------------------------------------------
     if (this.options.timeline !== false) {
+      const { x: timelineX, y: timelineY, width: timelineWidth, height: timelineHeight } = layout.timeline
       const barsHeight = Math.round(timelineHeight * 0.62)
       const labelHeight = timelineHeight - barsHeight
-      drawPanel(ctx, padding, timelineY, width - padding * 2, timelineHeight, {
+      drawPanel(ctx, timelineX, timelineY, timelineWidth, timelineHeight, {
         background: 'rgba(9,13,24,0.68)',
       })
 
       ctx.font = font
       ctx.textAlign = 'left'
       ctx.fillStyle = TEXT_STRONG
-      ctx.fillText(formatDateTime(frame.date), padding * 2, timelineY + labelHeight * 0.5)
+      ctx.fillText(formatDateTime(frame.date), timelineX + padding, timelineY + labelHeight * 0.5)
       if (frame.commit) {
         const subject = frame.commit.subject
         const label = `${frame.commit.shortSha} · ${subject.length > 58 ? `${subject.slice(0, 57)}…` : subject}`
         ctx.fillStyle = TEXT_COLOR
-        ctx.fillText(label, padding * 2 + unit * 11, timelineY + labelHeight * 0.5)
+        ctx.fillText(label, timelineX + padding + unit * 11, timelineY + labelHeight * 0.5)
       }
       ctx.textAlign = 'right'
       ctx.fillStyle = TEXT_COLOR
       const percent = frame.duration > 0 ? Math.round((frame.simTime / frame.duration) * 100) : 0
-      ctx.fillText(`${percent}%`, width - padding * 2, timelineY + labelHeight * 0.5)
+      ctx.fillText(`${percent}%`, timelineX + timelineWidth - padding, timelineY + labelHeight * 0.5)
 
       ctx.save()
-      ctx.translate(padding * 2, timelineY + labelHeight)
+      ctx.translate(timelineX + padding, timelineY + labelHeight)
       drawActivityBars(ctx, {
-        width: width - padding * 4,
+        width: timelineWidth - padding * 2,
         height: barsHeight,
         buckets: frame.buckets,
         position: frame.simTime,
@@ -198,37 +291,9 @@ export class ExportOverlay {
       ctx.restore()
     }
 
-    // ---- overview -------------------------------------------------------
-    if (this.options.overview !== false) {
-      const x = width - padding - overviewSize
-      drawPanel(ctx, x, overviewY, overviewSize, overviewSize, { radius: Math.round(unit * 0.6) })
-      ctx.save()
-      ctx.beginPath()
-      if (typeof ctx.roundRect === 'function') {
-        ctx.roundRect(x + 1, overviewY + 1, overviewSize - 2, overviewSize - 2, unit * 0.5)
-      } else {
-        ctx.rect(x + 1, overviewY + 1, overviewSize - 2, overviewSize - 2)
-      }
-      ctx.clip()
-      // The drawer works in its own square, so move to the panel first.
-      ctx.translate(x + 1, overviewY + 1)
-      this.minimap.draw(ctx, {
-        size: overviewSize - 2,
-        sim: frame.sim,
-        cameraTarget: frame.cameraTarget,
-      })
-      ctx.restore()
-      ctx.font = font
-      ctx.textAlign = 'left'
-      ctx.fillStyle = TEXT_COLOR
-      ctx.fillText('Overview', x + unit * 0.6, overviewY - unit * 0.7)
-    }
-
     // ---- info panel (bottom-left, above the timeline) -------------------
     if (this.options.info !== false) {
-      const infoWidth = columnWidth
-      const infoHeight = Math.round(Math.min(height * 0.46, unit * 17))
-      const infoY = Math.max(padding, timelineY - infoHeight - padding)
+      const { x: infoX, y: infoY, width: infoWidth, height: infoHeight } = layout.info
       const stats = frame.sim.stats()
       const activeAuthors = [...frame.sim.authors]
         .filter((author) => author.visible)
@@ -260,7 +325,7 @@ export class ExportOverlay {
         })),
       })
       drawInfoPanel(ctx, model, {
-        x: padding,
+        x: infoX,
         y: infoY,
         width: infoWidth,
         height: infoHeight,
@@ -273,7 +338,7 @@ export class ExportOverlay {
     }
 
     // ---- activity column ------------------------------------------------
-    const columnX = width - padding - columnWidth
+    const columnX = layout.charts.x
     let cursorY = padding
 
     if (this.options.heatmap !== false) {
@@ -338,6 +403,96 @@ export class ExportOverlay {
       ctx.fillText('More', legendX, legendY)
     }
 
+    // ---- overview -------------------------------------------------------
+    if (this.options.overview !== false) {
+      const overview = layout.overview
+      const map = overview.map
+      drawPanel(ctx, overview.x, overview.y, overview.width, overview.height, { radius: Math.round(unit * 0.6) })
+
+      // Heading, matching the on-screen panel's uppercase title.
+      const headingY = overview.y + overview.headerHeight * 0.5
+      ctx.font = titleFont
+      ctx.textAlign = 'left'
+      ctx.fillStyle = TEXT_COLOR
+      ctx.fillText('OVERVIEW', overview.x + overview.innerPad, headingY)
+      if (this.options.repository) {
+        ctx.font = smallFont
+        ctx.textAlign = 'right'
+        ctx.fillText(this.options.repository, overview.x + overview.width - overview.innerPad, headingY)
+      }
+
+      // The square map, clipped so the dots and crosshair never spill out.
+      ctx.save()
+      ctx.beginPath()
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(map.x, map.y, map.width, map.height, unit * 0.4)
+      else ctx.rect(map.x, map.y, map.width, map.height)
+      ctx.clip()
+      ctx.translate(map.x, map.y)
+      this.minimap.draw(ctx, {
+        size: map.width,
+        sim: frame.sim,
+        cameraTarget: frame.cameraTarget,
+        showCamera: true,
+        showAuthors: true,
+      })
+      ctx.restore()
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+      ctx.lineWidth = 1
+      ctx.strokeRect(map.x + 0.5, map.y + 0.5, map.width - 1, map.height - 1)
+
+      // directories / files / authors, with the same dot colours as the map.
+      this.drawOverviewLegend(
+        ctx,
+        overview.x + overview.innerPad,
+        overview.y + overview.height - overview.legendHeight * 0.5,
+        overview.width - overview.innerPad * 2,
+        unit,
+        smallFont,
+      )
+    }
+
     ctx.restore()
+  }
+
+  /** The overview's legend row: one swatch and label per node kind. */
+  private drawOverviewLegend(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    unit: number,
+    font: string,
+  ): void {
+    const dot = Math.max(6, Math.round(unit * 0.7))
+    const gap = Math.max(4, Math.round(unit * 0.45))
+    const labels = ['directories', 'files', 'authors']
+    const colors = [MINIMAP_DOT_COLORS.dir, MINIMAP_DOT_COLORS.file, MINIMAP_DOT_COLORS.author]
+    ctx.font = font
+    ctx.textAlign = 'left'
+
+    // Shrink the gaps (never the dots) if the row is wider than the panel.
+    let itemGap = Math.round(unit * 0.9)
+    const needed =
+      labels.reduce((sum, label) => sum + ctx.measureText(label).width, 0) +
+      dot * labels.length +
+      gap * labels.length +
+      itemGap * (labels.length - 1)
+    if (needed > width) itemGap = Math.max(2, itemGap - (needed - width) / (labels.length - 1))
+
+    let cursor = x
+    for (let index = 0; index < labels.length; index += 1) {
+      ctx.fillStyle = colors[index]
+      if (index === labels.length - 1) {
+        ctx.beginPath()
+        ctx.arc(cursor + dot / 2, y, dot / 2, 0, Math.PI * 2)
+        ctx.fill()
+      } else {
+        ctx.fillRect(cursor, y - dot / 2, dot, dot)
+      }
+      cursor += dot + gap
+      ctx.fillStyle = TEXT_COLOR
+      ctx.fillText(labels[index], cursor, y)
+      cursor += ctx.measureText(labels[index]).width + itemGap
+    }
   }
 }
