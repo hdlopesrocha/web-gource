@@ -73,19 +73,22 @@ export interface XrSessionOptions {
   xr?: XrSystemLike | null
 }
 
-/** Reference space type: the floor is the origin, so a tabletop has a real height. */
+/** Reference space type: the floor is the origin, so the user has a real height. */
 export const XR_REFERENCE_SPACE = 'local-floor'
 /** Features we ask for; both are optional, so a headset may refuse either. */
 export const XR_OPTIONAL_FEATURES = ['local-floor', 'bounded-floor'] as const
-/** How far in front of the user the centre of the tree sits, in metres. */
-export const XR_TABLE_DISTANCE = 1.35
-/** Height of the tabletop above the floor, in metres. */
-export const XR_TABLE_HEIGHT = 0.95
 /** The tree is scaled to fit inside this many metres. */
 export const XR_TABLE_SIZE = 1.5
 
-/** The tree lies in its own XY plane; tip it flat so it reads as a tabletop. */
-const XR_TILT = new THREE.Euler(-Math.PI / 2, 0, 0)
+/**
+ * Rotation that makes the tree's own frame read as a room.
+ *
+ * The scene is authored Z-up (the camera's up vector is the plane normal), while
+ * WebXR's `local-floor` space is Y-up. The tree stays in its own frame and the
+ * *rig* is tipped instead, so the scene keeps its on-screen orientation and the
+ * user stands inside it rather than next to a moved copy of it.
+ */
+const XR_RIG_TILT = new THREE.Euler(Math.PI / 2, 0, 0)
 
 /** `navigator.xr`, or null where WebXR is not exposed at all. */
 export function navigatorXr(): XrSystemLike | null {
@@ -130,6 +133,7 @@ interface SavedTransform {
 
 interface SavedState {
   enabled: boolean
+  rig: SavedTransform | null
   root: SavedTransform | null
   camera: SavedTransform | null
   cameraParent: THREE.Object3D | null
@@ -143,10 +147,10 @@ interface SavedState {
  *
  * `enter()` never throws: every failure path records a human sentence in
  * `store.ui.xrError` and leaves the app exactly as it was. While a session is
- * running the tabletop is tipped flat in front of the user (see
- * {@link XR_TABLE_HEIGHT}) and the camera is parented to an XR rig group, so
- * three can pose it from the headset; `end` (or `exit()`) restores the previous
- * scene and camera transforms.
+ * running the camera is parented to an XR rig group and the rig is tipped and
+ * placed at the scene origin (see {@link frameTabletop}), so three can pose the
+ * camera from the headset and the user stands where the on-screen camera was;
+ * `end` (or `exit()`) restores the previous scene, rig and camera transforms.
  */
 export class XrSession {
   private readonly renderer: XrRendererLike
@@ -198,6 +202,7 @@ export class XrSession {
     const manager = this.renderer.xr
     this.saved = {
       enabled: manager.enabled,
+      rig: this.framing ? saveTransform(this.framing.rig) : null,
       root: this.framing ? saveTransform(this.framing.root) : null,
       camera: this.framing ? saveTransform(this.framing.camera) : null,
       cameraParent: this.framing ? this.framing.camera.parent : null,
@@ -257,12 +262,15 @@ export class XrSession {
   }
 
   /**
-   * Tip the tabletop flat and place it in front of the user.
+   * Stand the user at the scene origin, at the height the on-screen camera has.
    *
-   * `local-floor` puts the origin on the floor where the session started, with
-   * the user looking down -Z, so the tree centre lands
-   * `XR_TABLE_DISTANCE` metres ahead at `XR_TABLE_HEIGHT`, scaled so the whole
-   * repository fits in `XR_TABLE_SIZE` metres.
+   * Instead of moving the tree in front of the user, the *user* is moved onto
+   * the scene: the rig is tipped so the tree's Z-up frame reads as the room's
+   * floor and placed at the scene origin, `x = 0, y = 0`, at the eye height the
+   * on-screen camera has (in the same scaled units as the tabletop). The tree
+   * therefore sits in front of and below the user exactly as it does on screen,
+   * and walking around it in the room orbits the real thing rather than a moved
+   * copy. The tree keeps its tabletop scale but is centred on the origin.
    */
   private frameTabletop(): void {
     const framing = this.framing
@@ -270,14 +278,20 @@ export class XrSession {
     const { center, radius } = framing.bounds()
     const scale = XR_TABLE_SIZE / Math.max(0.001, radius * 2)
     const cz = center.z ?? 0
-    framing.root.quaternion.setFromEuler(XR_TILT)
+
+    // The tree is scaled to the room and centred on the scene origin (no more
+    // "table in front" offset).
+    framing.root.quaternion.identity()
     framing.root.scale.setScalar(scale)
-    framing.root.position.set(
-      -center.x * scale,
-      XR_TABLE_HEIGHT - cz * scale,
-      -XR_TABLE_DISTANCE + center.y * scale,
-    )
+    framing.root.position.set(-center.x * scale, -center.y * scale, -cz * scale)
     framing.root.updateMatrixWorld(true)
+
+    // The user stands at the scene origin at the height the on-screen camera has
+    // (in the same scaled units), with the tree's +Z as "up".
+    const camera = framing.camera
+    framing.rig.quaternion.setFromEuler(XR_RIG_TILT)
+    framing.rig.position.set(0, 0, scale * (camera.position.z - cz))
+    framing.rig.updateMatrixWorld(true)
   }
 
   /** Restore the flags, the scene transform and the camera parent. */
@@ -305,6 +319,7 @@ export class XrSession {
       if (saved.cameraFar !== null) camera.far = saved.cameraFar
       camera.updateProjectionMatrix()
     }
+    if (saved.rig) restoreTransform(framing.rig, saved.rig)
     if (saved.root) restoreTransform(framing.root, saved.root)
   }
 }

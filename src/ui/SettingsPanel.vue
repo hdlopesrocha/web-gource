@@ -277,11 +277,6 @@ onMounted(() => {
           </p>
           <label class="switch"><input type="checkbox" :checked="settings.showEdges" @change="update({ showEdges: ($event.target as HTMLInputElement).checked })" /> Branch edges</label>
           <label class="switch"><input type="checkbox" :checked="settings.showGrid" @change="update({ showGrid: ($event.target as HTMLInputElement).checked })" /> Background grid</label>
-          <label class="switch"><input type="checkbox" :checked="settings.showBloom" @change="update({ showBloom: ($event.target as HTMLInputElement).checked })" /> Folder glow</label>
-          <div class="field">
-            <label>Glow intensity · {{ settings.bloomIntensity.toFixed(2) }}</label>
-            <input type="range" min="0" max="1.5" step="0.05" :value="settings.bloomIntensity" @input="update({ bloomIntensity: Number(($event.target as HTMLInputElement).value) })" />
-          </div>
           <div class="field">
             <label>Edge opacity · {{ settings.edgeOpacity.toFixed(2) }}</label>
             <input type="range" min="0.05" max="1" step="0.05" :value="settings.edgeOpacity" @input="update({ edgeOpacity: Number(($event.target as HTMLInputElement).value) })" />
@@ -333,10 +328,9 @@ onMounted(() => {
           </div>
           <p class="faint note">
             A ray-marched plasma volume forms around the files with the most recent changes: every file's contribution
-            grows with its activity heat and fades as the heat decays (the reheat/decay time is above). The plasma uses
-            the folder-glow colour, follows the audio-reactive hue and brightness, and is depth-tested against the
-            files, folders and branch lines, so they always stay in front of it. Opacity sets how much of the volume is
-            added over the scene.
+            grows with its activity heat and fades as the heat decays (the reheat/decay time is above). The plasma
+            follows the audio-reactive hue and brightness, and is depth-tested against the files, folders and branch
+            lines, so they always stay in front of it. Opacity sets how much of the volume is added over the scene.
           </p>
         </section>
 
@@ -452,6 +446,54 @@ onMounted(() => {
           <p class="faint note">
             Playthrough at 1× lasts about {{ formatDuration(estimatedDuration) }} for the current timeline
             ({{ formatDuration(controller.duration()) }} of simulated time).
+          </p>
+        </section>
+        <section class="group">
+          <h3>Gamepad & head tracking</h3>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="settings.gamepad"
+              @change="controller.setGamepadEnabled(($event.target as HTMLInputElement).checked)"
+            />
+            Gamepad
+          </label>
+          <div class="field">
+            <label>Gamepad sensitivity · {{ settings.gamepadSensitivity.toFixed(2) }}×</label>
+            <input
+              type="range"
+              min="0.2"
+              max="3"
+              step="0.05"
+              :value="settings.gamepadSensitivity"
+              @input="update({ gamepadSensitivity: Number(($event.target as HTMLInputElement).value) })"
+            />
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="settings.gyro"
+              @change="controller.setGyroEnabled(($event.target as HTMLInputElement).checked)"
+            />
+            Head tracking (gyroscope)
+          </label>
+          <button
+            v-if="settings.gyro"
+            class="btn small"
+            type="button"
+            @click="controller.recalibrateOrientation()"
+          >
+            Recalibrate to where I am looking
+          </button>
+          <p v-if="store.ui.gyroError" class="faint note warn">{{ store.ui.gyroError }}</p>
+          <p class="faint note">
+            <template v-if="store.ui.gamepadConnected">A gamepad is connected. </template>
+            Left stick rotates the camera (yaw and pitch), the right stick rolls it and flies forward and back, the
+            D-pad strafes and rises or sinks, and <kbd>A</kbd> recalibrates the head tracking. Head tracking follows
+            the device's gyroscope: the camera up vector is the device's up rotated by the gyroscope, and
+            <strong>clicking the scene</strong> (or pressing <kbd>A</kbd>) binds the current pose as the reference, so
+            the view is calibrated exactly to the orientation of your head. Reset view (or dragging with the mouse)
+            hands the camera back to the orbit.
           </p>
         </section>
         <section class="group">
@@ -621,7 +663,7 @@ onMounted(() => {
             Audio-reactive visuals
           </label>
           <p class="faint hint">
-            The bass shifts the folder glow hue, claps cycle the file colours, the low mids pulse the folder rings,
+            The bass shifts the plasma hue, claps cycle the file colours, the low mids pulse the folder rings,
             the midrange brightens the branches, and the vocal range makes the author avatars breathe.
           </p>
 

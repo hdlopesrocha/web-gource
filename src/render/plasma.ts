@@ -20,7 +20,7 @@ import { activityTint } from './palette'
  * (`gl_Position = vec4(position.xy, 1.0, 1.0)`). It is drawn *after* the opaque
  * geometry (branch lines -1, file circles 2, directory rings 3), so the depth
  * test rejects it wherever those already wrote depth and their silhouettes clip
- * the volume instead of the glow washing over them. Every later transparent
+ * the volume instead of it washing over them. Every later transparent
  * layer (particles 10, beams 12, avatars 20/21, labels 30) still draws on top,
  * so files, folders, lines, labels and avatars stay above the plasma.
  *
@@ -77,14 +77,14 @@ export interface PlasmaSettings {
 }
 
 export const DEFAULT_PLASMA_SETTINGS: PlasmaSettings = {
-  intensity: 0.6,
-  // Subtle by default: full strength (1) reads as a bright wash over the tree,
-  // so the shipped default keeps the glow faint. 1 is the old full strength.
-  opacity: 0.35,
+  intensity: 0.5,
+  // The volume is fully opaque; the intensity above keeps its colour dim, so
+  // the surface reads as light rather than as fog.
+  opacity: 1,
   sharpness: 2,
-  weight: 0.8,
+  weight: 1,
   radius: 1,
-  decay: 4,
+  decay: 5,
   height: 1.5,
   steps: DEFAULT_PLASMA_STEPS,
 }
@@ -125,6 +125,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uField;
   uniform mat4 uProjectionInverse;
   uniform mat4 uCameraMatrix;
+  uniform vec3 uOrigin;
   uniform vec3 uCenter;
   uniform vec2 uHalf;
   uniform float uHalfZ;
@@ -141,12 +142,14 @@ const FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     // Reconstruct the world-space ray through this pixel from the camera
-    // matrices (the quad itself is in clip space).
+    // matrices (the quad itself is in clip space). Both the origin and the
+    // direction are in the tabletop's frame — the frame the volume lives in —
+    // not in the room frame three's built-in cameraPosition would provide in XR.
     vec2 ndc = vUv * 2.0 - 1.0;
     vec4 farPoint = uProjectionInverse * vec4(ndc, 1.0, 1.0);
     farPoint /= farPoint.w;
     vec3 rayDirection = normalize((uCameraMatrix * vec4(farPoint.xyz, 0.0)).xyz);
-    vec3 rayOrigin = cameraPosition;
+    vec3 rayOrigin = uOrigin;
 
     // Clip the ray against the volume box (the plasma height around the plane).
     vec3 boxMin = uCenter - vec3(uHalf, uHalfZ);
@@ -241,6 +244,9 @@ export class PlasmaField {
   private center = new THREE.Vector3()
   private half = new THREE.Vector2(1, 1)
   private halfZ = 1
+  /** Scratch matrices for mapping the rendering camera into the tabletop frame. */
+  private readonly cameraLocal = new THREE.Matrix4()
+  private readonly parentInverse = new THREE.Matrix4()
 
   constructor(fieldSize = PLASMA_FIELD_SIZE) {
     this.fieldSize = Math.max(8, Math.floor(fieldSize))
@@ -272,6 +278,7 @@ export class PlasmaField {
         uField: { value: this.texture },
         uProjectionInverse: { value: new THREE.Matrix4() },
         uCameraMatrix: { value: new THREE.Matrix4() },
+        uOrigin: { value: new THREE.Vector3() },
         uCenter: { value: this.center },
         uHalf: { value: this.half },
         uHalfZ: { value: this.halfZ },
@@ -287,6 +294,11 @@ export class PlasmaField {
 
     this.mesh = new THREE.Mesh(this.geometry, this.material)
     this.mesh.frustumCulled = false
+    // The quad is drawn once per eye while presenting: take the camera that is
+    // actually drawing it, so the ray reconstruction uses that eye's pose and
+    // its own asymmetric projection instead of the orbit camera or the stereo
+    // union frustum.
+    this.mesh.onBeforeRender = (_renderer, _scene, camera) => this.syncCamera(camera)
     // After the opaque layers (-1 edges, 2/3 circles), so the depth test clips
     // the volume against their silhouettes, and before every later transparent
     // one (10 particles, 12 beams, 20/21 avatars, 30 labels).
@@ -352,8 +364,8 @@ export class PlasmaField {
   }
 
   /**
-   * Tint from the bass exactly like the folder glow: the hue rotates and the
-   * brightness breathes with the low end.
+   * Tint from the bass through the shared activity tint: the hue rotates and
+   * the brightness breathes with the low end.
    */
   applyAudio(audio: AudioLevels | null): void {
     if (!audio && !this.audioActive) return
@@ -413,14 +425,48 @@ export class PlasmaField {
     }
     this.computeVolume(baseRadius)
     this.rasterize(baseRadius)
-    if (camera) {
-      ;(this.material.uniforms.uProjectionInverse.value as THREE.Matrix4).copy(camera.projectionMatrixInverse)
-      ;(this.material.uniforms.uCameraMatrix.value as THREE.Matrix4).copy(camera.matrixWorld)
-    }
+    if (camera) this.useLocalCamera(camera)
     ;(this.material.uniforms.uCenter.value as THREE.Vector3).copy(this.center)
     ;(this.material.uniforms.uHalf.value as THREE.Vector2).copy(this.half)
     this.material.uniforms.uHalfZ.value = this.halfZ
     this.mesh.visible = true
+  }
+
+  /**
+   * Use a camera already expressed in the tabletop frame.
+   *
+   * The renderer hands `update` the orbit camera (or the headset pose mapped
+   * into the tabletop frame), which is the frame the volume lives in, so its
+   * matrices can go to the shader unchanged. During a render the hook below
+   * replaces them with the camera actually drawing the quad.
+   */
+  private useLocalCamera(camera: THREE.Camera): void {
+    ;(this.material.uniforms.uProjectionInverse.value as THREE.Matrix4).copy(camera.projectionMatrixInverse)
+    ;(this.material.uniforms.uCameraMatrix.value as THREE.Matrix4).copy(camera.matrixWorld)
+    ;(this.material.uniforms.uOrigin.value as THREE.Vector3).setFromMatrixPosition(camera.matrixWorld)
+  }
+
+  /**
+   * Point the ray reconstruction at the camera that is actually drawing.
+   *
+   * `update` normally hands over a camera that is already in the tabletop
+   * frame, but three draws the quad with the render camera: the orbit camera
+   * outside XR and one eye of the headset per eye while presenting. The eye
+   * pose is in room coordinates, so it is mapped into the tabletop frame
+   * (`parentInverse * camera.matrixWorld`), and its own projection is used —
+   * with the stereo union frustum tracked instead, the volume lands in a
+   * different place in each eye.
+   */
+  private syncCamera(camera: THREE.Camera): void {
+    this.cameraLocal.copy(camera.matrixWorld)
+    const parent = this.mesh.parent
+    if (parent) {
+      this.parentInverse.copy(parent.matrixWorld).invert()
+      this.cameraLocal.premultiply(this.parentInverse)
+    }
+    ;(this.material.uniforms.uProjectionInverse.value as THREE.Matrix4).copy(camera.projectionMatrixInverse)
+    ;(this.material.uniforms.uCameraMatrix.value as THREE.Matrix4).copy(this.cameraLocal)
+    ;(this.material.uniforms.uOrigin.value as THREE.Vector3).setFromMatrixPosition(this.cameraLocal)
   }
 
   private decayHeat(dt: number): void {

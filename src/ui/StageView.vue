@@ -137,10 +137,29 @@ function onKeydown(event: KeyboardEvent): void {
   event.preventDefault()
 }
 
+/**
+ * A tap on the scene (as opposed to a drag) recalibrates the head tracking:
+ * the current device pose becomes the reference and the view does not move.
+ */
+const TAP_SLOP = 6
+let tapStart: { x: number; y: number; pointerId: number } | null = null
+
+function onViewportPointerDown(event: PointerEvent): void {
+  tapStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId }
+}
+
+function onViewportPointerUp(event: PointerEvent): void {
+  const start = tapStart
+  tapStart = null
+  if (!start || start.pointerId !== event.pointerId) return
+  if (!store.settings.gyro || !store.ui.gyroActive) return
+  if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP) return
+  controller.recalibrateOrientation()
+}
+
 watch(canvas, (element) => {
   if (element && container.value) controller.attach(element, container.value)
 })
-
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -161,9 +180,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="stage">
-    <div ref="container" class="viewport">
+    <div ref="container" class="viewport" @pointerdown="onViewportPointerDown" @pointerup="onViewportPointerUp">
       <canvas ref="canvas" class="scene" />
       <div class="vignette" aria-hidden="true" />
+      <div v-if="store.ui.gyroActive || store.ui.gamepadConnected" class="controls-hint panel">
+        <template v-if="store.ui.gyroActive">Head tracking · click to recalibrate</template>
+        <template v-else>Gamepad connected</template>
+      </div>
     </div>
 
     <header class="topbar panel">
@@ -497,6 +520,18 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 68px;
   right: 12px;
+  z-index: 8;
+}
+
+/* Live camera-control status: gamepad connected, or head tracking on. */
+.controls-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  pointer-events: none;
   z-index: 8;
 }
 

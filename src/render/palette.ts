@@ -69,12 +69,12 @@ export const HIGHLIGHT_COLOR = new THREE.Color(0xffffff)
 export const ROOT_COLOR = new THREE.Color(0xfff1c9)
 
 /**
- * The activity tint shared by the folder glow and the plasma volume.
+ * The activity tint used by the plasma volume.
  *
- * The two layers are meant to read as one light: the same directory colour,
- * scaled by the layer's own intensity and the bass gain, with the hue rotated
- * by the bass. Using one function for both is what keeps the halos and the
- * plasma the same colour — including when the music moves them.
+ * The tint is the directory colour scaled by the plasma's own intensity and the
+ * bass gain, with the hue rotated by the bass. Using one function keeps the
+ * plasma the same colour as the rest of the scene — including when the music
+ * moves it.
  */
 export function activityTint(
   intensity: number,

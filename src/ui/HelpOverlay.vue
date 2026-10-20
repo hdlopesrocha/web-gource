@@ -12,6 +12,7 @@ const shortcuts: { keys: string; action: string }[] = [
   { keys: 'Right-drag', action: 'Pan the view (or Shift-drag)' },
   { keys: 'Wheel', action: 'Zoom around the pointer' },
   { keys: 'C', action: 'Reset the camera view' },
+  { keys: 'Click', action: 'Recalibrate head tracking (gyroscope on)' },
   { keys: 'L', action: 'Toggle labels' },
   { keys: 'M', action: 'Toggle the minimap' },
   { keys: 'A', action: 'Toggle the authors panel' },
@@ -49,6 +50,23 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Gamepad & head tracking</h3>
+        <p class="muted small">
+          <strong>Settings → Camera</strong> can hand the camera to a gamepad or to the device's gyroscope. The pad
+          flies a free 6-DOF camera: the left stick rotates (yaw and pitch), the right stick rolls and thrusts, the
+          D-pad strafes and rises or sinks, and <kbd>A</kbd> recalibrates the head tracking. Rotation is a quaternion
+          applied in the camera's own frame, so the sticks feel like a head rotation and roll is possible at all; the
+          orbit view is remembered, so <strong>Reset</strong> or a mouse drag hands the camera straight back.
+        </p>
+        <p class="muted small">
+          Head tracking follows the gyroscope: the camera orientation comes from the device and its up vector is the
+          device's up rotated by the gyroscope, so the horizon follows your head. <strong>Clicking the scene</strong>
+          (or pressing <kbd>A</kbd>) recalibrates — the current pose becomes the reference and the view does not move —
+          which is how you aim the scene exactly at the orientation you are holding.
+        </p>
+      </section>
+
+      <section>
         <h3>VR & spheres</h3>
         <p class="muted small">
           The <strong>VR</strong> button opens the scene in an immersive WebXR session when the browser has a headset;
@@ -58,6 +76,15 @@ const shortcuts: { keys: string; action: string }[] = [
           Leaving the session (or taking the headset off) restores the exact view you had. The same sphere
           representation is available without a headset under Settings → Visual → 3D file spheres; directories keep
           their rings.
+        </p>
+        <p class="muted small">
+          Inside the session you stand at the scene origin at the same eye height the flat view uses, and the
+          <strong>timeline travels with you</strong>: a panel placed ahead of the headset and raised into the upper part
+          of the view draws the commit histogram, the playhead, the date and the progress with four controls — restart,
+          previous, play/pause and next — plus the strip itself, where dwelling seeks to that point. It is driven by
+          <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever it rests on for
+          <strong>two seconds</strong>, the ring filling as it waits and the hovered control lighting up; looking away
+          resets it, so nothing fires by accident.
         </p>
       </section>
 
@@ -78,7 +105,7 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           Settings → Music loads an MP3 and can switch on the audio-reactive visuals. The track is analysed once
           (bass, low mids, midrange, the vocal range and short clap transients), so the same performance drives
-          live playback and the exported video: bass rotates the folder glow hue, claps cycle and flash the file
+          live playback and the exported video: bass rotates the plasma's hue, claps cycle and flash the file
           colours, low mids pulse the folder rings, the midrange brightens the branches, and the vocal range makes
           the author avatars breathe. The reaction follows the same fade-in and fade-out envelope as the audio, and
           the toggle leaves the track playing — it only stops the animation from reacting to it.
@@ -167,26 +194,21 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
-        <h3>Glow & plasma</h3>
+        <h3>Plasma</h3>
         <p class="muted small">
           Files are drawn from Gource's own ball sprite — a highlight above and to the left, darkening towards the
           rim — so each circle reads as a small sphere, and the colours stay saturated because the palette is
-          authored in sRGB. Behind every folder sits Gource's bloom: an additive halo sized twice the folder's
-          cluster radius and tinted with the folder colour, which is what makes a cluster of files look luminous.
-          The halos are <strong>background light</strong>: they are painted together with the backdrop, before the
-          branches, circles, beams and avatars, and never depth-test against them — so they light the scene instead
-          of washing over the circles. Settings → Scene switches the glow off or drives its intensity (Gource's
-          default is 0.75).
+          authored in sRGB.
         </p>
         <p class="muted small">
-          On top of that sits the <strong>activity plasma</strong>: a ray-marched volume that forms around the files
+          The <strong>activity plasma</strong> is a ray-marched volume that forms around the files
           with the most recent changes. Every change adds heat to the file it touched, the heat decays over a few
           seconds, and the hottest files become glowing blobs whose size and strength follow that heat — so the
           plasma grows where work is happening and fades away when it stops. It is drawn after the branch lines and
           the circles, with the depth test on, so their silhouettes clip the volume and it never brightens a file or
-          a folder; particles, beams, avatars and labels still draw on top. It shares one tint with the folder glow,
-          so the bass rotates and breathes both together, and Settings → Visual exposes the toggle, intensity,
-          opacity, sharpness, metaball weight, radius, decay time, volume height and march quality.
+          a folder; particles, beams, avatars and labels still draw on top. The bass rotates and breathes its hue,
+          and Settings → Visual exposes the toggle, intensity, opacity, sharpness, metaball weight, radius, decay
+          time, volume height and march quality.
         </p>
       </section>
 

@@ -11,7 +11,7 @@ import { NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
 import { ParticleField } from '../src/render/particles'
 import { BeamField } from '../src/render/beams'
-import { DIR_COLOR } from '../src/render/palette'
+import { DIR_COLOR, activityTint } from '../src/render/palette'
 import type { SimNode } from '../src/sim/simulation'
 
 /**
@@ -227,7 +227,7 @@ describe('PlasmaField material and ordering', () => {
     expect(PLASMA_RENDER_ORDER).toBeGreaterThan(2)
     expect(PLASMA_RENDER_ORDER).toBeGreaterThan(3)
     // … and before every later transparent one (particles, beams, avatars,
-    // labels), so those stay on top of the glow.
+    // labels), so those stay on top of the plasma.
     expect(PLASMA_RENDER_ORDER).toBeLessThan(new ParticleField(8).points.renderOrder)
     expect(PLASMA_RENDER_ORDER).toBeLessThan(new BeamField(4).mesh.renderOrder)
     expect(PLASMA_RENDER_ORDER).toBeLessThan(20)
@@ -346,26 +346,24 @@ describe('PlasmaField material and ordering', () => {
 })
 
 describe('PlasmaField audio colour', () => {
-  it('follows the folder glow hue and brightness exactly', () => {
+  it('follows the shared activity tint exactly', () => {
     const field = new PlasmaField()
     const { material } = internals(field)
     const color = material.uniforms.uColor.value as THREE.Color
     const base = color.clone()
 
-    field.applyAudio({ bass: 1, low: 0, mid: 0, voice: 0, clap: 0, clapCount: 0 })
-    const brightness = DEFAULT_PLASMA_SETTINGS.intensity * (1 + 0.45)
-    const expected = new THREE.Color(
-      Math.min(1.5, DIR_COLOR.r * brightness),
-      Math.min(1.5, DIR_COLOR.g * brightness),
-      Math.min(1.5, DIR_COLOR.b * brightness),
-    )
-    expected.offsetHSL(0.25, 0, 0)
+    const audio = { bass: 1, low: 0, mid: 0, voice: 0, clap: 0, clapCount: 0 }
+    field.applyAudio(audio)
+    // `activityTint` is the single source of truth for the plasma colour: the
+    // directory colour scaled by the intensity and the bass gain, with the hue
+    // rotated by the bass.
+    const expected = activityTint(DEFAULT_PLASMA_SETTINGS.intensity, audio)
     expect(color.r).toBeCloseTo(expected.r, 6)
     expect(color.g).toBeCloseTo(expected.g, 6)
     expect(color.b).toBeCloseTo(expected.b, 6)
     expect(color.getHex()).not.toBe(base.getHex())
 
-    // When the track stops, the static folder colour comes back.
+    // When the track stops, the static tint comes back.
     field.applyAudio(null)
     expect(color.getHex()).toBe(base.getHex())
     field.dispose()
@@ -409,6 +407,91 @@ describe('PlasmaField robustness', () => {
     expect((material.uniforms.uProjectionInverse.value as THREE.Matrix4).elements).toEqual(
       expect.arrayContaining([...camera.projectionMatrixInverse.elements]),
     )
+    expect((material.uniforms.uOrigin.value as THREE.Vector3).distanceTo(camera.position)).toBeLessThan(1e-9)
+    field.dispose()
+  })
+
+  /**
+   * While presenting, three draws the plasma quad once per eye with the eye
+   * camera, whose pose is in room coordinates while the volume is in the
+   * tabletop's frame. The hook must map the eye into that frame and use the
+   * eye's own (asymmetric) projection, otherwise the volume lands in the wrong
+   * place — and slightly differently in each eye.
+   */
+  it('reconstructs the headset ray in the tabletop frame, per eye', () => {
+    const field = new PlasmaField()
+    const nodes = [node(1, { position: { x: 10, y: 4, z: 0 } })]
+    field.touch(1, 100)
+    field.sync(nodes, true)
+    field.update(1 / 60, nodes, null, 220)
+
+    // The VR framing scales, tips and moves the tabletop group into the room.
+    const tabletop = new THREE.Group()
+    tabletop.position.set(-0.5, 0.25, -1.5)
+    tabletop.rotation.set(Math.PI / 2, 0, 0)
+    tabletop.scale.setScalar(0.01)
+    tabletop.add(field.group)
+    tabletop.updateMatrixWorld(true)
+
+    const centre = field.volume.center.clone()
+    const roomCentre = tabletop.localToWorld(centre.clone())
+    const eye = (offset: number, asymmetric: boolean): THREE.PerspectiveCamera => {
+      const camera = new THREE.PerspectiveCamera()
+      camera.position.copy(roomCentre).add(new THREE.Vector3(0, 0.1, 0.9))
+      camera.position.x += offset
+      camera.lookAt(roomCentre)
+      if (asymmetric) {
+        // A stereo eye sees an off-centre frustum, like WebXR's per-view matrix.
+        camera.projectionMatrix.makePerspective(-0.05 + offset, 0.05 + offset, 0.04, -0.04, 0.1, 100)
+        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert()
+      } else {
+        camera.updateProjectionMatrix()
+      }
+      camera.updateMatrixWorld()
+      return camera
+    }
+    const matrixClose = (actual: THREE.Matrix4, expected: THREE.Matrix4): void => {
+      for (let i = 0; i < 16; i += 1) expect(actual.elements[i]).toBeCloseTo(expected.elements[i], 9)
+    }
+
+    const { mesh, material } = internals(field)
+    const draw = (camera: THREE.Camera): void => {
+      mesh.onBeforeRender(
+        null as unknown as THREE.WebGLRenderer,
+        tabletop as unknown as THREE.Scene,
+        camera,
+        mesh.geometry,
+        mesh.material as THREE.Material,
+        field.group,
+      )
+    }
+    const left = eye(-0.032, false)
+    draw(left)
+
+    const tabletopInverse = new THREE.Matrix4().copy(tabletop.matrixWorld).invert()
+    const expected = new THREE.Vector3()
+      .setFromMatrixPosition(left.matrixWorld)
+      .applyMatrix4(tabletopInverse)
+    const origin = (material.uniforms.uOrigin.value as THREE.Vector3).clone()
+    expect(origin.distanceTo(expected)).toBeLessThan(1e-9)
+    matrixClose(material.uniforms.uCameraMatrix.value as THREE.Matrix4, tabletopInverse.clone().multiply(left.matrixWorld))
+    matrixClose(material.uniforms.uProjectionInverse.value as THREE.Matrix4, left.projectionMatrixInverse)
+
+    // The centre pixel reconstructs a ray that hits the volume, not the room.
+    const farPoint = new THREE.Vector4(0, 0, 1, 1).applyMatrix4(
+      material.uniforms.uProjectionInverse.value as THREE.Matrix4,
+    )
+    farPoint.divideScalar(farPoint.w)
+    const direction = new THREE.Vector3(farPoint.x, farPoint.y, farPoint.z).transformDirection(
+      material.uniforms.uCameraMatrix.value as THREE.Matrix4,
+    )
+    expect(direction.dot(centre.clone().sub(origin).normalize())).toBeGreaterThan(0.999)
+
+    // The second eye gets its own projection, not the first eye's or the union.
+    const right = eye(0.032, true)
+    draw(right)
+    matrixClose(material.uniforms.uProjectionInverse.value as THREE.Matrix4, right.projectionMatrixInverse)
+    expect((material.uniforms.uOrigin.value as THREE.Vector3).distanceTo(origin)).toBeGreaterThan(1e-6)
     field.dispose()
   })
 

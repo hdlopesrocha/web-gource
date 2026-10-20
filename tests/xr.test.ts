@@ -147,13 +147,19 @@ describe('XrSession', () => {
 
     await controller.enter()
 
-    // The tabletop is tipped flat, scaled to ~1.5 m across and placed in front
-    // of the user, and the camera rides the rig so three can pose it.
+    // The tree keeps its tabletop scale but is centred on the scene origin, and
+    // the user stands there at the height the on-screen camera has; the camera
+    // rides the rig so three can pose it.
+    const scale = 1.5 / 40
     expect(camera.parent).toBe(rig)
     expect(rig.parent).toBe(scene)
-    expect(root.scale.x).toBeCloseTo(1.5 / 40, 6)
-    expect(root.position.z).toBeLessThan(0)
-    expect(root.position.y).toBeCloseTo(0.95, 6)
+    expect(root.scale.x).toBeCloseTo(scale, 6)
+    expect(root.position.x).toBeCloseTo(-10 * scale, 6)
+    expect(root.position.y).toBeCloseTo(5 * scale, 6)
+    expect(root.position.z).toBeCloseTo(0, 6)
+    expect(rig.position.x).toBeCloseTo(0, 6)
+    expect(rig.position.y).toBeCloseTo(0, 6)
+    expect(rig.position.z).toBeCloseTo(6 * scale, 6)
     expect(store.ui.xrActive).toBe(true)
 
     for (const listener of [...listeners]) listener()
@@ -167,7 +173,48 @@ describe('XrSession', () => {
     expect(root.scale.x).toBe(1)
     expect(root.position.length()).toBe(0)
     expect(root.quaternion.equals(new THREE.Quaternion())).toBe(true)
+    expect(rig.position.length()).toBe(0)
+    expect(rig.quaternion.equals(new THREE.Quaternion())).toBe(true)
     expect(controller.active).toBe(false)
+  })
+
+  it('stands the user at the scene origin at the on-screen eye height', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    camera.position.set(7, -3, 9)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
+
+    await controller.enter()
+
+    const scale = 1.5 / 60
+    // x = 0, y = 0: the user stands at the scene origin. The height is the
+    // on-screen camera's height, in the same scaled units as the tabletop.
+    expect(rig.position.x).toBeCloseTo(0, 6)
+    expect(rig.position.y).toBeCloseTo(0, 6)
+    expect(rig.position.z).toBeCloseTo(9 * scale, 6)
+    // The world is no longer tipped or pushed in front: it is only scaled and
+    // centred, so its local axes can be treated as the room's.
+    expect(root.quaternion.equals(new THREE.Quaternion())).toBe(true)
+    expect(root.position.length()).toBeCloseTo(0, 6)
+    expect(root.scale.x).toBeCloseTo(scale, 6)
+    // The rig is tipped so the tree's +Z (the plane normal) becomes the room up.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rig.quaternion)
+    expect(up.z).toBeCloseTo(1, 6)
+
+    await controller.exit()
+    expect(rig.position.length()).toBe(0)
+    expect(rig.quaternion.equals(new THREE.Quaternion())).toBe(true)
   })
 
   it('records an error and stays out of VR when requestSession rejects', async () => {

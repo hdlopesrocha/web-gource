@@ -7,7 +7,6 @@ import { EdgeField } from './edges'
 import { ParticleField } from './particles'
 import { AuthorField } from './authors'
 import { BeamField, type BeamStyle } from './beams'
-import { GlowField } from './glow'
 import { PlasmaField, DEFAULT_PLASMA_STEPS } from './plasma'
 import { LabelField } from './labels'
 import { OrbitCamera } from './camera'
@@ -33,10 +32,6 @@ export interface RendererSettings {
   /** Faint background grid (helps with panning/zooming in 2D). */
   showGrid: boolean
   gridSpacing: number
-  /** Gource's bloom: an additive halo around every folder. */
-  showBloom: boolean
-  /** Gource's `bloom_intensity` (0 hides the halo). */
-  bloomIntensity: number
   /** Beams from an author to the files it just changed (Gource tethers). */
   showBeams: boolean
   /** How a beam is drawn: a head travelling to the element, or a solid ray. */
@@ -88,20 +83,18 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   authorScale: 1,
   showGrid: true,
   gridSpacing: 40,
-  showBloom: true,
-  bloomIntensity: 0.75,
   showBeams: true,
   beamStyle: 'travelling',
   beamTravelSeconds: 0.55,
   beamIntensity: 1.15,
   beamWidth: 3.2,
   showPlasma: true,
-  plasmaIntensity: 0.6,
-  plasmaOpacity: 0.35,
+  plasmaIntensity: 0.5,
+  plasmaOpacity: 1,
   plasmaSharpness: 2,
-  plasmaWeight: 0.8,
+  plasmaWeight: 1,
   plasmaRadius: 1,
-  plasmaDecay: 4,
+  plasmaDecay: 5,
   plasmaHeight: 1.5,
   plasmaSteps: DEFAULT_PLASMA_STEPS,
   renderSpheres: false,
@@ -110,14 +103,12 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
 /**
  * Depth stack of the scene along -Z:
  *
- *   grid -0.6 · branches 0 · nodes +0.25 · glow +0.4 · effects +0.5
+ *   grid -0.6 · branches 0 · nodes +0.25 · effects +0.5
  *
  * The background is now a full-screen gradient drawn independently of the
  * camera, so it does not need a world depth. The grid is a transparent overlay,
  * so it is drawn after the opaque circles; depth testing (not the render order)
- * is what keeps it behind the tree. The glow is additive and drawn after the
- * circles (like Gource's bloom), so a folder's halo washes over its own file
- * cluster.
+ * is what keeps it behind the tree.
  */
 export const GRID_Z = -0.6
 /** Kept for callers that used to size a world-space backdrop. */
@@ -163,9 +154,9 @@ export function effectiveSphereMode(renderSpheres: boolean, xrPresenting: boolea
  * particles, author avatars, labels and the background grid.
  *
  * The tree layout stays on the XY plane (as in Gource), but it is viewed
- * through a perspective orbit camera. Nodes and bloom halos are billboards
- * facing the camera with perspective-compensated scale, so their on-screen size
- * stays fixed. The renderer reacts to {@link SimEvent}s and to full-sync
+ * through a perspective orbit camera. Nodes are billboards facing the camera
+ * with perspective-compensated scale, so their on-screen size stays fixed. The
+ * renderer reacts to {@link SimEvent}s and to full-sync
  * requests after a seek, which keeps playback and scrubbing identical.
  */
 export class SceneRenderer {
@@ -186,7 +177,6 @@ export class SceneRenderer {
   private authors: AuthorField
   private beams: BeamField
   private labels: LabelField
-  private glow: GlowField
   private plasma: PlasmaField
   private background: THREE.Mesh
   private grid: THREE.Mesh
@@ -239,12 +229,10 @@ export class SceneRenderer {
     })
     this.labels = new LabelField(MAX_LABELS)
     this.beams = new BeamField()
-    this.glow = new GlowField(this.dirCapacity)
     this.plasma = new PlasmaField()
 
     this.world.add(this.edges.lines)
     this.world.add(this.beams.mesh)
-    this.world.add(this.glow.group)
     this.world.add(this.plasma.group)
     this.world.add(this.nodes.group)
     this.world.add(this.particles.points)
@@ -277,14 +265,12 @@ export class SceneRenderer {
     liveParticles: number
     nodeStats: { files: number; dirs: number }
     beams: number
-    bloom: number
     plasma: { sources: number; heat: number; visible: boolean }
   } {
     return {
       liveParticles: this.particles.liveCount,
       nodeStats: this.nodes.stats,
       beams: this.beams.segmentCount,
-      bloom: this.glow.stats,
       plasma: {
         sources: this.plasma.stats.sources,
         heat: this.plasma.stats.heat,
@@ -405,8 +391,6 @@ export class SceneRenderer {
       scale: this.settings.authorScale,
     })
     this.grid.visible = this.settings.showGrid
-    this.glow.setIntensity(this.settings.bloomIntensity, this.pendingNodes ?? [])
-    this.glow.setEnabled(this.settings.showBloom)
     this.beams.setEnabled(this.settings.showBeams)
     this.beams.setStyle(this.settings.beamStyle)
     this.beams.setTravelSeconds(this.settings.beamTravelSeconds)
@@ -474,7 +458,6 @@ export class SceneRenderer {
   resetLayers(): void {
     this.nodes.reset()
     this.edges.reset()
-    this.glow.reset()
     this.plasma.reset()
     this.particles.clear()
     this.fullSyncPending = true
@@ -514,7 +497,6 @@ export class SceneRenderer {
     if (full) {
       this.nodes.sync(nodes, true)
       this.edges.sync(nodes, true)
-      this.glow.sync(nodes, true)
       // A seek or a rebuilt history replaces the state the heat was built from,
       // so the plasma restarts from the live events that follow (as Gource's
       // effects do). Same path as `reset()` above for filter changes.
@@ -528,7 +510,6 @@ export class SceneRenderer {
 
     this.nodes.sync(nodes, false, [...this.dirtyNodes])
     this.edges.sync(nodes, false, [...this.dirtyNodes])
-    this.glow.sync(nodes, false, [...this.dirtyNodes])
     this.plasma.sync(nodes, false, [...this.dirtyNodes])
     this.dirtyNodes.clear()
   }
@@ -567,7 +548,6 @@ export class SceneRenderer {
     if (moved.length > 0 && !this.fullSyncPending) {
       this.nodes.sync(nodes, false, moved)
       this.edges.sync(nodes, false, moved)
-      this.glow.sync(nodes, false, moved)
     }
     this.nodes.update(simTime, nodes)
     this.edges.update(simTime, nodes)
@@ -591,11 +571,9 @@ export class SceneRenderer {
     const worldPerPixel = camera.worldPerPixel(this.size.height)
     this.authors.sync(authors, worldPerPixel * MIN_AVATAR_PIXELS, audio?.voice ?? 0)
 
-    // The nodes and their bloom are camera-facing billboards. The fixed scale
-    // is compensated inside those layers from the same orbit target.
+    // The nodes are camera-facing billboards. The fixed scale is compensated
+    // inside those layers from the same orbit target.
     this.nodes.update(simTime, nodes, view, focus, audio)
-    this.glow.orient(view, focus)
-    this.glow.applyAudio(audio)
     this.edges.applyAudio(audio)
 
     // The plasma volume is ray-marched in the fragment shader. It is drawn
@@ -644,8 +622,9 @@ export class SceneRenderer {
    * `renderer.xr.getCamera()`; it is expressed in world coordinates, so it is
    * mapped into the tabletop's frame (the `world` group is tipped and scaled
    * into the room) before being handed to the fields, which all work in that
-   * local frame. The projection matrices are copied over so the plasma's ray
-   * reconstruction sees the real headset frustum.
+   * local frame. The projection matrices are copied for completeness, but the
+   * plasma rays come from the eye camera that is drawing the quad (see
+   * `PlasmaField.syncCamera`), not from this stereo union frustum.
    */
   private viewCamera(camera: OrbitCamera): THREE.Camera {
     if (!this.gl.xr.isPresenting) return camera.camera
@@ -706,7 +685,7 @@ export class SceneRenderer {
    * Diagnostics for the "a seek must not leave the previous state on screen"
    * contract: after any seek (or a restart) these must match the visible nodes.
    */
-  drawnInstances(): { files: number; dirs: number; glow: number; edges: number } {
+  drawnInstances(): { files: number; dirs: number; edges: number } {
     const nodes = this.pendingNodes
     const drawn = this.nodes.drawn
     let edges = 0
@@ -720,7 +699,7 @@ export class SceneRenderer {
         edges += 1
       }
     }
-    return { files: drawn.files, dirs: drawn.dirs, glow: this.glow.drawn, edges }
+    return { files: drawn.files, dirs: drawn.dirs, edges }
   }
 
   /** Diagnostics for the beam layer. */
@@ -741,7 +720,6 @@ export class SceneRenderer {
     this.authors.dispose()
     this.beams.dispose()
     this.labels.dispose()
-    this.glow.dispose()
     this.plasma.dispose()
     this.background.geometry.dispose()
     ;(this.background.material as THREE.Material).dispose()

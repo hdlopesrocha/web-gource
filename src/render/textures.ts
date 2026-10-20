@@ -238,47 +238,6 @@ function createBallTexture(): THREE.Texture {
   return texture
 }
 
-/**
- * Gource's bloom (`data/bloom.tga`): a white halo whose brightness follows
- * `1 - smoothstep(0, 0.72, r)` and reaches zero at 0.75 of the quad, peaking at
- * 0.5 of white (the value Gource's texture holds at its centre).
- */
-let bloomTextureValue: THREE.Texture | null = null
-
-export function bloomTexture(): THREE.Texture {
-  if (bloomTextureValue) return bloomTextureValue
-  try {
-    return (bloomTextureValue = createBloomTexture())
-  } catch {
-    return (bloomTextureValue = fallbackTexture())
-  }
-}
-
-function createBloomTexture(): THREE.Texture {
-  const size = 128
-  const { canvas, ctx } = makeCanvas(size, size)
-  const centre = size / 2
-  const gradient = ctx.createRadialGradient(centre, centre, 0, centre, centre, centre)
-  const stops: [number, number][] = [
-    [0, 1],
-    [0.15, 0.883],
-    [0.25, 0.723],
-    [0.375, 0.47],
-    [0.45, 0.32],
-    [0.5, 0.22],
-    [0.6, 0.074],
-    [0.72, 0],
-  ]
-  for (const [offset, value] of stops) gradient.addColorStop(offset, `rgba(255,255,255,${(value * 0.5).toFixed(4)})`)
-  ctx.fillStyle = gradient
-  ctx.fillRect(0, 0, size, size)
-
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.minFilter = THREE.LinearFilter
-  texture.generateMipmaps = false
-  return texture
-}
-
 export function labelAspect(texture: THREE.Texture): number {
   return (texture.userData.aspect as number) ?? 4
 }
@@ -314,6 +273,4 @@ export function disposeTextureCaches(): void {
   glowTextures.dispose()
   ballTextureValue?.dispose()
   ballTextureValue = null
-  bloomTextureValue?.dispose()
-  bloomTextureValue = null
 }

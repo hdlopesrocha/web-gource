@@ -2,15 +2,16 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { NODE_Z, NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
-import { GlowField, GLOW_Z, GLOW_RENDER_ORDER, DEFAULT_BLOOM_INTENSITY } from '../src/render/glow'
 import { ParticleField, pointSizePixels } from '../src/render/particles'
 import { DEFAULT_PITCH, DEFAULT_YAW, OrbitCamera } from '../src/render/camera'
-import { colorForExtension, colorForChange, colorForAuthor, activityTint } from '../src/render/palette'
+import { cameraQuaternionFromOrientation } from '../src/render/orientation'
+import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
 import { buildInfoPanelModel, fitText, wrapText } from '../src/render/info-panel'
 import { chartLabelSize } from '../src/engine/export/overlay'
 import { BeamField } from '../src/render/beams'
 import { PlasmaField } from '../src/render/plasma'
+import { SceneRenderer } from '../src/render/renderer'
 import type { SimNode } from '../src/sim/simulation'
 
 /**
@@ -233,7 +234,7 @@ describe('NodeField', () => {
     const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
     const material = (field as unknown as { fileMaterial: THREE.MeshBasicMaterial }).fileMaterial
     // Without an alpha test the whole square quad would write depth, punching a
-    // dark square hole in the additive glow drawn behind the file.
+    // dark square hole in the additive plasma drawn behind the file.
     expect(material.transparent).toBe(true)
     expect(material.alphaTest).toBeGreaterThan(0)
     field.dispose()
@@ -274,147 +275,6 @@ describe('NodeField', () => {
     expect(color.getHex()).not.toBe(base)
 
     field.update(0, nodes, undefined, undefined, null)
-    mesh.getColorAt(0, color)
-    expect(color.getHex()).toBe(base)
-    field.dispose()
-  })
-})
-
-describe('GlowField', () => {
-  it('draws one halo per directory, sized from the cluster radius', () => {
-    const field = new GlowField(8)
-    const nodes = [
-      node(0, { kind: 'root', path: '', radius: 0.5, clusterRadius: 12 }),
-      node(1),
-      node(2, { kind: 'dir', path: 'src', name: 'src', clusterRadius: 4 }),
-    ]
-    field.sync(nodes, true)
-    // Only the root and the directory get a halo: Gource blooms directories.
-    expect(field.stats).toBe(2)
-
-    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const matrix = new THREE.Matrix4()
-    mesh.getMatrixAt(1, matrix)
-    // Gource: bloom_radius = dir_radius * 2.0 * bloom_multiplier.
-    expect(matrix.elements[0]).toBeCloseTo(8, 5)
-    // Halos sit in front of the circles (z) but behind the beams and avatars.
-    expect(matrix.elements[14]).toBeCloseTo(GLOW_Z, 5)
-
-    // A hidden directory collapses its halo.
-    nodes[2].visible = false
-    field.sync(nodes, false, [2])
-    mesh.getMatrixAt(1, matrix)
-    expect(matrix.elements[0]).toBe(0)
-    field.dispose()
-  })
-
-  it('tints every halo with the plasma activity colour, the root included', () => {
-    const field = new GlowField(4)
-    const nodes = [
-      node(0, { kind: 'root', path: '', clusterRadius: 12 }),
-      node(1, { kind: 'dir', path: 'src', name: 'src', clusterRadius: 4 }),
-    ]
-    field.sync(nodes, true)
-    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const root = new THREE.Color()
-    const dir = new THREE.Color()
-    mesh.getColorAt(0, root)
-    mesh.getColorAt(1, dir)
-    // One light for the whole scene: the halos carry exactly the tint the
-    // plasma volume uses (the directory colour at the bloom intensity), so the
-    // root's halo is no longer a warmer cream than the rest.
-    expect(root.getHex()).toBe(dir.getHex())
-    expect(root.getHex()).toBe(activityTint(DEFAULT_BLOOM_INTENSITY, null).getHex())
-    field.dispose()
-  })
-
-  it('paints the halos as background light, before every element', () => {
-    const field = new GlowField(4)
-    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const material = mesh.material as THREE.MeshBasicMaterial
-    // Opaque queue + depth testing off is the only way to be drawn underneath
-    // the opaque branch lines and rings: the halos must never brighten, or be
-    // depth-cut by, the circles on top of them.
-    expect(material.transparent).toBe(false)
-    expect(material.depthTest).toBe(false)
-    expect(material.depthWrite).toBe(false)
-    // After the background gradient (-20), before the edges (-1) and circles.
-    expect(mesh.renderOrder).toBeLessThan(-1)
-    expect(mesh.renderOrder).toBeGreaterThan(-20)
-    field.dispose()
-  })
-
-  it('drops every halo when the history is rebuilt', () => {
-    const field = new GlowField(8)
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
-    field.sync(nodes, true)
-    expect(field.drawn).toBe(2)
-    field.reset()
-    expect(field.stats).toBe(0)
-    expect(field.drawn).toBe(0)
-    field.dispose()
-  })
-
-  it('collapses hidden halos on a full sync', () => {
-    const field = new GlowField(8)
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
-    field.sync(nodes, true)
-    expect(field.drawn).toBe(2)
-    nodes[1].visible = false
-    field.sync(nodes, true)
-    expect(field.drawn).toBe(1)
-    for (const entry of nodes) entry.visible = false
-    field.sync(nodes, true)
-    expect(field.drawn).toBe(0)
-    field.dispose()
-  })
-
-  it('bakes the intensity into the instance colours and hides at zero', () => {
-    const field = new GlowField(8)
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
-    field.setIntensity(0.75, nodes)
-    field.sync(nodes, true)
-    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const color = new THREE.Color()
-    mesh.getColorAt(1, color)
-    const full = color.r
-
-    field.setIntensity(0.375, nodes)
-    mesh.getColorAt(1, color)
-    expect(color.r).toBeCloseTo(full / 2, 5)
-
-    field.setIntensity(0, nodes)
-    expect(mesh.visible).toBe(false)
-    field.dispose()
-  })
-
-  it('allocates halos introduced by incremental playback and grows capacity', () => {
-    const field = new GlowField(2)
-    const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
-    field.sync(nodes, true)
-    for (let index = 1; index <= 8; index += 1) {
-      nodes.push(node(index, { kind: 'dir', path: `dir-${index}`, name: `dir-${index}` }))
-      field.sync(nodes, false, [index])
-    }
-    expect(field.stats).toBe(9)
-    field.dispose()
-  })
-
-  it('rotates the halo hue with the bass and restores it afterwards', () => {
-    const field = new GlowField(4)
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
-    field.sync(nodes, true)
-    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const color = new THREE.Color()
-    mesh.getColorAt(0, color)
-    const base = color.getHex()
-
-    field.applyAudio({ bass: 1, low: 0, mid: 0, voice: 0, clap: 0, clapCount: 0 })
-    mesh.getColorAt(0, color)
-    expect(color.getHex()).not.toBe(base)
-    expect(color.r).toBeGreaterThan(0.3)
-
-    field.applyAudio(null)
     mesh.getColorAt(0, color)
     expect(color.getHex()).toBe(base)
     field.dispose()
@@ -912,40 +772,139 @@ describe('background layers', () => {
 })
 
 describe('layer ordering', () => {
-  it('keeps the glow first and everything above it depth tested', () => {
-    const glow = new GlowField(4)
-    const edges = new EdgeField(4)
-    const nodes = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
-    const plasma = new PlasmaField()
-    const particles = new ParticleField(8)
-    const beams = new BeamField(4)
-    const glowMesh = (glow as unknown as { mesh: THREE.InstancedMesh }).mesh
-    const nodeMeshes = nodes as unknown as { fileMesh: THREE.InstancedMesh; dirMesh: THREE.InstancedMesh }
-    const plasmaMesh = (plasma as unknown as { mesh: THREE.Mesh }).mesh
+  it('paints the backdrop first and depth tests every element above it', () => {
+    const renderer = new SceneRenderer(stubCanvas(), { gl: fakeGl() })
+    const backdrop = renderer.scene.children[0] as THREE.Mesh
+    const backdropMaterial = backdrop.material as THREE.ShaderMaterial
 
-    // The halos are the first element layer: after the backdrop gradient (-20),
-    // before every other layer, and the only geometry layer without a depth test.
-    expect(GLOW_RENDER_ORDER).toBeGreaterThan(-20)
-    expect(GLOW_RENDER_ORDER).toBeLessThan(edges.lines.renderOrder)
-    expect(GLOW_RENDER_ORDER).toBeLessThan(nodeMeshes.fileMesh.renderOrder)
-    const glowMaterial = glowMesh.material as THREE.MeshBasicMaterial
-    expect(glowMaterial.depthTest).toBe(false)
-    expect(glowMaterial.depthWrite).toBe(false)
+    // The backdrop gradient is drawn first: it is opaque (so it fills the
+    // frame), it does not test depth, and its render order sits below every
+    // element layer.
+    expect(backdrop.renderOrder).toBe(-20)
+    expect(backdropMaterial.transparent).toBe(false)
+    expect(backdropMaterial.depthTest).toBe(false)
+    expect(backdropMaterial.depthWrite).toBe(false)
 
-    // Everything drawn on top of it tests depth against what is already there.
-    expect((edges.lines.material as THREE.Material).depthTest).toBe(true)
-    expect((nodeMeshes.fileMesh.material as THREE.Material).depthTest).toBe(true)
-    expect((nodeMeshes.dirMesh.material as THREE.Material).depthTest).toBe(true)
-    expect((plasmaMesh.material as THREE.Material).depthTest).toBe(true)
-    expect((particles.points.material as THREE.Material).depthTest).toBe(true)
-    expect((beams.mesh.material as THREE.Material).depthTest).toBe(true)
+    const internals = renderer as unknown as {
+      edges: EdgeField
+      nodes: NodeField
+      plasma: PlasmaField
+      particles: ParticleField
+      beams: BeamField
+    }
+    const nodeMeshes = internals.nodes as unknown as {
+      fileMesh: THREE.InstancedMesh
+      dirMesh: THREE.InstancedMesh
+    }
+    const plasmaMesh = (internals.plasma as unknown as { mesh: THREE.Mesh }).mesh
 
-    glow.dispose()
-    edges.dispose()
-    nodes.dispose()
-    plasma.dispose()
-    particles.dispose()
-    beams.dispose()
+    // Every element layer — branches, files, dirs, plasma, particles, beams —
+    // is drawn above the backdrop and tests depth against what is already in
+    // the buffer, so nearer geometry occludes it.
+    const layers: THREE.Object3D[] = [
+      internals.edges.lines,
+      nodeMeshes.fileMesh,
+      nodeMeshes.dirMesh,
+      plasmaMesh,
+      internals.particles.points,
+      internals.beams.mesh,
+    ]
+    for (const layer of layers) {
+      expect(layer.renderOrder).toBeGreaterThan(backdrop.renderOrder)
+      expect(((layer as THREE.Mesh).material as THREE.Material).depthTest).toBe(true)
+    }
+
+    renderer.dispose()
+  })
+
+  it('flies the camera in free mode without disturbing the orbit view', () => {
+    const rig = new OrbitCamera()
+    const bounds = { center: { x: 0, y: 0, z: 0 }, radius: 40 }
+    rig.frame(bounds, true)
+    const orbitPosition = rig.camera.position.clone()
+    const orbitQuaternion = rig.camera.quaternion.clone()
+
+    // Rotation is a quaternion delta around the camera's own axes: the view
+    // turns without the camera moving.
+    rig.rotateLocal(Math.PI / 2, 0, 0, 1)
+    expect(rig.isFree).toBe(true)
+    expect(rig.camera.quaternion.angleTo(orbitQuaternion)).toBeGreaterThan(0.5)
+    expect(rig.camera.position.distanceTo(orbitPosition)).toBeLessThan(1e-6)
+
+    // Roll is expressible (an orbit cannot roll), so the up vector tilts.
+    const beforeRoll = rig.camera.quaternion.clone()
+    const upBefore = rig.camera.up.clone()
+    rig.rotateLocal(0, 0, Math.PI / 2, 1)
+    expect(rig.camera.quaternion.angleTo(beforeRoll)).toBeGreaterThan(0.5)
+    expect(rig.camera.up.angleTo(upBefore)).toBeGreaterThan(0.5)
+
+    // Translation goes along the camera's own forward / side / up axes.
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(rig.camera.quaternion)
+    const side = new THREE.Vector3(1, 0, 0).applyQuaternion(rig.camera.quaternion)
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rig.camera.quaternion)
+
+    const fromForward = rig.camera.position.clone()
+    rig.translateLocal(10, 0, 0, 1)
+    const forwardMove = rig.camera.position.clone().sub(fromForward)
+    expect(forwardMove.length()).toBeCloseTo(10, 4)
+    expect(forwardMove.angleTo(forward)).toBeCloseTo(0, 4)
+
+    const fromSide = rig.camera.position.clone()
+    rig.translateLocal(0, 4, 0, 1)
+    const sideMove = rig.camera.position.clone().sub(fromSide)
+    expect(sideMove.length()).toBeCloseTo(4, 4)
+    expect(sideMove.angleTo(side)).toBeCloseTo(0, 4)
+
+    const fromUp = rig.camera.position.clone()
+    rig.translateLocal(0, 0, 2, 1)
+    const upMove = rig.camera.position.clone().sub(fromUp)
+    expect(upMove.length()).toBeCloseTo(2, 4)
+    expect(upMove.angleTo(up)).toBeCloseTo(0, 4)
+
+    // The automatic follow never fights the free camera.
+    rig.update(0.5, { followActivity: true, autoZoom: true, smoothing: 2 }, { x: 500, y: 500 }, bounds)
+    expect(rig.isFree).toBe(true)
+    expect(rig.camera.position.distanceTo(orbitPosition)).toBeGreaterThan(1)
+
+    // Handing the camera back restores the orbit framing exactly.
+    rig.leaveFreeMode()
+    expect(rig.isFree).toBe(false)
+    rig.update(0.5, { followActivity: false, autoZoom: false, smoothing: 2 }, null, bounds)
+    expect(rig.camera.position.distanceTo(orbitPosition)).toBeLessThan(1e-3)
+    rig.dispose()
+  })
+
+  it('follows the gyroscope relative to the calibrated pose', () => {
+    const rig = new OrbitCamera()
+    const bounds = { center: { x: 0, y: 0, z: 0 }, radius: 40 }
+    rig.frame(bounds, true)
+
+    // Switching head tracking on never snaps the view: the first pose becomes
+    // the reference.
+    const poseA = cameraQuaternionFromOrientation({ alpha: 0, beta: 0, gamma: 0 })
+    rig.applyOrientation(poseA)
+    expect(rig.isFree).toBe(true)
+    expect(rig.isOrientationCalibrated).toBe(true)
+    const calibrated = rig.camera.quaternion.clone()
+    const upCalibrated = rig.camera.up.clone()
+
+    // Recalibrating leaves the camera exactly where it is.
+    rig.calibrateOrientation(poseA)
+    expect(rig.camera.quaternion.angleTo(calibrated)).toBeCloseTo(0, 6)
+
+    // A 90° compass turn of a flat device still looks at the ceiling, but its
+    // up vector — and therefore the camera's — turns by exactly 90°, which is
+    // what keeps the horizon calibrated to the user's head.
+    const poseB = cameraQuaternionFromOrientation({ alpha: 90, beta: 0, gamma: 0 })
+    rig.applyOrientation(poseB)
+    expect(rig.camera.quaternion.angleTo(calibrated)).toBeCloseTo(Math.PI / 2, 4)
+    expect(rig.camera.up.angleTo(upCalibrated)).toBeCloseTo(Math.PI / 2, 4)
+    expect(rig.camera.up.length()).toBeCloseTo(1, 6)
+
+    // Mouse orbiting hands the camera back to the orbit model.
+    rig.orbitBy(10, 0)
+    expect(rig.isFree).toBe(false)
+    rig.dispose()
   })
 
   it('draws branches behind the circles and effects above them', () => {
@@ -986,3 +945,30 @@ describe('label placement', () => {
     expect(overlapsAny(rect(0, 0, 10, 10), [])).toBe(false)
   })
 })
+
+/* -------------------------------------------------------------------------- *
+ * WebGL stubs: the only way to build a SceneRenderer without a GL context.
+ * -------------------------------------------------------------------------- */
+
+function stubCanvas(): HTMLCanvasElement {
+  return { dataset: {} } as unknown as HTMLCanvasElement
+}
+
+function fakeGl(): THREE.WebGLRenderer {
+  return {
+    domElement: stubCanvas(),
+    autoClear: true,
+    setClearColor: () => undefined,
+    setPixelRatio: () => undefined,
+    setSize: () => undefined,
+    render: () => undefined,
+    dispose: () => undefined,
+    xr: {
+      enabled: false,
+      isPresenting: false,
+      getCamera: () => new THREE.PerspectiveCamera(),
+      setReferenceSpaceType: () => undefined,
+      setSession: async () => undefined,
+    },
+  } as unknown as THREE.WebGLRenderer
+}

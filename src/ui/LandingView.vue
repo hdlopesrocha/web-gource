@@ -100,6 +100,7 @@ const examples = [
             <span v-if="busy" class="spinner" />
             {{ busy ? 'Cancel' : 'Load Repository' }}
           </button>
+          <button class="btn primary demo" type="button" @click="loadDemo">Try the synthetic demo</button>
         </div>
 
         <div class="provider-line">
@@ -169,7 +170,6 @@ const examples = [
           <button class="btn ghost small" type="button" @click="showAdvanced = !showAdvanced">
             {{ showAdvanced ? 'Hide' : 'Advanced' }} · token &amp; rate limits{{ tokenSaved ? ' ✓' : '' }}
           </button>
-          <button class="btn ghost small" type="button" @click="loadDemo">Try the synthetic demo</button>
         </div>
 
         <div v-if="showAdvanced" class="advanced">
@@ -318,6 +318,7 @@ const examples = [
 
 .url-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: stretch;
 }
@@ -325,6 +326,7 @@ const examples = [
 .url-field {
   position: relative;
   flex: 1;
+  min-width: 220px;
   display: flex;
   align-items: center;
 }
@@ -349,7 +351,8 @@ const examples = [
   pointer-events: none;
 }
 
-.load {
+.load,
+.demo {
   padding: 0 22px;
   font-size: 15px;
 }

@@ -68,6 +68,28 @@ describe('LandingView', () => {
     expect(wrapper.findAll('option').length).toBeGreaterThan(3)
   })
 
+  it('presents the synthetic demo as a second primary action and still starts it', async () => {
+    const loadDemo = vi.spyOn(controller, 'loadDemo').mockResolvedValue()
+    const wrapper = mount(LandingView)
+    const buttonNamed = (label: string) => wrapper.findAll('button').find((button) => button.text().trim() === label)
+    const loadButton = buttonNamed('Load Repository')
+    const demoButton = buttonNamed('Try the synthetic demo')
+    expect(loadButton).toBeDefined()
+    expect(demoButton).toBeDefined()
+    // Both entry points carry the same primary treatment.
+    for (const button of [loadButton!, demoButton!]) {
+      expect(button.classes()).toContain('btn')
+      expect(button.classes()).toContain('primary')
+    }
+    await demoButton!.trigger('click')
+    expect(loadDemo).toHaveBeenCalledTimes(1)
+    // The demo fills the field with its synthetic repository, as before.
+    expect((wrapper.find('input[aria-label="Repository URL"]').element as HTMLInputElement).value).toBe(
+      'demo/synthetic-repository',
+    )
+    loadDemo.mockRestore()
+  })
+
   it('detects the provider while typing and shows a badge', async () => {
     const wrapper = mount(LandingView)
     const input = wrapper.find('input[aria-label="Repository URL"]')
@@ -539,7 +561,7 @@ describe('panels', () => {
       .find((entry) => entry.find('label').text().startsWith('Opacity'))
     expect(field).toBeTruthy()
     const slider = field!.find('input[type="range"]')
-    expect((slider.element as HTMLInputElement).value).toBe('0.35')
+    expect((slider.element as HTMLInputElement).value).toBe('1')
     await slider.setValue('0.2')
     expect(store.settings.plasmaOpacity).toBeCloseTo(0.2, 5)
 
@@ -551,7 +573,7 @@ describe('panels', () => {
     expect(store.settings.renderSpheres).toBe(true)
 
     // Leave the singleton store as the other tests expect it.
-    store.settings.plasmaOpacity = 0.35
+    store.settings.plasmaOpacity = 1
     store.settings.renderSpheres = false
   })
 

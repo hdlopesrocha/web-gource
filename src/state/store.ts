@@ -175,6 +175,12 @@ export interface UiState {
   xrActive: boolean
   /** Last WebXR failure, shown next to the VR button. */
   xrError: string | null
+  /** True while a gamepad the browser reports is connected. */
+  gamepadConnected: boolean
+  /** True while the gyroscope is enabled and reporting. */
+  gyroActive: boolean
+  /** Why head tracking could not start (permission, or no sensor). */
+  gyroError: string | null
 }
 
 export interface AppState {
@@ -220,7 +226,7 @@ export interface AppState {
     autoZoom: boolean
     /** Flat top-down 2D camera instead of the default 3D orbit. */
     flatCamera: boolean
-    /** Let the background track drive glow hue, file colours and pulses. */
+    /** Let the background track drive the plasma hue, file colours and pulses. */
     audioReactive: boolean
     /** How file circles are sized: host-reported bytes, line activity, uniform. */
     sizeMode: SizeMode
@@ -230,6 +236,12 @@ export interface AppState {
     /** Custom pacing values, used when `pacing === 'custom'`. */
     customSecondsPerDay: number
     customMinSpacing: number
+    /** Let a connected gamepad fly the camera (see the help overlay). */
+    gamepad: boolean
+    /** Multiplier on the gamepad's rotation and translation speeds. */
+    gamepadSensitivity: number
+    /** Follow the device's gyroscope (head tracking). */
+    gyro: boolean
   }
   export: ExportSettings & {
     active: boolean
@@ -308,20 +320,18 @@ const defaultSettings: AppState['settings'] = {
   authorScale: 1,
   showGrid: true,
   gridSpacing: 40,
-  showBloom: true,
-  bloomIntensity: 0.75,
   showBeams: true,
   beamStyle: 'travelling',
   beamTravelSeconds: 0.55,
   beamIntensity: 1.15,
   beamWidth: 3.2,
   showPlasma: true,
-  plasmaIntensity: 0.6,
-  plasmaOpacity: 0.35,
+  plasmaIntensity: 0.5,
+  plasmaOpacity: 1,
   plasmaSharpness: 2,
-  plasmaWeight: 0.8,
+  plasmaWeight: 1,
   plasmaRadius: 1,
-  plasmaDecay: 4,
+  plasmaDecay: 5,
   plasmaHeight: 1.5,
   plasmaSteps: 48,
   renderSpheres: false,
@@ -334,6 +344,9 @@ const defaultSettings: AppState['settings'] = {
   pacing: 'balanced',
   customSecondsPerDay: CUSTOM_DEFAULTS.secondsPerDay,
   customMinSpacing: CUSTOM_DEFAULTS.minSpacing,
+  gamepad: false,
+  gamepadSensitivity: 1,
+  gyro: false,
 }
 
 const defaultLoadOptions: LoadOptions = {
@@ -441,6 +454,9 @@ export const store = reactive<AppState>({
     xrSupported: false,
     xrActive: false,
     xrError: null,
+    gamepadConnected: false,
+    gyroActive: false,
+    gyroError: null,
   },
 })
 

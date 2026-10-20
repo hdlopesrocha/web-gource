@@ -116,7 +116,6 @@ export class VisualizerController {
       instances: info.nodeStats,
       particles: info.liveParticles,
       beams: info.beams,
-      bloom: info.bloom,
       beamSample: this.engine.renderer.beamSample(),
       lineClearance: this.engine.renderer.lineClearance(),
       nodes: this.simulation?.nodes.length ?? 0,
@@ -545,6 +544,52 @@ export class VisualizerController {
   }
 
   /* ------------------------------------------------------------------ *
+   * Gamepad and head tracking
+   * ------------------------------------------------------------------ */
+
+  /** Turn gamepad camera control on or off. */
+  setGamepadEnabled(enabled: boolean): void {
+    this.updateSettings({ gamepad: enabled })
+  }
+
+  /**
+   * Turn head tracking (the device gyroscope) on or off.
+   *
+   * Browsers only show the motion-sensor prompt from a user gesture, which is
+   * the settings toggle that calls this; a refusal (or a device without the
+   * sensor) is reported in `store.ui.gyroError` instead of failing silently.
+   */
+  async setGyroEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.updateSettings({ gyro: false })
+      this.engine?.disableGyro()
+      store.ui.gyroActive = false
+      store.ui.gyroError = null
+      return
+    }
+    if (!this.engine) {
+      store.ui.gyroError = 'Load a repository first: head tracking moves the running scene.'
+      return
+    }
+    const granted = await this.engine.enableGyro()
+    if (!granted) {
+      store.ui.gyroError = 'The browser refused access to the motion sensors.'
+      return
+    }
+    store.ui.gyroError = null
+    this.updateSettings({ gyro: true })
+  }
+
+  /**
+   * Bind the current device pose to the current camera pose: the view does not
+   * move, and every later head rotation is measured from there. This is what a
+   * click on the scene (or the gamepad's A button) does.
+   */
+  recalibrateOrientation(): void {
+    this.engine?.recalibrateOrientation()
+  }
+
+  /* ------------------------------------------------------------------ *
    * Settings
    * ------------------------------------------------------------------ */
 
@@ -566,8 +611,6 @@ export class VisualizerController {
       authorScale: settings.authorScale,
       showGrid: settings.showGrid,
       gridSpacing: settings.gridSpacing,
-      showBloom: settings.showBloom,
-      bloomIntensity: settings.bloomIntensity,
       showBeams: settings.showBeams,
       beamStyle: settings.beamStyle,
       beamTravelSeconds: settings.beamTravelSeconds,
@@ -586,12 +629,23 @@ export class VisualizerController {
     }
   }
 
-  private cameraOptions(): { followActivity: boolean; autoZoom: boolean; smoothing: number; flat: boolean } {
+  private cameraOptions(): {
+    followActivity: boolean
+    autoZoom: boolean
+    smoothing: number
+    flat: boolean
+    gamepad: boolean
+    gamepadSensitivity: number
+    gyro: boolean
+  } {
     return {
       followActivity: store.settings.followActivity,
       autoZoom: store.settings.autoZoom,
       smoothing: 1.4,
       flat: store.settings.flatCamera,
+      gamepad: store.settings.gamepad,
+      gamepadSensitivity: store.settings.gamepadSensitivity,
+      gyro: store.settings.gyro,
     }
   }
 

@@ -9,7 +9,7 @@
  *
  * The bands map directly onto the visualization:
  *
- *  - bass (25–150 Hz) shifts the hue of the folder glow;
+ *  - bass (25–150 Hz) shifts the plasma's hue;
  *  - low mids (150–400 Hz) tint the folder rings;
  *  - midrange (400–2000 Hz) brightens the branch lines;
  *  - the 300–3400 Hz voice range pulses the author avatars;
@@ -41,7 +41,7 @@ export const LIVE_FFT_SIZE = 1024
 
 /** Level of each reactive band at a point in the track, all in 0…1. */
 export interface AudioLevels {
-  /** 25–150 Hz: drives the glow hue. */
+  /** 25–150 Hz: drives the plasma's hue. */
   bass: number
   /** 150–400 Hz: drives the folder rings. */
   low: number

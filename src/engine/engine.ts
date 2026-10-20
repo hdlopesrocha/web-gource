@@ -3,8 +3,29 @@ import type { ActivityBucket, Timeline, TimelineCommit, TimelineAuthor } from '.
 import { buildSchedule, type Schedule, type ScheduleOptions } from '../timeline/schedule'
 import { Simulation, type SizeMode } from '../sim/simulation'
 import { OrbitCamera, type CameraOptions } from '../render/camera'
+import { CameraControls } from './controls'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
 import { XrSession } from '../render/xr'
+import {
+  XR_PANEL_CANVAS_HEIGHT,
+  XR_PANEL_CANVAS_WIDTH,
+  XR_PANEL_HEIGHT_METRES,
+  XR_PANEL_WIDTH_METRES,
+  XrReticle,
+  XrTimelinePanel,
+  createDwellState,
+  dwell,
+  dwellProgress,
+  hitTargetId,
+  hitTest,
+  panelLayout,
+  panelPose,
+  xrCommand,
+  type XrHit,
+  type XrPanelLayout,
+  type XrPanelState,
+} from '../render/xr-ui'
+import { formatDateTime } from '../timeline/schedule'
 import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
 import type { AudioLevels } from './audio/analysis'
@@ -104,6 +125,8 @@ const HUD_RATE = 8
 export class Engine {
   readonly renderer: SceneRenderer
   readonly rig: OrbitCamera
+  /** Gamepad and gyroscope camera control (live playback only, never exports). */
+  readonly controls = new CameraControls()
   private sim: Simulation
   private timeline: Timeline
   private schedule: Schedule
@@ -132,6 +155,36 @@ export class Engine {
   private xr: XrSession | null = null
   /** Rig group the camera is parented to while an XR session runs. */
   private readonly xrRig = new THREE.Group()
+  /** In-scene timeline panel, alive only while presenting. */
+  private xrPanel: XrTimelinePanel | null = null
+  /** Circular gaze crosshair, alive only while presenting. */
+  private xrReticle: XrReticle | null = null
+  /** Gaze dwell accumulator, reset whenever the panel is (re)created. */
+  private readonly xrDwell = createDwellState()
+  /** True once the rig has been corrected against a real headset pose. */
+  private xrAligned = false
+  /** Panel hit rectangles, matching the panel's canvas. */
+  private xrLayout: XrPanelLayout = panelLayout()
+  /** The element the gaze is resting on, for the panel highlight. */
+  private xrHovered: string | null = null
+  /** Cached activity histogram for the panel (invalidated by timeline changes). */
+  private xrBuckets: ActivityBucket[] | null = null
+  private xrBucketsVersion = -1
+  /** Bumped whenever the commits or schedule change, so the panel cache drops. */
+  private timelineVersion = 0
+  private readonly xrRayMatrix = new THREE.Matrix4()
+  private readonly xrRayOrigin = new THREE.Vector3()
+  private readonly xrRayDir = new THREE.Vector3()
+  /** Headset pose centred between the eyes, in scene coordinates. */
+  private readonly xrHeadMatrix = new THREE.Matrix4()
+  private readonly xrEyePosition = new THREE.Vector3()
+  private readonly xrOtherEyePosition = new THREE.Vector3()
+  /** Panel pose in scene coordinates, before mapping into the tabletop group. */
+  private readonly xrPanelPosition = new THREE.Vector3()
+  private readonly xrPanelQuaternion = new THREE.Quaternion()
+  private readonly xrParentPosition = new THREE.Vector3()
+  private readonly xrParentQuaternion = new THREE.Quaternion()
+  private readonly xrParentScale = new THREE.Vector3()
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -211,6 +264,7 @@ export class Engine {
     // that appear later, so they are applied on every extension.
     this.sim.setFileSizes(timeline.fileSizes)
     this.renderer.setNodes(this.sim.nodes)
+    this.timelineVersion += 1
     this.emitHud(true)
   }
 
@@ -241,6 +295,7 @@ export class Engine {
     this.seek(target)
     this.renderer.clearEffects()
     this.renderer.requestFullSync()
+    this.timelineVersion += 1
     this.emitHud(true)
   }
 
@@ -428,11 +483,35 @@ export class Engine {
     const index = this.schedule.indexAt(ratio * this.schedule.duration)
     this.sim.seek(index)
     this.renderer.requestFullSync()
+    this.timelineVersion += 1
     this.emitHud(true)
   }
 
   resetCamera(): void {
     this.rig.reset3D(this.sim.bounds(), true)
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Camera control devices
+   * ------------------------------------------------------------------ */
+
+  /** Bind the current device pose to the current camera pose (gyro reset). */
+  recalibrateOrientation(): void {
+    this.controls.recalibrate(this.rig)
+  }
+
+  /** Ask for motion-sensor permission; must run inside a user gesture. */
+  async enableGyro(): Promise<boolean> {
+    return this.controls.enableGyro()
+  }
+
+  disableGyro(): void {
+    this.controls.disableGyro()
+  }
+
+  /** True while a gamepad or the gyroscope is flying the camera. */
+  get cameraIsFree(): boolean {
+    return this.rig.isFree
   }
 
   /* ------------------------------------------------------------------ *
@@ -447,14 +526,20 @@ export class Engine {
   /**
    * Enter or leave an immersive VR session.
    *
-   * The session owns the tabletop framing (the tree is placed in front of the
-   * user at table height) and the sphere mode is forced on while it runs, so the
-   * files are real geometry with parallax rather than flat billboards.
+   * The session owns the framing (the user is stood at the scene origin at the
+   * height the on-screen camera has, so the tree sits in front of and below them)
+   * and the sphere mode is forced on while it runs, so the files are real
+   * geometry with parallax rather than flat billboards.
    */
   async toggleVr(): Promise<void> {
     const xr = this.ensureXr()
-    if (xr.active) await xr.exit()
-    else await xr.enter()
+    if (xr.active) {
+      await xr.exit()
+      this.destroyXrUi()
+    } else {
+      this.xrAligned = false
+      await xr.enter()
+    }
   }
 
   private ensureXr(): XrSession {
@@ -473,6 +558,204 @@ export class Engine {
       })
     }
     return this.xr
+  }
+
+  /* ------------------------------------------------------------------ *
+   * In-scene timeline panel and gaze
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Create the in-scene timeline panel and crosshair.
+   *
+   * Only ever called while an immersive session is presenting: outside VR the
+   * panel does not exist and nothing here runs.
+   */
+  private createXrUi(): void {
+    if (this.xrPanel) return
+    const panel = new XrTimelinePanel()
+    const reticle = new XrReticle()
+    this.renderer.world.add(panel.mesh)
+    // The reticle is posed from the headset camera each frame, so it lives in
+    // scene space (not the scaled tabletop group).
+    this.renderer.scene.add(reticle.mesh)
+    this.xrPanel = panel
+    this.xrReticle = reticle
+    this.xrLayout = panelLayout()
+    this.xrHovered = null
+    this.xrDwell.target = null
+    this.xrDwell.elapsed = 0
+    this.xrDwell.fired = false
+    this.placeXrPanel()
+  }
+
+  /** Remove the panel and crosshair (a no-op when there is none). */
+  private destroyXrUi(): void {
+    if (this.xrPanel) {
+      this.renderer.world.remove(this.xrPanel.mesh)
+      this.xrPanel.dispose()
+      this.xrPanel = null
+    }
+    if (this.xrReticle) {
+      this.renderer.scene.remove(this.xrReticle.mesh)
+      this.xrReticle.dispose()
+      this.xrReticle = null
+    }
+    this.xrHovered = null
+    this.xrDwell.target = null
+    this.xrDwell.elapsed = 0
+    this.xrDwell.fired = false
+    this.xrAligned = false
+  }
+
+  /**
+   * Put the eyes at the height the flat camera uses.
+   *
+   * {@link XrSession} frames the rig (the local-floor origin) at the on-screen
+   * camera's height, but a floor-relative pose already carries the user's own
+   * eye height, so applying it unchanged puts the eyes a head too high. The pose
+   * only exists once the session is presenting, so the correction happens on the
+   * first frame; the panel is placed afterwards, from the corrected pose.
+   */
+  private alignXrHeight(): void {
+    const target = this.xrRig.position.z
+    const eyeZ = this.xrEyePosition.setFromMatrixPosition(this.xrHead()).z
+    this.xrRig.position.z = target + (target - eyeZ)
+    this.xrRig.updateMatrixWorld(true)
+    // The eye matrices were posed from the old rig; refresh them so this frame
+    // both renders and places the panel at the corrected height.
+    this.renderer.webgl.xr.updateCamera(this.rig.camera)
+    this.xrAligned = true
+  }
+
+  /**
+   * The headset pose in scene coordinates, centred between the eyes.
+   *
+   * three's XR camera is posed at the left eye, so a gaze ray cast from it would
+   * put the crosshair off-centre for the other eye. The position is therefore
+   * the midpoint of the eye cameras while the orientation stays theirs.
+   */
+  private xrHead(): THREE.Matrix4 {
+    const camera = this.renderer.webgl.xr.getCamera()
+    this.xrHeadMatrix.copy(camera.matrixWorld)
+    const eyes = camera.cameras
+    if (eyes && eyes.length > 1) {
+      this.xrEyePosition.setFromMatrixPosition(eyes[0].matrixWorld)
+      this.xrOtherEyePosition.setFromMatrixPosition(eyes[eyes.length - 1].matrixWorld)
+      this.xrEyePosition.add(this.xrOtherEyePosition).multiplyScalar(0.5)
+      this.xrHeadMatrix.setPosition(this.xrEyePosition)
+    }
+    return this.xrHeadMatrix
+  }
+
+  /**
+   * Float the panel in the upper part of the view, in front of the user.
+   *
+   * It is parented to the tabletop group (so it shares the room scale and the
+   * gaze ray can be mapped into its local space). The pose comes from the
+   * headset itself — ahead of wherever the user is facing, raised into the top
+   * of the view, facing them — so the panel is visible as soon as the session
+   * starts, whatever forward direction the runtime picked. Once placed it stays
+   * fixed in the room, which is what makes gaze selection stable.
+   */
+  private placeXrPanel(): void {
+    const panel = this.xrPanel
+    if (!panel) return
+    const world = this.renderer.world
+    world.updateMatrixWorld(true)
+    const scale = Math.max(1e-6, world.matrixWorld.getMaxScaleOnAxis())
+    panelPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
+    // Scene pose -> the tabletop group's local frame. The group is only scaled
+    // and translated today, but decomposing keeps this right if it ever rotates.
+    this.xrRayMatrix.copy(world.matrixWorld).invert()
+    world.matrixWorld.decompose(this.xrParentPosition, this.xrParentQuaternion, this.xrParentScale)
+    panel.mesh.position.copy(this.xrPanelPosition).applyMatrix4(this.xrRayMatrix)
+    panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(this.xrPanelQuaternion)
+    panel.mesh.scale.set(XR_PANEL_WIDTH_METRES / scale, XR_PANEL_HEIGHT_METRES / scale, 1)
+    panel.mesh.updateMatrixWorld(true)
+  }
+
+  /** The commit histogram for the panel, recomputed only when the timeline changes. */
+  private xrActivityBuckets(): ActivityBucket[] {
+    if (this.xrBucketsVersion !== this.timelineVersion || !this.xrBuckets) {
+      this.xrBucketsVersion = this.timelineVersion
+      this.xrBuckets = this.schedule.activity(240, this.timeline.commits)
+    }
+    return this.xrBuckets
+  }
+
+  /** Point the gaze ray from the head at the panel and hit-test it. */
+  private gazeHit(): XrHit | null {
+    const panel = this.xrPanel
+    if (!panel) return null
+    const head = this.xrHead()
+    panel.mesh.updateMatrixWorld(true)
+    // The ray is built in scene space and mapped into the panel's own frame, so
+    // the tabletop group's scale (and any rotation) are handled for free.
+    this.xrRayMatrix.copy(panel.mesh.matrixWorld).invert()
+    this.xrRayOrigin.setFromMatrixPosition(head).applyMatrix4(this.xrRayMatrix)
+    this.xrRayDir.set(0, 0, -1).transformDirection(head).transformDirection(this.xrRayMatrix)
+    if (Math.abs(this.xrRayDir.z) < 1e-6) return null
+    const t = -this.xrRayOrigin.z / this.xrRayDir.z
+    if (t < 0) return null
+    const x = this.xrRayOrigin.x + this.xrRayDir.x * t
+    const y = this.xrRayOrigin.y + this.xrRayDir.y * t
+    // The plane spans [-0.5, 0.5] in its own frame; the canvas' Y grows downwards.
+    const canvasX = (x + 0.5) * XR_PANEL_CANVAS_WIDTH
+    const canvasY = (0.5 - y) * XR_PANEL_CANVAS_HEIGHT
+    return hitTest(this.xrLayout, canvasX, canvasY)
+  }
+
+  /** Apply the command a gaze hit maps to. */
+  private runXrCommand(hit: XrHit): void {
+    const command = xrCommand(hit)
+    switch (command.kind) {
+      case 'restart':
+        this.restart()
+        break
+      case 'step':
+        this.step(command.delta)
+        break
+      case 'togglePlay':
+        this.togglePlay()
+        break
+      case 'seek':
+        this.seek(command.ratio * this.schedule.duration)
+        break
+    }
+  }
+
+  /**
+   * Update the in-scene panel and run the gaze dwell for one frame.
+   *
+   * Inert unless a session is presenting: the panel is created on the first
+   * presenting frame and torn down as soon as presentation stops.
+   */
+  private updateXrUi(dt: number): void {
+    if (!this.renderer.webgl.xr.isPresenting) return
+    if (!this.xrAligned) this.alignXrHeight()
+    if (!this.xrPanel) this.createXrUi()
+    const panel = this.xrPanel
+    const reticle = this.xrReticle
+    if (!panel || !reticle) return
+
+    const hit = this.gazeHit()
+    this.xrHovered = hitTargetId(hit)
+
+    const state: XrPanelState = {
+      buckets: this.xrActivityBuckets(),
+      position: this.simTime,
+      duration: this.schedule.duration,
+      date: formatDateTime(this.computeDate()),
+      progress: this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0,
+      playing: this.playing,
+      hovered: this.xrHovered,
+    }
+    panel.redraw(state)
+
+    if (dwell(this.xrDwell, this.xrHovered, dt) && hit) this.runXrCommand(hit)
+
+    reticle.update({ progress: dwellProgress(this.xrDwell), hovered: this.xrHovered !== null })
+    reticle.place(this.xrHead())
   }
 
   /** Attach (or detach) the music analysis used by the renderer. */
@@ -545,11 +828,26 @@ export class Engine {
 
     const focus = this.sim.recentActivityCenter(4) ?? this.sim.authorCentroid()
     const bounds = this.boundsCache(clock)
+    // A gamepad or the gyroscope takes the camera before the automatic framing
+    // runs, so flying the view is never fought by the follow behaviour.
+    this.controls.update(simDt, this.rig, this.cameraOptions)
     this.rig.update(simDt, this.cameraOptions, focus, bounds)
+    // three refreshes the XR camera inside render(); doing it before the scene
+    // update gives this frame's billboards, gaze and panel the current headset
+    // pose instead of the previous frame's.
+    if (this.renderer.webgl.xr.isPresenting) this.renderer.webgl.xr.updateCamera(this.rig.camera)
     const audio = this.audioLevels?.('live', this.simTime) ?? null
 
     this.renderer.consumeEvents(this.sim, clock)
     this.renderer.update(simDt, clock, this.sim, this.rig, audio)
+
+    // The in-scene VR panel and gaze are updated before the scene is drawn.
+    // three has already posed the headset camera for this frame, and creating
+    // the panel here means it appears on the very first presenting frame rather
+    // than one frame later. They are inert outside a presenting session.
+    if (this.renderer.webgl.xr.isPresenting) this.updateXrUi(simDt)
+    else if (this.xrPanel) this.destroyXrUi()
+
     this.renderer.render(this.rig.camera)
 
     // While recording, keep the composite (scene + panels) up to date so the
@@ -872,12 +1170,14 @@ export class Engine {
   dispose(): void {
     this.disposed = true
     this.stop()
+    this.destroyXrUi()
     this.xr?.dispose()
     this.xr = null
     window.removeEventListener('resize', this.handleWindowResize)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
     this.rig.dispose()
+    this.controls.dispose()
     this.renderer.dispose()
   }
 }
