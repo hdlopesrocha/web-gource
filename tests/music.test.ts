@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { fadeGain, musicSourceFromBuffer, renderMusicChunk, type MusicSource } from '../src/engine/audio/music'
+import {
+  fadeGain,
+  musicLoopTime,
+  musicSourceFromBuffer,
+  renderMusicChunk,
+  type MusicSource,
+} from '../src/engine/audio/music'
 
 /**
  * Background-music maths: the fade envelope and the looping/resampling renderer
@@ -46,6 +52,21 @@ describe('fadeGain', () => {
     expect(fadeGain(1, 10, 2, 2, 3)).toBeCloseTo(0.5, 10)
     expect(fadeGain(Number.NaN, 10, 2, 2)).toBe(0)
     expect(fadeGain(1, Number.NaN, 2, 2)).toBe(0)
+  })
+})
+
+describe('musicLoopTime', () => {
+  it('maps the simulation clock onto the looping track at the current speed', () => {
+    expect(musicLoopTime(0, 1, 30)).toBe(0)
+    expect(musicLoopTime(42, 1, 30)).toBe(12)
+    expect(musicLoopTime(100, 2, 30)).toBe(20)
+    expect(musicLoopTime(42, 0, 30)).toBe(12)
+  })
+
+  it('clamps invalid positions and needs a positive loop duration', () => {
+    expect(musicLoopTime(-5, 1, 30)).toBe(0)
+    expect(musicLoopTime(Number.NaN, 1, 30)).toBe(0)
+    expect(musicLoopTime(50, 0, 0)).toBe(0)
   })
 })
 

@@ -953,7 +953,7 @@ export class VisualizerController {
       this.musicAnalysis = analysis
       this.audioWasPlaying = false
       this.musicUrl = url
-      this.musicPlayer.load(url)
+      this.musicPlayer.load(url, source.duration)
       this.musicPlayer.setSettings(this.musicSettings())
       store.music.fileName = file.name
       store.music.duration = source.duration

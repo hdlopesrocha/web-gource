@@ -178,6 +178,21 @@ export interface MusicClockState {
   playing: boolean
 }
 
+/**
+ * Map an animation position in simulated seconds onto the looping track.
+ *
+ * The audio element plays at real time, while the simulation advances at
+ * `speed` simulated seconds per real second (and the exported video is
+ * compressed by the same factor). Dividing by the speed keeps seeking in the
+ * timeline aligned with the soundtrack, including when the track loops.
+ */
+export function musicLoopTime(time: number, speed: number, loopDuration: number): number {
+  if (!(loopDuration > 0)) return 0
+  const safeSpeed = Number.isFinite(speed) && speed > 0.05 ? speed : 1
+  const videoTime = Math.max(0, Number.isFinite(time) ? time : 0) / safeSpeed
+  return videoTime % loopDuration
+}
+
 export interface MusicPlayerSettings extends MusicEnvelope {}
 
 /**
@@ -195,6 +210,8 @@ export class BackgroundMusic {
   private active = false
   private loopHandle: number | null = null
   private lastTime = 0
+  /** Decoded track length, used before the audio element knows its duration. */
+  private trackDuration = 0
   private currentVolume = 0
   private playbackError: string | null = null
   private retryAt = 0
@@ -223,8 +240,12 @@ export class BackgroundMusic {
     return typeof time === 'number' && Number.isFinite(time) && time > 0 ? time : 0
   }
 
-  /** Create the looping audio element for an object URL. */
-  load(url: string): void {
+  /**
+   * Create the looping audio element for an object URL. `duration` is the
+   * decoded track length, which lets a seek land in the right place even before
+   * the element has loaded its metadata.
+   */
+  load(url: string, duration = 0): void {
     this.unload()
     if (typeof document === 'undefined') return
     const element = document.createElement('audio')
@@ -233,6 +254,7 @@ export class BackgroundMusic {
     element.preload = 'auto'
     element.volume = 0
     this.element = element
+    this.trackDuration = Number.isFinite(duration) && duration > 0 ? duration : 0
     this.playbackError = null
     this.lastTime = 0
   }
@@ -248,6 +270,7 @@ export class BackgroundMusic {
       this.element.load()
     }
     this.element = null
+    this.trackDuration = 0
     this.gainNode = null
     this.sourceNode = null
     if (this.context) {
@@ -284,6 +307,8 @@ export class BackgroundMusic {
       if (this.active) this.pause()
       return
     }
+
+    this.syncPosition(state)
 
     if (state.playing) {
       if (!this.active && state.time < 0.5 && this.lastTime > 1) {
@@ -362,6 +387,32 @@ export class BackgroundMusic {
     }
     for (const track of this.captureDestination.stream.getTracks()) track.stop()
     this.captureDestination = null
+  }
+
+  /** Re-seek only on a real jump, so normal playback is never nudged. */
+  private syncPosition(state: MusicClockState): void {
+    const element = this.element
+    if (!element) return
+    const duration = this.loopDuration()
+    if (!(duration > 0)) return
+
+    // Seeking to the end leaves the track ready to start again when Play is
+    // pressed (matching the engine, which replays from the beginning).
+    const atEnd = state.duration > 0 && state.time >= state.duration - 0.05
+    const target = atEnd ? 0 : musicLoopTime(state.time, state.speed, duration)
+    const difference = Math.abs(this.position - target) % duration
+    if (Math.min(difference, duration - difference) <= 0.25) return
+    try {
+      element.currentTime = target
+    } catch {
+      /* Metadata has not arrived yet; the next sync retries. */
+    }
+  }
+
+  private loopDuration(): number {
+    const duration = this.element?.duration
+    if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) return duration
+    return this.trackDuration
   }
 
   private start(): void {

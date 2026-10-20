@@ -163,8 +163,9 @@ with a volume control and independent fade-in/fade-out lengths (0–10 s each):
   frame is silent; fade lengths are measured in video seconds, so they behave
   the same at any playback speed in the app and in the exported file;
 * live playback follows the animation clock: pausing keeps the track position,
-  seeking, restarting and reaching the end of the timeline resynchronise it, and
-  a browser that blocks autoplay retries when you press Play;
+  and seeking, restarting or reaching the end re-seeks the loop to the matching
+  point (accounting for playback speed); a browser that blocks autoplay retries
+  when you press Play;
 * deterministic exports decode the MP3 once and render the looped, faded audio
   into the container, so the audio track matches the video length exactly
   instead of depending on how many times the track happened to loop;
