@@ -68,9 +68,10 @@ On GitHub, Pages must point at the branch once: **Settings → Pages → Source:
    when the rows span several providers, a **Token host** selector appears so the token field edits
    one host at a time.
 4. Press **Load Repository** — or **Load N repositories** when several rows are filled. Commit
-   metadata is fetched first, then file changes are hydrated in small batches; the visualization
-   starts as soon as the first batch is ready. Projects load one at a time, and later ones join the
-   scene when their load completes.
+   metadata is fetched first, then file changes are hydrated in small batches. A single repository
+   starts visualizing as soon as its first batch is ready. Multi-repository runs download every row
+   in parallel, merge the commits chronologically, and open the stage once the complete timeline is
+   ready.
 5. Play with it: scrub, seek, filter, and export a video.
 
 ### Multiple projects
@@ -96,8 +97,11 @@ volumes grow, so groups never push each other around or merge into one cluster. 
 reports the repository/project count, and Settings → Data lists each project's commit and author
 counts.
 
-Projects load sequentially: the first streams live, and later ones merge into the scene when complete.
-Tokens are per host, and a **Token host** selector appears when the rows span providers. A failed
+Repositories download in parallel. A single repository still streams live while it loads; a
+multi-repository run waits for every source to settle, merges all commits into one chronological
+timeline, and then starts playback from the beginning. Every project therefore joins at its own first
+commit date and the animation ends only after the newest event in the merged history. Tokens are per
+host, and a **Token host** selector appears when the rows span providers. A failed
 repository does not abort the others: the successful projects stay loaded, a warning names the
 failure, and the status reads **Ready · N of M repositories failed**. Downloads from a multi-project
 run use an `N-repositories` name.
@@ -448,8 +452,9 @@ GitHub allows **60 requests/hour** anonymously; a token raises this to 5,000. Be
 cost one request per commit, the app budgets requests instead of pretending:
 
 * the commit list is cheap (1 request per 100 commits) and always fetched first;
-* file hydration runs in batches of 10, oldest first, with bounded concurrency (6 requests), so
-  the visualization starts as soon as the first batch arrives and grows while loading;
+* file hydration runs in batches of 10, oldest first, with bounded concurrency (6 requests); a
+  single-repository run starts as soon as the first batch arrives and grows while loading, while
+  multi-repository runs merge after every source settles;
 * commits with detail requests still pending or skipped are rendered without file activity;
 * when the quota drops to the reserve, hydration stops, the commits already fetched are kept, and
   a warning explains how to continue (token, smaller snapshot, reload — cached data is reused);

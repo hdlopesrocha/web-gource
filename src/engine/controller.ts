@@ -67,6 +67,8 @@ export class VisualizerController {
   private sizeSource = 'unavailable'
   private repoInfo: RepoInfo | null = null
   private abort: AbortController | null = null
+  /** Identifies the current load so an aborted run cannot publish its results. */
+  private loadId = 0
   private progressTimer: number | null = null
   private recordingStartedAt = 0
   private timeline: Timeline | null = null
@@ -202,15 +204,19 @@ export class VisualizerController {
   /**
    * Load several repositories into one scene.
    *
-   * Each project keeps its own file tree and its own author instances: the same
-   * person committing in two repositories appears as two avatars, one per
-   * project. Sources load sequentially so a rate-limited host cannot starve the
-   * next one, and only the first source streams live while the others are
-   * merged when they finish (a later project may contain older commits, which
-   * would otherwise reorder an already-rendered timeline).
+   * Every repository is fetched in parallel. Each project keeps its own file
+   * tree and its own author instances: the same person committing in two
+   * repositories appears as two avatars, one per project.
+   *
+   * A multi-repository run buffers commits until every source settles, then
+   * builds one chronologically sorted timeline and starts playback from the
+   * beginning. Waiting for the full set keeps events in real date order and
+   * makes sure the animation cannot finish while another project is still
+   * loading (or jump past the newly merged history).
    */
   async loadMany(inputs: string[], options: { providerId?: string } = {}): Promise<void> {
     this.cancelLoad()
+    const runId = ++this.loadId
     this.resetEngine()
     this.rawCommits = []
     this.sources = []
@@ -247,6 +253,10 @@ export class VisualizerController {
           merged: false,
           sizesMerged: false,
           live: false,
+          done: false,
+          loaded: 0,
+          target: 0,
+          requests: 0,
           commits: [],
           fileSizes: new Map(),
           sizesTruncated: false,
@@ -265,6 +275,10 @@ export class VisualizerController {
           merged: false,
           sizesMerged: false,
           live: false,
+          done: false,
+          loaded: 0,
+          target: 0,
+          requests: 0,
           commits: [],
           fileSizes: new Map(),
           sizesTruncated: false,
@@ -291,67 +305,29 @@ export class VisualizerController {
     this.abort = abort
     store.loading.active = true
     store.loading.status = this.multi ? `Loading ${sources.length} repositories…` : 'Contacting the host…'
-    store.loading.target = store.loadOptions.maxCommits
+    store.loading.loaded = 0
+    store.loading.target = Math.max(1, store.loadOptions.maxCommits) * Math.max(1, sources.length)
     store.loading.requests = 0
     store.loading.error = null
     store.loading.streaming = false
+    store.loading.index = 0
     store.loading.total = sources.length
-
-    for (let index = 0; index < sources.length; index += 1) {
-      const source = sources[index]
-      store.loading.index = index + 1
-      store.loading.total = sources.length
-      store.loading.project = source.label
-      store.loading.loaded = 0
-      store.loading.target = Math.max(1, store.loadOptions.maxCommits)
-      store.loading.requests = 0
-      if (!source.resolved) continue
-      if (abort.signal.aborted) break
-
-      // The first source with no data yet streams straight into the engine;
-      // later sources are merged when complete (see the class comment).
-      source.live = this.rawCommits.length === 0
-      store.loading.active = true
-      store.loading.streaming = this.rawCommits.length > 0
-      store.loading.status = this.stageStatus(source, `Contacting ${source.resolved.provider.name}…`)
-
-      const token = tokenFor(source.resolved.provider.id)
-      try {
-        const result = await loadHistory(source.resolved, {
-          maxCommits: store.loadOptions.maxCommits,
-          range: store.loadOptions.range,
-          branch: store.loadOptions.branch || undefined,
-          token,
-          signal: abort.signal,
-          onStage: (stage) => this.handleStage(stage, source),
-          onRepo: (repo) => this.attachRepo(source, repo),
-          onFileSizes: ({ fileSizes, truncated, source: sizeSource }) => {
-            source.fileSizes = this.scopeSizes(source, fileSizes)
-            source.sizesTruncated = truncated
-            source.sizeSource = sizeSource
-            if (source.live) {
-              source.sizesMerged = true
-              this.recomputeSizes()
-              this.engine?.extendSizes(this.fileSizes)
-            }
-          },
-          onCommits: (batch) => this.appendBatch(source, batch),
-        })
-        if (abort.signal.aborted) break
-        this.finishSource(source, result)
-      } catch (error) {
-        if (abort.signal.aborted) break
-        source.error = describeGitError(error)
-        this.addWarning(`${source.label}: ${source.error}`)
-        this.mergeSource(source)
-        this.refreshRepos()
-        if (this.rawCommits.length > 0) this.rebuildTimeline({ keepPosition: true })
-        store.loading.active = false
-      }
-      this.refreshRepos()
-      store.loading.rateRemaining = source.rateRemaining ?? store.loading.rateRemaining
+    store.loading.project = this.multi ? null : (sources[0]?.label ?? null)
+    for (const source of sources) {
+      // A single repository still streams while it loads. Multi-repository
+      // runs buffer every source and open the stage once the merged timeline is
+      // complete, so playback always starts with all projects available.
+      source.live = !this.multi
+      source.loaded = 0
+      source.target = Math.max(1, store.loadOptions.maxCommits)
+      source.requests = 0
+      source.done = false
     }
 
+    await Promise.all(
+      sources.map((source) => this.loadSource(source, runId, abort.signal)),
+    )
+    if (runId !== this.loadId) return
     this.abort = null
     if (abort.signal.aborted) {
       store.loading.active = false
@@ -360,13 +336,14 @@ export class VisualizerController {
       return
     }
 
+    this.updatePrimaryRepo()
     const loaded = this.sources.filter((source) => source.merged && source.commits.length > 0)
     store.loading.streaming = false
     store.loading.active = false
     store.loading.index = 0
     store.loading.total = 0
     store.loading.project = null
-    if (loaded.length === 0 || !this.timeline) {
+    if (loaded.length === 0 || !this.rawCommits.length) {
       const reasons = this.sources.map((source) => `${source.label}: ${source.error ?? 'no visualizable commits'}`)
       store.loading.error = reasons.length === 1 ? reasons[0] : `No repository could be loaded.\n${reasons.join('\n')}`
       store.loading.status = 'Failed'
@@ -376,16 +353,119 @@ export class VisualizerController {
     }
 
     // Final rebuild so stats, warnings and project counts reflect the complete
-    // window (and any filter applied while the later repositories loaded).
-    this.rebuildTimeline({ keepPosition: true })
+    // window. Multi-project playback starts at the beginning of the merged,
+    // chronologically sorted history; a single project keeps its live position.
+    this.rebuildTimeline({ keepPosition: !this.multi })
     const failed = this.sources.filter((source) => source.error && source.commits.length === 0).length
     store.loading.status = failed > 0 ? `Ready · ${failed} of ${this.sources.length} repositories failed` : 'Ready'
     persistLoadOptions()
   }
 
+  /** Fetch one source; all sources in a run share the same abort signal. */
+  private async loadSource(
+    source: SourceLoad,
+    runId: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!source.resolved) {
+      source.done = true
+      if (runId === this.loadId) this.updateLoadingTotals()
+      return
+    }
+
+    const providerName = source.resolved.provider.name
+    if (runId === this.loadId) {
+      store.loading.status = this.multi
+        ? store.loading.status
+        : this.stageStatus(source, `Contacting ${providerName}…`)
+      store.loading.project = source.label
+    }
+
+    try {
+      const result = await loadHistory(source.resolved, {
+        maxCommits: store.loadOptions.maxCommits,
+        range: store.loadOptions.range,
+        branch: store.loadOptions.branch || undefined,
+        token: tokenFor(source.resolved.provider.id),
+        signal,
+        onStage: (stage) => {
+          if (runId !== this.loadId) return
+          this.handleStage(stage, source)
+        },
+        onRepo: (repo) => {
+          if (runId !== this.loadId) return
+          this.attachRepo(source, repo)
+        },
+        onFileSizes: ({ fileSizes, truncated, source: sizeSource }) => {
+          if (runId !== this.loadId) return
+          source.fileSizes = this.scopeSizes(source, fileSizes)
+          source.sizesTruncated = truncated
+          source.sizeSource = sizeSource
+          if (source.live) {
+            source.sizesMerged = true
+            this.recomputeSizes()
+            this.engine?.extendSizes(this.fileSizes)
+          }
+        },
+        onCommits: (batch) => {
+          if (runId !== this.loadId) return
+          this.appendBatch(source, batch)
+        },
+      })
+      if (signal.aborted || runId !== this.loadId) return
+      this.finishSource(source, result)
+    } catch (error) {
+      if (signal.aborted || runId !== this.loadId) return
+      source.error = describeGitError(error)
+      this.addWarning(`${source.label}: ${source.error}`)
+      this.mergeSource(source)
+      this.refreshRepos()
+      // A single project streams as it loads; a multi-project run waits for
+      // the final rebuild so the whole sorted history is available at once.
+      if (!this.multi && this.rawCommits.length > 0) this.rebuildTimeline({ keepPosition: true })
+    } finally {
+      source.done = true
+      if (runId === this.loadId) {
+        if (source.rateRemaining !== undefined) store.loading.rateRemaining = source.rateRemaining
+        this.updateLoadingTotals()
+      }
+    }
+  }
+
+  /** Refresh the aggregate download counters while sources run in parallel. */
+  private updateLoadingTotals(): void {
+    const resolved = this.sources.filter((source) => source.resolved)
+    const total = Math.max(1, this.sources.length)
+    let loaded = 0
+    let target = 0
+    let requests = 0
+    for (const source of this.sources) {
+      loaded += source.loaded
+      target += Math.max(1, source.target)
+      requests += source.requests
+    }
+    store.loading.loaded = loaded
+    store.loading.target = Math.max(target, loaded, store.loadOptions.maxCommits)
+    store.loading.requests = requests
+    if (this.multi) {
+      const done = this.sources.filter((source) => source.done).length
+      const running = resolved.length - this.sources.filter((source) => source.done).length
+      store.loading.status = done > 0
+        ? `Loading ${total} repositories… (${done}/${total} complete, ${Math.max(0, running)} active)`
+        : `Loading ${total} repositories…`
+      store.loading.index = done
+    }
+  }
+
+  /** Keep the primary repository stable in input order despite parallel loads. */
+  private updatePrimaryRepo(): void {
+    this.repoInfo = this.sources.find((source) => source.repo)?.repo ?? null
+  }
+
   cancelLoad(): void {
     this.abort?.abort()
     this.abort = null
+    this.loadId += 1
     store.loading.active = false
     store.loading.streaming = false
     store.loading.status = 'Cancelled'
@@ -399,19 +479,22 @@ export class VisualizerController {
   }
 
   private handleStage(stage: LoadStage, source: SourceLoad): void {
-    store.loading.active = stage.kind !== 'done'
-    store.loading.status = this.stageStatus(source, stage.status)
     store.loading.project = source.repo?.fullName ?? source.label
     if (stage.kind === 'fetching') {
-      store.loading.loaded = Math.max(store.loading.loaded, stage.loaded)
-      store.loading.target = Math.max(1, stage.target)
-      store.loading.requests = stage.requests
-      if (stage.rateRemaining !== undefined) store.loading.rateRemaining = stage.rateRemaining
+      source.loaded = Math.max(source.loaded, stage.loaded)
+      source.target = Math.max(1, stage.target)
+      source.requests = stage.requests
+      if (stage.rateRemaining !== undefined) {
+        source.rateRemaining = stage.rateRemaining
+        store.loading.rateRemaining = stage.rateRemaining
+      }
     }
     if (stage.kind === 'done') {
-      store.loading.loaded = stage.loaded
-      store.loading.target = Math.max(stage.loaded, store.loading.target)
+      source.loaded = stage.loaded
+      source.target = Math.max(stage.loaded, source.target, 1)
     }
+    if (!this.multi) store.loading.status = this.stageStatus(source, stage.status)
+    this.updateLoadingTotals()
   }
 
   /** Record the repository metadata as soon as the host reports it. */
@@ -419,7 +502,7 @@ export class VisualizerController {
     source.repo = repo
     source.label = repo.fullName
     this.assignProjectKey(source)
-    if (!this.repoInfo) this.repoInfo = repo
+    this.updatePrimaryRepo()
     this.refreshRepos()
     store.loading.project = repo.fullName
   }
@@ -488,16 +571,17 @@ export class VisualizerController {
       source.sizesTruncated = source.sizesTruncated || result.sizesTruncated
       if (source.sizeSource === 'unavailable') source.sizeSource = result.sizeSource
     }
-    if (!this.repoInfo) this.repoInfo = result.repo
     this.assignProjectKey(source)
+    this.updatePrimaryRepo()
     this.refreshRepos()
     this.addWarnings(result.warnings, source)
     this.mergeSource(source)
     this.refreshRepos()
 
-    // A final non-streaming rebuild updates stats and warnings. Live sources
-    // already streamed their commits, so this only resets once per source.
-    this.rebuildTimeline({ keepPosition: true })
+    // A single live source rebuilds when it finishes. Multi-project runs wait
+    // for all downloads, then build one complete sorted timeline before the
+    // engine is created.
+    if (!this.multi) this.rebuildTimeline({ keepPosition: true })
   }
 
   /** Add source-specific warnings, naming the project when several are loaded. */
@@ -1643,8 +1727,14 @@ interface SourceLoad {
   merged: boolean
   /** File sizes already included in the shared size map. */
   sizesMerged: boolean
-  /** The first source with no data yet streams straight into the engine. */
+  /** A single-repository run streams batches straight into the engine. */
   live: boolean
+  /** True once the source has settled (success, failure or cancellation). */
+  done: boolean
+  /** Per-source download counters, aggregated for the loading panel. */
+  loaded: number
+  target: number
+  requests: number
   /** Tagged commits from this source (all of them, whether merged or not). */
   commits: RawCommit[]
   /** File sizes, already namespaced with {@link key}. */

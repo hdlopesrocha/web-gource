@@ -257,6 +257,8 @@ export class Engine {
    * times and the current position stays valid.
    */
   extend(timeline: Timeline): void {
+    const ended = !this.playing && this.schedule.duration > 0 && this.simTime >= this.schedule.duration - 0.001
+    const previousDuration = this.schedule.duration
     this.timeline = timeline
     this.schedule = buildSchedule(timeline.commits, this.schedule.options, this.schedule)
     this.sim.setCommits(timeline.commits, timeline.authorById)
@@ -266,6 +268,9 @@ export class Engine {
     this.sim.setFileSizes(timeline.fileSizes)
     this.renderer.setNodes(this.sim.nodes)
     this.timelineVersion += 1
+    // A live load can add commits after a short first batch has already played
+    // to the end. Resume so the remaining events are not skipped.
+    if (ended && this.schedule.duration > previousDuration) this.play()
     this.emitHud(true)
   }
 

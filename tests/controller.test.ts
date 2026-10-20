@@ -172,6 +172,42 @@ describe('VisualizerController', () => {
     expect(alphaAuthor.colorIndex).toBe(betaAuthor.colorIndex)
   })
 
+  it('downloads repositories in parallel and merges them chronologically', async () => {
+    const routes = mockMultiApi([
+      { label: 'newer', commits: generateCommits(6, { startYear: 2022 }) },
+      { label: 'older', commits: generateCommits(6, { startYear: 2019 }) },
+    ])
+    const [newer, older] = routes
+    const active = new Set<string>()
+    let overlapped = false
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url
+      const pathname = new URL(url).pathname
+      const route = routes.find((candidate) => pathname.includes(`/repos/acme/${candidate.repo}`))
+      if (!route) return Promise.reject(new Error(`Unexpected request: ${url}`))
+      active.add(route.repo)
+      if (active.size > 1) overlapped = true
+      try {
+        // Hold the first response long enough for the other repository to start.
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return await route.mock.fetch(input, init)
+      } finally {
+        active.delete(route.repo)
+      }
+    }
+
+    await controller.loadMany(routes.map((route) => route.url))
+
+    expect(overlapped).toBe(true)
+    const timeline = controller.currentTimeline!
+    expect(timeline.projects).toHaveLength(2)
+    expect(timeline.commits).toHaveLength(12)
+    const timestamps = timeline.commits.map((commit) => commit.timestamp)
+    expect(timestamps).toEqual([...timestamps].sort((a, b) => a - b))
+    expect(timeline.commits[0]?.projectKey).toBe(older!.fullName)
+    expect(timeline.commits.at(-1)?.projectKey).toBe(newer!.fullName)
+  })
+
   it('keeps successful repositories when another fails', async () => {
     const routes = mockMultiApi([
       { label: 'alpha', commits: generateCommits(6) },

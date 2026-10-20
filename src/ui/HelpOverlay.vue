@@ -65,10 +65,12 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           Author filters are project-scoped: hiding an instance hides that person only in that project,
           while the same person in another project stays visible. Tokens are per host, and a
-          <strong>Token host</strong> selector appears when the rows mix providers. Projects load one at
-          a time — the first streams live, and later ones join the scene when complete — and a failed
-          repository does not abort the rest: the successful projects stay loaded with a warning and a
-          status such as <strong>Ready · N of M repositories failed</strong>.
+          <strong>Token host</strong> selector appears when the rows mix providers. Repositories download
+          in parallel. Multi-repository playback waits for every row to settle, merges the commits in
+          chronological order, then plays the complete history: each project joins at its first commit
+          date and the animation ends after the last event. A single repository still streams live.
+          A failed repository does not abort the rest: the successful projects stay loaded with a
+          warning and a status such as <strong>Ready · N of M repositories failed</strong>.
         </p>
       </section>
 
