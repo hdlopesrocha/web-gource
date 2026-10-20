@@ -72,6 +72,60 @@ describe('TimelineBuilder', () => {
     expect(unknown?.unattributed).toBe(true)
   })
 
+  it('keeps people with a repeated username separate when their emails differ', () => {
+    const builder = new TimelineBuilder(repo)
+    builder.addCommits([
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        author: { name: 'Ada', email: 'ada@one.example', login: 'ada' },
+      }),
+      raw({
+        sha: 'b',
+        timestamp: 2000,
+        author: { name: 'Ada', email: 'ada@two.example', login: 'ada' },
+      }),
+      raw({
+        sha: 'c',
+        timestamp: 3000,
+        author: { name: 'Ada', email: 'ada@one.example', login: 'ada' },
+      }),
+    ])
+
+    const timeline = builder.build()
+    const authors = timeline.authors.filter((author) => author.login === 'ada')
+    expect(authors).toHaveLength(2)
+    expect(authors.map((author) => author.email).sort()).toEqual(['ada@one.example', 'ada@two.example'])
+    expect(authors[0].id).not.toBe(authors[1].id)
+    expect(authors[0].colorIndex).not.toBe(authors[1].colorIndex)
+    expect(timeline.commits.map((commit) => commit.authorId)).toEqual([
+      'login:ada|email:ada@one.example',
+      'login:ada|email:ada@two.example',
+      'login:ada|email:ada@one.example',
+    ])
+  })
+
+  it('keeps different usernames separate when they share an email', () => {
+    const builder = new TimelineBuilder(repo)
+    builder.addCommits([
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        author: { name: 'Ada', email: 'team@example.com', login: 'ada' },
+      }),
+      raw({
+        sha: 'b',
+        timestamp: 2000,
+        author: { name: 'Grace', email: 'team@example.com', login: 'grace' },
+      }),
+    ])
+
+    const timeline = builder.build()
+    expect(timeline.authors).toHaveLength(2)
+    expect(timeline.authors.map((author) => author.login).sort()).toEqual(['ada', 'grace'])
+    expect(new Set(timeline.commits.map((commit) => commit.authorId)).size).toBe(2)
+  })
+
   it('normalizes rename, delete and add changes', () => {
     const builder = new TimelineBuilder(repo)
     builder.addCommits([
@@ -310,13 +364,13 @@ describe('multi-project scoping', () => {
     ]
 
     const timeline = buildTimeline(repo, commits, { projects: projectInputs })
-    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada')
-    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada')
+    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada|email:ada@example.com')
+    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada|email:ada@example.com')
 
     expect(timeline.authors).toHaveLength(2)
     expect(widgetAda).toMatchObject({
-      id: 'acme/widget::login:ada',
-      baseId: 'login:ada',
+      id: 'acme/widget::login:ada|email:ada@example.com',
+      baseId: 'login:ada|email:ada@example.com',
       projectKey: 'acme/widget',
       projectName: 'acme/widget',
       commits: 2,
@@ -326,8 +380,8 @@ describe('multi-project scoping', () => {
       last: 3000,
     })
     expect(gadgetAda).toMatchObject({
-      id: 'acme/gadget::login:ada',
-      baseId: 'login:ada',
+      id: 'acme/gadget::login:ada|email:ada@example.com',
+      baseId: 'login:ada|email:ada@example.com',
       projectKey: 'acme/gadget',
       projectName: 'acme/gadget',
       commits: 1,
@@ -338,8 +392,12 @@ describe('multi-project scoping', () => {
     })
     expect(widgetAda?.id).not.toBe(gadgetAda?.id)
     expect(widgetAda?.colorIndex).toBe(gadgetAda?.colorIndex)
-    expect(timeline.commits.find((commit) => commit.sha === 'w1')?.authorId).toBe('acme/widget::login:ada')
-    expect(timeline.commits.find((commit) => commit.sha === 'g1')?.authorId).toBe('acme/gadget::login:ada')
+    expect(timeline.commits.find((commit) => commit.sha === 'w1')?.authorId).toBe(
+      'acme/widget::login:ada|email:ada@example.com',
+    )
+    expect(timeline.commits.find((commit) => commit.sha === 'g1')?.authorId).toBe(
+      'acme/gadget::login:ada|email:ada@example.com',
+    )
   })
 
   it('namespaces file paths, including rename sources', () => {
@@ -541,12 +599,16 @@ describe('multi-project scoping', () => {
     expect(timeline.projects).toEqual([])
     expect(commit.projectKey).toBeUndefined()
     expect(commit.projectName).toBeUndefined()
-    expect(commit.authorId).toBe('login:ada')
+    expect(commit.authorId).toBe('login:ada|email:ada@example.com')
     expect(commit.changes[0]).toMatchObject({ path: 'src/new.ts', from: 'src/old.ts', kind: 'rename' })
-    expect(author).toMatchObject({ id: 'login:ada', baseId: 'login:ada', colorIndex: 0 })
+    expect(author).toMatchObject({
+      id: 'login:ada|email:ada@example.com',
+      baseId: 'login:ada|email:ada@example.com',
+      colorIndex: 0,
+    })
     expect(author.projectKey).toBeUndefined()
     expect(author.projectName).toBeUndefined()
-    expect(timeline.authorById.get('login:ada')).toBe(author)
+    expect(timeline.authorById.get('login:ada|email:ada@example.com')).toBe(author)
   })
 
   it('shares one colour per person without merging project author rows', () => {
@@ -575,24 +637,24 @@ describe('multi-project scoping', () => {
     ]
 
     const timeline = buildTimeline(repo, commits, { projects: projectInputs })
-    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada')
-    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada')
-    const gadgetBob = timeline.authors.find((author) => author.id === 'acme/gadget::login:bob')
+    const widgetAda = timeline.authors.find((author) => author.id === 'acme/widget::login:ada|email:ada@example.com')
+    const gadgetAda = timeline.authors.find((author) => author.id === 'acme/gadget::login:ada|email:ada@example.com')
+    const gadgetBob = timeline.authors.find((author) => author.id === 'acme/gadget::login:bob|email:bob@example.com')
 
     expect(timeline.authors).toHaveLength(3)
     expect(new Set(timeline.authors.map((author) => author.id)).size).toBe(3)
-    expect(widgetAda?.baseId).toBe('login:ada')
-    expect(gadgetAda?.baseId).toBe('login:ada')
+    expect(widgetAda?.baseId).toBe('login:ada|email:ada@example.com')
+    expect(gadgetAda?.baseId).toBe('login:ada|email:ada@example.com')
     expect(widgetAda?.id).not.toBe(gadgetAda?.id)
     expect(widgetAda?.projectKey).toBe('acme/widget')
     expect(gadgetAda?.projectKey).toBe('acme/gadget')
     expect(widgetAda?.colorIndex).toBe(gadgetAda?.colorIndex)
-    expect(gadgetBob?.baseId).toBe('login:bob')
-    expect(gadgetBob?.id).toBe('acme/gadget::login:bob')
+    expect(gadgetBob?.baseId).toBe('login:bob|email:bob@example.com')
+    expect(gadgetBob?.id).toBe('acme/gadget::login:bob|email:bob@example.com')
     expect(gadgetBob?.projectKey).toBe('acme/gadget')
     expect(gadgetBob?.colorIndex).not.toBe(widgetAda?.colorIndex)
-    expect(timeline.authorById.get('acme/widget::login:ada')).toBe(widgetAda)
-    expect(timeline.authorById.get('acme/gadget::login:ada')).toBe(gadgetAda)
+    expect(timeline.authorById.get('acme/widget::login:ada|email:ada@example.com')).toBe(widgetAda)
+    expect(timeline.authorById.get('acme/gadget::login:ada|email:ada@example.com')).toBe(gadgetAda)
     expect(widgetAda).not.toBe(gadgetAda)
   })
 })

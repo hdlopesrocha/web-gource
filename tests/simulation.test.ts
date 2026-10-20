@@ -223,6 +223,30 @@ describe('Simulation', () => {
     expect(sim.find('a.ts')?.changes).toBe(2)
   })
 
+  it('spawns every author when usernames repeat but emails differ', () => {
+    const { sim } = makeSimulation([
+      raw({
+        sha: 'a',
+        timestamp: 1000,
+        author: { name: 'Ada', email: 'ada@one.example', login: 'ada' },
+        files: [{ path: 'one/a.ts', kind: 'add', additions: 1, deletions: 0 }],
+      }),
+      raw({
+        sha: 'b',
+        timestamp: 2000,
+        author: { name: 'Ada', email: 'ada@two.example', login: 'ada' },
+        files: [{ path: 'two/b.ts', kind: 'add', additions: 1, deletions: 0 }],
+      }),
+    ])
+    sim.applyUpTo(1)
+
+    const authors = [...sim.authors]
+    expect(authors).toHaveLength(2)
+    expect(authors.every((entry) => entry.visible)).toBe(true)
+    expect(authors.every((entry) => entry.author.login === 'ada')).toBe(true)
+    expect(new Set(authors.map((entry) => entry.author.id)).size).toBe(2)
+  })
+
   it('spawns authors and moves them towards their work', () => {
     const { sim } = makeSimulation([
       raw({ sha: 'a', timestamp: 1000, files: [{ path: 'src/a.ts', kind: 'add', additions: 1, deletions: 0 }] }),

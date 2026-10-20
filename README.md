@@ -84,9 +84,12 @@ load). A single row still loads exactly as before, with unscoped paths and autho
 Each project keeps its own file tree and its own author instances, so identical paths or the same
 contributor in two repositories never collide. Paths are prefixed with `owner/name/`, and the same
 person appears once per project — the Authors panel counts **author instances** and badges each with
-its project. Hiding an author hides that instance only in its project; the same person in another
-project stays visible. The stage header reports the repository/project count, and Settings → Data
-lists each project's commit and author counts.
+its project. Authors are identified by their login and commit email: two people who share a username
+but use different emails each get their own avatar and colour, and different logins sharing an email
+also stay separate, while a display-name change from the same account remains one author. Hiding an
+author hides that instance only in its project; the same person in another project stays visible.
+The stage header reports the repository/project count, and Settings → Data lists each project's
+commit and author counts.
 
 Projects load sequentially: the first streams live, and later ones merge into the scene when complete.
 Tokens are per host, and a **Token host** selector appears when the rows span providers. A failed

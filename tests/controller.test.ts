@@ -167,8 +167,8 @@ describe('VisualizerController', () => {
     const betaAuthor = betaAuthors.find((author) => author.login === 'author0')!
     expect(timeline.authors.filter((author) => author.login === 'author0')).toHaveLength(2)
     expect(alphaAuthor.id).not.toBe(betaAuthor.id)
-    expect(alphaAuthor.baseId).toBe('login:author0')
-    expect(betaAuthor.baseId).toBe('login:author0')
+    expect(alphaAuthor.baseId).toBe('login:author0|email:author0@example.com')
+    expect(betaAuthor.baseId).toBe('login:author0|email:author0@example.com')
     expect(alphaAuthor.colorIndex).toBe(betaAuthor.colorIndex)
   })
 

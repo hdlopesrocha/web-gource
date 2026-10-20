@@ -5,7 +5,14 @@ import type { RawCommit, RepoInfo } from '../git/types'
 import { buildTimeline, bucketActivity, type TimelineProjectInput } from '../timeline/builder'
 import { compileIgnoredFolders, normaliseIgnoredFolders } from '../timeline/ignore'
 import type { SizeMode } from '../sim/simulation'
-import { authorKey, projectPath, scopedAuthorId, type ActivityBucket, type Timeline } from '../timeline/types'
+import {
+  authorKey,
+  legacyAuthorKey,
+  projectPath,
+  scopedAuthorId,
+  type ActivityBucket,
+  type Timeline,
+} from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
 import { buildSchedule, type ScheduleOptions } from '../timeline/schedule'
 import { Engine, type EngineOptions, type HudState } from './engine'
@@ -659,6 +666,13 @@ export class VisualizerController {
         // a base id (saved by an older profile) still hides them everywhere.
         const scoped = scopedAuthorId(commit.projectKey, base)
         if (hidden.has(scoped) || hidden.has(base)) return false
+        // Profiles saved before repeated usernames were separated stored
+        // login-first ids. Keep those filters working, including scoped ones.
+        const legacy = legacyAuthorKey(commit.author)
+        if (legacy !== base) {
+          const legacyScoped = scopedAuthorId(commit.projectKey, legacy)
+          if (hidden.has(legacyScoped) || hidden.has(legacy)) return false
+        }
       }
       return true
     }

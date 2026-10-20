@@ -21,14 +21,17 @@ export interface TimelineFileChange {
 /** An author identity as used by the visualization. */
 export interface TimelineAuthor {
   /**
-   * Stable key: login > email > name.
+   * Stable key combining the login and commit email (name when neither exists).
    *
-   * With several projects loaded the same person appears once per project, so
-   * this key is scoped with the project key (see {@link scopedAuthorId}). The
-   * unscoped identity is kept in {@link baseId}.
+   * Combining both fields keeps repeated usernames separate when the emails
+   * differ, and keeps different usernames separate when they share an email,
+   * while display-name changes from the same account still merge. With several
+   * projects loaded the same person appears once per project, so this key is
+   * scoped with the project key (see {@link scopedAuthorId}). The unscoped
+   * identity is kept in {@link baseId}.
    */
   id: string
-  /** Identity without the project scope: login > email > name. */
+  /** Identity without the project scope: login and email, or the name. */
   baseId?: string
   /** Project (repository) this author instance belongs to, when scoped. */
   projectKey?: string
@@ -165,10 +168,41 @@ export interface Timeline {
   truncated: boolean
 }
 
+function identityPart(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+/**
+ * Build an author identity from the login and commit email.
+ *
+ * Using only the login merged different commit identities that share a
+ * username, for example one account committing with several git emails. The
+ * email keeps those authors separate, while the login keeps people with a
+ * shared email (team or bot addresses) separate too. Ignoring the display name
+ * means a name change from the same account does not create a new person.
+ */
 export function authorKey(parts: { login?: string; email?: string; name: string }): string {
-  if (parts.login) return `login:${parts.login.toLowerCase()}`
-  if (parts.email) return `email:${parts.email.toLowerCase()}`
-  return `name:${parts.name.trim().toLowerCase()}`
+  const login = identityPart(parts.login)
+  const email = identityPart(parts.email)
+  const name = identityPart(parts.name)
+  if (login && email) return `login:${login}|email:${email}`
+  if (login) return `login:${login}`
+  if (email) return `email:${email}`
+  return `name:${name || 'unknown author'}`
+}
+
+/**
+ * The login-first identity used before repeated usernames were separated.
+ *
+ * Only used to honour hidden-author filters saved by an older profile.
+ */
+export function legacyAuthorKey(parts: { login?: string; email?: string; name: string }): string {
+  const login = identityPart(parts.login)
+  const email = identityPart(parts.email)
+  const name = identityPart(parts.name)
+  if (login) return `login:${login}`
+  if (email) return `email:${email}`
+  return `name:${name || 'unknown author'}`
 }
 
 /** Scope an author identity to a project (no-op for single-repository loads). */

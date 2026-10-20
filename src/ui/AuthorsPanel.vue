@@ -101,10 +101,12 @@ function showAll(): void {
           <div class="bar-fill" :style="{ width: `${Math.max(2, (author.commits / Math.max(1, authors[0]?.commits ?? 1)) * 100)}%` }" />
         </div>
         <div class="meta faint">
-          <span v-if="author.login">@{{ author.login }}</span>
-          <span v-else-if="author.email" class="mono">{{ author.email }}</span>
-          <span v-else class="badge">name only</span>
-          <span class="mono">{{ formatDate(author.first) }} → {{ formatDate(author.last) }}</span>
+          <span class="identity">
+            <span v-if="author.login">@{{ author.login }}</span>
+            <span v-if="author.email" class="mono">{{ author.email }}</span>
+            <span v-if="!author.login && !author.email" class="badge">name only</span>
+          </span>
+          <span class="mono dates">{{ formatDate(author.first) }} → {{ formatDate(author.last) }}</span>
         </div>
         <div v-if="multiProject && author.projectName" class="project-line">
           <span class="badge project">{{ author.projectName }}</span>
@@ -230,6 +232,22 @@ function showAll(): void {
   gap: 8px;
   font-size: 10px;
   margin-top: 2px;
+}
+
+.identity {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+}
+
+.identity .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dates {
+  flex: none;
 }
 
 .project-line {

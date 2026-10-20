@@ -595,7 +595,22 @@ describe('panels', () => {
     vi.spyOn(controller, 'timelineAuthors').mockReturnValue(authors)
     const wrapper = mount(AuthorsPanel)
     expect(wrapper.text()).toContain('Ada')
+    expect(wrapper.text()).toContain('ada@example.com')
     expect(wrapper.findAll('.author-row').length).toBe(1)
+  })
+
+  it('authors panel lists every person sharing a username when emails differ', () => {
+    const first = rawCommit(0)
+    const timeline = buildTimeline(repo, [
+      { ...first, author: { name: 'Ada', email: 'ada@one.example', login: 'ada' } },
+      { ...first, sha: 'sha-second', author: { name: 'Ada', email: 'ada@two.example', login: 'ada' } },
+    ])
+    vi.spyOn(controller, 'timelineAuthors').mockReturnValue(timeline.authors)
+    const wrapper = mount(AuthorsPanel)
+
+    expect(wrapper.findAll('.author-row')).toHaveLength(2)
+    expect(wrapper.text()).toContain('ada@one.example')
+    expect(wrapper.text()).toContain('ada@two.example')
   })
 
   it('authors panel shows one instance per project with project badges', () => {
