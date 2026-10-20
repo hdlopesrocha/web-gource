@@ -148,9 +148,9 @@ interface SavedState {
  * `enter()` never throws: every failure path records a human sentence in
  * `store.ui.xrError` and leaves the app exactly as it was. While a session is
  * running the camera is parented to an XR rig group and the rig is tipped and
- * placed at the scene origin (see {@link frameTabletop}), so three can pose the
- * camera from the headset and the user stands where the on-screen camera was;
- * `end` (or `exit()`) restores the previous scene, rig and camera transforms.
+ * placed at the local-floor origin (see {@link frameTabletop}), so three can
+ * pose the camera from the headset at the user's real eye height; `end` (or
+ * `exit()`) restores the previous scene, rig and camera transforms.
  */
 export class XrSession {
   private readonly renderer: XrRendererLike
@@ -262,15 +262,17 @@ export class XrSession {
   }
 
   /**
-   * Stand the user at the scene origin, at the height the on-screen camera has.
+   * Stand the user on the local floor at the scene origin.
    *
    * Instead of moving the tree in front of the user, the *user* is moved onto
    * the scene: the rig is tipped so the tree's Z-up frame reads as the room's
-   * floor and placed at the scene origin, `x = 0, y = 0`, at the eye height the
-   * on-screen camera has (in the same scaled units as the tabletop). The tree
-   * therefore sits in front of and below the user exactly as it does on screen,
-   * and walking around it in the room orbits the real thing rather than a moved
-   * copy. The tree keeps its tabletop scale but is centred on the origin.
+   * floor and placed at `(0, 0, 0)`. The tree keeps its tabletop scale but is
+   * scaled and centred on the origin, so walking around it in the room orbits
+   * the real thing rather than a moved copy.
+   *
+   * The rig itself stays on the floor: a `local-floor` headset pose already
+   * carries the user's real eye height, so no on-screen camera height is
+   * involved. The tree is automatically in front of and below the eyes.
    */
   private frameTabletop(): void {
     const framing = this.framing
@@ -286,11 +288,10 @@ export class XrSession {
     framing.root.position.set(-center.x * scale, -center.y * scale, -cz * scale)
     framing.root.updateMatrixWorld(true)
 
-    // The user stands at the scene origin at the height the on-screen camera has
-    // (in the same scaled units), with the tree's +Z as "up".
-    const camera = framing.camera
+    // The user stands at the local-floor origin, with the tree's +Z as "up".
+    // The headset pose supplies the real eye height.
     framing.rig.quaternion.setFromEuler(XR_RIG_TILT)
-    framing.rig.position.set(0, 0, scale * (camera.position.z - cz))
+    framing.rig.position.set(0, 0, 0)
     framing.rig.updateMatrixWorld(true)
   }
 

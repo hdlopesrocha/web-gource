@@ -101,7 +101,6 @@ export const DEFAULT_CAMERA_OPTIONS: CameraOptions = {
   followActivity: true,
   autoZoom: true,
   smoothing: 1.4,
-  flat: false,
 }
 
 /** Live playback or the deterministic export: the time bases differ. */
@@ -165,8 +164,6 @@ export class Engine {
   private xrReticle: XrReticle | null = null
   /** Gaze dwell accumulator, reset whenever the panel is (re)created. */
   private readonly xrDwell = createDwellState()
-  /** True once the rig has been corrected against a real headset pose. */
-  private xrAligned = false
   /** Panel hit rectangles, matching the panel's canvas. */
   private xrLayout: XrPanelLayout = panelLayout()
   /** The element the gaze is resting on, for the panel highlight. */
@@ -530,10 +527,10 @@ export class Engine {
   /**
    * Enter or leave an immersive VR session.
    *
-   * The session owns the framing (the user is stood at the scene origin at the
-   * height the on-screen camera has, so the tree sits in front of and below them)
-   * and the sphere mode is forced on while it runs, so the files are real
-   * geometry with parallax rather than flat billboards.
+   * The session owns the framing: the tree is scaled and centred on the scene
+   * origin and the user stands there on the local floor, while their real
+   * headset height places the eyes. The files and folders are already real
+   * spheres, so they keep their parallax in stereo.
    */
   async toggleVr(): Promise<void> {
     const xr = this.ensureXr()
@@ -541,7 +538,6 @@ export class Engine {
       await xr.exit()
       this.destroyXrUi()
     } else {
-      this.xrAligned = false
       await xr.enter()
     }
   }
@@ -608,27 +604,6 @@ export class Engine {
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
     this.xrDwell.fired = false
-    this.xrAligned = false
-  }
-
-  /**
-   * Put the eyes at the height the flat camera uses.
-   *
-   * {@link XrSession} frames the rig (the local-floor origin) at the on-screen
-   * camera's height, but a floor-relative pose already carries the user's own
-   * eye height, so applying it unchanged puts the eyes a head too high. The pose
-   * only exists once the session is presenting, so the correction happens on the
-   * first frame; the panel is placed afterwards, from the corrected pose.
-   */
-  private alignXrHeight(): void {
-    const target = this.xrRig.position.z
-    const eyeZ = this.xrEyePosition.setFromMatrixPosition(this.xrHead()).z
-    this.xrRig.position.z = target + (target - eyeZ)
-    this.xrRig.updateMatrixWorld(true)
-    // The eye matrices were posed from the old rig; refresh them so this frame
-    // both renders and places the panel at the corrected height.
-    this.renderer.webgl.xr.updateCamera(this.rig.camera)
-    this.xrAligned = true
   }
 
   /**
@@ -736,7 +711,6 @@ export class Engine {
    */
   private updateXrUi(dt: number): void {
     if (!this.renderer.webgl.xr.isPresenting) return
-    if (!this.xrAligned) this.alignXrHeight()
     if (!this.xrPanel) this.createXrUi()
     const panel = this.xrPanel
     const reticle = this.xrReticle
@@ -837,8 +811,8 @@ export class Engine {
     this.controls.update(simDt, this.rig, this.cameraOptions)
     this.rig.update(simDt, this.cameraOptions, focus, bounds)
     // three refreshes the XR camera inside render(); doing it before the scene
-    // update gives this frame's billboards, gaze and panel the current headset
-    // pose instead of the previous frame's.
+    // update gives this frame's camera-facing layers, gaze and panel the current
+    // headset pose instead of the previous frame's.
     if (this.renderer.webgl.xr.isPresenting) this.renderer.webgl.xr.updateCamera(this.rig.camera)
     const audio = this.audioLevels?.('live', this.simTime) ?? null
 

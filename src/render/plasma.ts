@@ -18,7 +18,7 @@ import { activityTint } from './palette'
  *
  * The mesh is a full-screen quad forced to the far plane
  * (`gl_Position = vec4(position.xy, 1.0, 1.0)`). It is drawn *after* the opaque
- * geometry (branch lines -1, file circles 2, directory rings 3), so the depth
+ * geometry (branch lines -1, file spheres 2, folder spheres 3), so the depth
  * test rejects it wherever those already wrote depth and their silhouettes clip
  * the volume instead of it washing over them. Every later transparent
  * layer (particles 10, beams 12, avatars 20/21, labels 30) still draws on top,

@@ -4,7 +4,6 @@ import type { AudioLevels } from '../engine/audio/analysis'
 import type { SimNode } from '../sim/simulation'
 import { extensionOf } from '../timeline/builder'
 import { colorForChange, colorForExtension, DIR_COLOR, ROOT_COLOR } from './palette'
-import { ballTexture } from './textures'
 
 export type FileColorMode = 'extension' | 'activity' | 'flat'
 
@@ -24,38 +23,30 @@ const HIGHLIGHT_THRESHOLD = 0.92
 const scratchColor = new THREE.Color()
 
 /**
- * Depth offsets that keep the layers unambiguous with the orthographic camera
- * (which looks down the -Z axis): nodes sit in front of the branch lines, and
- * effects sit in front of the nodes.
+ * Depth offsets that keep the layers unambiguous with the camera, which looks
+ * down the -Z axis: nodes sit in front of the branch lines, and effects sit in
+ * front of the nodes.
  */
 export const NODE_Z = 0.25
 export const EFFECT_Z = 0.5
 
-/** Flat sphere resolution: low enough for thousands of instances, still round. */
+/** Sphere resolution: low enough for thousands of instances, still round. */
 const SPHERE_SEGMENTS = 20
 const SPHERE_RINGS = 14
 
 /**
  * Instanced renderer for the tree.
  *
- * Files are discs and directories are rings drawn as camera-facing billboards.
- * Their world scale is compensated for perspective distance, so a file keeps
- * the same apparent size whether it sits near or far from the camera (the
- * radius still carries the file-size encoding). Node ids map to stable instance
- * slots, so incremental updates only touch the instances that changed and a
- * full sync is only needed after a seek. Hidden nodes are collapsed to a zero
- * scale.
+ * Files and directories are both real instanced spheres with a lit material.
+ * Their world radius carries the simulation's size encoding (files additionally
+ * apply {@link setRadiusScale}), so near nodes are genuinely bigger and the tree
+ * gains real parallax instead of cancelling perspective. Node ids map to stable
+ * instance slots, so incremental updates only touch the instances that changed
+ * and a full sync is only needed after a seek. Hidden nodes are collapsed to a
+ * zero scale.
  *
- * In sphere mode ({@link setSphereMode}) files become real instanced spheres
- * with a lit material: they keep their world radius instead of compensating for
- * perspective, so near files are genuinely bigger and the tree gains parallax.
- * That is what makes them read correctly in an immersive WebXR session, and it
- * is also available as a normal 3D view setting. Directories keep their rings.
- *
- * The flat top-down 2D view is left alone: every node sits at one view depth
- * there, so the compensated billboard radius and the true world radius coincide
- * and a sphere looks the same size as the ball sprite. The only visible
- * difference in 2D is the lighting, so the setting does not need a special case.
+ * The rest of the scene is unlit, so the ambient + key light added to this
+ * field's group only shades the node spheres (files and directories alike).
  */
 export class NodeField {
   readonly group = new THREE.Group()
@@ -63,8 +54,8 @@ export class NodeField {
   private dirMesh: THREE.InstancedMesh
   private fileGeometry: THREE.BufferGeometry
   private dirGeometry: THREE.BufferGeometry
-  private fileMaterial: THREE.Material
-  private dirMaterial: THREE.MeshBasicMaterial
+  private fileMaterial: THREE.MeshLambertMaterial
+  private dirMaterial: THREE.MeshLambertMaterial
   private fileCapacity: number
   private dirCapacity: number
   private fileInstanceOf: number[] = []
@@ -77,23 +68,12 @@ export class NodeField {
   private colorMode: FileColorMode
   private showDirs = true
   private radiusScale = 1
-  /** Files drawn as lit spheres instead of camera-facing ball billboards. */
-  private spheres = false
-  /** Ambient + key light, added to the field's group only in sphere mode. */
-  private lights: THREE.Light[] = []
-  /** Last node list handed to {@link sync}, so a mode switch can rewrite it. */
-  private lastNodes: readonly SimNode[] = []
+  /** Ambient + key light for the lit node spheres. */
+  private readonly lights: THREE.Light[] = []
   private matrix = new THREE.Matrix4()
   private position = new THREE.Vector3()
   private quaternion = new THREE.Quaternion()
   private scale = new THREE.Vector3()
-  /** Camera state used to billboard the glyphs and compensate perspective. */
-  private cameraQuaternion = new THREE.Quaternion()
-  private cameraPosition = new THREE.Vector3(0, 0, 10)
-  private cameraDirection = new THREE.Vector3(0, 0, -1)
-  private referenceDepth = 10
-  private viewScratch = new THREE.Vector3()
-  private cameraBound = false
   /** True while a music track is driving the colours (so one reset pass runs). */
   private audioActive = false
 
@@ -104,44 +84,17 @@ export class NodeField {
     this.baseFileColors = new Float32Array(options.maxFiles * 3)
     this.baseDirColors = new Float32Array(options.maxDirs * 3)
 
-    // Flat shapes: Gource's lit ball sprites for files, rings for directories.
-    this.fileGeometry = new THREE.PlaneGeometry(2, 2)
-    this.dirGeometry = new THREE.RingGeometry(0.58, 1, 26)
-    this.fileMaterial = this.createBillboardMaterial()
-    this.dirMaterial = new THREE.MeshBasicMaterial({
-      // The annulus is pure geometry, but it still goes through the alpha
-      // pipeline: an opaque material ignores `opacity`, so a faded ring would
-      // stay fully bright. Alpha-testing the almost-transparent fragments also
-      // keeps them from writing depth, exactly like the ball's margin.
-      transparent: true,
-      alphaTest: 0.05,
-      // Keep the depth write so branches stay hidden behind the rings.
-      depthWrite: true,
-      toneMapped: false,
-      side: THREE.DoubleSide,
-    })
+    // Both node kinds are real spheres, shaded by the field's own lights.
+    this.fileGeometry = new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS)
+    this.dirGeometry = new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS)
+    this.fileMaterial = this.createSphereMaterial()
+    this.dirMaterial = this.createSphereMaterial()
 
     this.fileMesh = this.createMesh(this.fileGeometry, this.fileMaterial, this.fileCapacity)
     this.dirMesh = this.createMesh(this.dirGeometry, this.dirMaterial, this.dirCapacity)
     this.fileMesh.renderOrder = 2
     this.dirMesh.renderOrder = 3
-  }
-
-  /**
-   * Gource's file.png: a ball lit from above-left, tinted per instance.
-   *
-   * The ball only covers a circle of the square quad. Discarding the
-   * transparent margin keeps it out of the depth buffer, so later depth-tested
-   * effects are not cut into a dark square around the ball.
-   */
-  private createBillboardMaterial(): THREE.MeshBasicMaterial {
-    return new THREE.MeshBasicMaterial({
-      map: ballTexture(),
-      transparent: true,
-      alphaTest: 0.05,
-      depthWrite: true,
-      toneMapped: false,
-    })
+    this.addLights()
   }
 
   /**
@@ -157,84 +110,20 @@ export class NodeField {
     return new THREE.MeshLambertMaterial({ toneMapped: false })
   }
 
-  /** True while files are drawn as lit spheres rather than ball billboards. */
-  get sphereMode(): boolean {
-    return this.spheres
-  }
-
   /**
-   * Draw files as real 3D spheres (or go back to the ball billboards).
+   * Add the node lighting.
    *
-   * The instanced mesh is rebuilt against the new geometry and material, then
-   * every instance is rewritten: spheres use their true world radius and no
-   * billboard rotation, so they gain real parallax. The caller may hand over the
-   * node list; otherwise the one from the last {@link sync} is reused so the
-   * transform swap is complete even mid-frame.
+   * The lights live in the field's own group and stay there for the field's
+   * lifetime; nothing else in the scene is lit, so they cannot change any other
+   * layer. The key light comes from above-left-front in the tree's own frame,
+   * matching the highlight baked into Gource's ball sprite.
    */
-  setSphereMode(enabled: boolean, nodes?: readonly SimNode[]): void {
-    if (enabled === this.spheres) return
-    this.spheres = enabled
-    this.swapFileMesh()
-    this.sync(nodes && nodes.length > 0 ? nodes : this.lastNodes, true)
-  }
-
-  /**
-   * Replace the file mesh with one built for the current mode.
-   *
-   * `InstancedMesh` bakes its geometry and material at construction, so a mode
-   * switch has to build a new mesh and carry the instance buffers over. Node ids
-   * map to the same slots, so only the buffers move.
-   */
-  private swapFileMesh(): void {
-    this.fileGeometry.dispose()
-    this.fileMaterial.dispose()
-    this.fileGeometry = this.spheres
-      ? new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS)
-      : new THREE.PlaneGeometry(2, 2)
-    this.fileMaterial = this.spheres ? this.createSphereMaterial() : this.createBillboardMaterial()
-
-    const previous = this.fileMesh
-    const replacement = this.createMesh(this.fileGeometry, this.fileMaterial, this.fileCapacity)
-    replacement.count = previous.count
-    replacement.instanceMatrix.array.set(previous.instanceMatrix.array)
-    replacement.instanceMatrix.needsUpdate = true
-    if (previous.instanceColor) {
-      replacement.setColorAt(0, scratchColor.setRGB(0, 0, 0))
-      replacement.instanceColor?.array.set(previous.instanceColor.array)
-      if (replacement.instanceColor) replacement.instanceColor.needsUpdate = true
-    }
-    replacement.renderOrder = 2
-    this.group.remove(previous)
-    previous.dispose()
-    this.fileMesh = replacement
-
-    this.setLights(this.spheres)
-  }
-
-  /**
-   * Add or remove the sphere lighting.
-   *
-   * The lights live in the field's own group and are only present in sphere
-   * mode; nothing else in the scene is lit, so toggling them cannot change any
-   * other layer. The key light comes from above-left-front in the tree's own
-   * frame, matching the highlight baked into the ball sprite.
-   */
-  private setLights(on: boolean): void {
-    if (on && this.lights.length === 0) {
-      const ambient = new THREE.AmbientLight(0xffffff, 0.6)
-      const key = new THREE.DirectionalLight(0xffffff, 1.4)
-      key.position.set(-0.6, 0.8, 1)
-      this.group.add(ambient, key)
-      this.lights = [ambient, key]
-      return
-    }
-    if (!on && this.lights.length > 0) {
-      for (const light of this.lights) {
-        this.group.remove(light)
-        light.dispose()
-      }
-      this.lights = []
-    }
+  private addLights(): void {
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6)
+    const key = new THREE.DirectionalLight(0xffffff, 1.4)
+    key.position.set(-0.6, 0.8, 1)
+    this.group.add(ambient, key)
+    this.lights.push(ambient, key)
   }
 
   private createMesh(
@@ -316,7 +205,6 @@ export class NodeField {
    * @param dirty node ids touched since the last sync (incremental playback)
    */
   sync(nodes: readonly SimNode[], full: boolean, dirty?: readonly number[]): void {
-    this.lastNodes = nodes
     if (full) {
       for (const node of nodes) {
         if (node.kind === 'file') this.allocateFile(node)
@@ -324,7 +212,7 @@ export class NodeField {
       }
       // Every allocated node is written, hidden ones included: `writeNode`
       // collapses an invisible node to a zero scale. Skipping them would leave
-      // the previous frame's circles on screen after a seek or a restart.
+      // the previous frame's spheres on screen after a seek or a restart.
       for (const node of nodes) this.writeNode(node, true)
     } else if (dirty) {
       for (const id of dirty) {
@@ -416,35 +304,6 @@ export class NodeField {
     return colorForExtension(extensionOf(node.path), scratchColor)
   }
 
-  /**
-   * Adopt the current camera pose.
-   *
-   * `target` is the orbit target. Perspective size attenuation depends on the
-   * depth along the view axis, not the straight-line distance: scaling a
-   * billboard by its own depth over the target's depth cancels it exactly, so
-   * the simulation radius stays fixed on screen. On the flat top-down view the
-   * whole scene sits at one depth, which makes the compensation a no-op and
-   * re-creates the original 2D framing.
-   */
-  private useCamera(camera?: THREE.Camera, target?: THREE.Vector3): void {
-    if (!camera) return
-    this.cameraBound = true
-    this.cameraQuaternion.copy(camera.quaternion)
-    this.cameraPosition.copy(camera.position)
-    camera.getWorldDirection(this.cameraDirection)
-    this.referenceDepth = target
-      ? Math.max(0.001, camera.position.distanceTo(target))
-      : Math.max(0.001, camera.position.length())
-  }
-
-  /** Perspective compensation for the view depth of one node from the camera. */
-  private distanceScale(): number {
-    if (!this.cameraBound) return 1
-    const nodeDepth = this.viewScratch.copy(this.position).sub(this.cameraPosition).dot(this.cameraDirection)
-    const scale = nodeDepth / this.referenceDepth
-    return Math.min(8, Math.max(0.25, scale))
-  }
-
   /** Write one node's transform, colour and visibility. */
   private writeNode(node: SimNode, updateColor: boolean): void {
     const isFile = node.kind === 'file'
@@ -468,40 +327,22 @@ export class NodeField {
   /**
    * Write the instance matrix for one node.
    *
-   * Billboards: the glyph plane is rotated to the camera's orientation and its
-   * world radius is scaled by its distance from the camera relative to the orbit
-   * target, which cancels perspective size attenuation so the fixed radius set
-   * by the simulation stays fixed on screen.
-   *
-   * Spheres (files only): no rotation and no perspective compensation. The
-   * world radius is the node radius times the radius scale, so a file near the
-   * head genuinely fills more of the view than one far away.
+   * Every node is a sphere: there is no billboard rotation and no perspective
+   * compensation. The world radius is the node radius (times the file radius
+   * scale and the pulse), so a file near the head genuinely fills more of the
+   * view than one far away.
    */
   private writeTransform(node: SimNode, instance: number, isFile: boolean, pulse: number): void {
     const mesh = isFile ? this.fileMesh : this.dirMesh
-    const spheres = this.spheres && isFile
     this.position.set(node.position.x, node.position.y, NODE_Z)
     if (!node.visible) {
-      this.matrix.compose(
-        this.position,
-        this.cameraBound ? this.cameraQuaternion : this.quaternion,
-        this.scale.set(0, 0, 0),
-      )
+      this.matrix.compose(this.position, this.quaternion, this.scale.set(0, 0, 0))
       mesh.setMatrixAt(instance, this.matrix)
       return
     }
     // The radius comes from the simulation: it encodes the file-size scale.
     const radius = Math.max(0.02, node.radius * (isFile ? this.radiusScale : 1) * pulse)
-    if (spheres) {
-      this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, radius))
-    } else {
-      const scale = radius * this.distanceScale()
-      this.matrix.compose(
-        this.position,
-        this.cameraBound ? this.cameraQuaternion : this.quaternion,
-        this.scale.set(scale, scale, 1),
-      )
-    }
+    this.matrix.compose(this.position, this.quaternion, this.scale.set(radius, radius, radius))
     mesh.setMatrixAt(instance, this.matrix)
   }
 
@@ -516,24 +357,21 @@ export class NodeField {
   }
 
   /**
-   * Animate highlights for recently touched nodes and refresh billboards.
+   * Animate highlights for recently touched nodes and apply audio modulation.
    *
-   * A new camera pose changes the orientation of every glyph, so all instances
-   * are rewritten when a camera is supplied (the normal render path). Without
-   * one the field keeps the old cheap incremental behaviour, which is useful for
-   * headless bookkeeping and tests.
+   * Only touched nodes are rewritten: sphere transforms do not depend on the
+   * camera, so moving the view needs no per-instance work. The optional audio
+   * levels modulate the palette while a track is playing; one extra pass after
+   * it stops restores the base colours.
    */
   update(
     now: number,
     nodes: readonly SimNode[],
-    camera?: THREE.Camera,
-    target?: THREE.Vector3,
     audio: AudioLevels | null = null,
   ): void {
-    this.useCamera(camera, target)
     // When the track stops reacting, one more pass restores the base colours.
     const audioPass = audio !== null || this.audioActive
-    if (this.recent.size === 0 && !this.cameraBound && !audioPass) return
+    if (this.recent.size === 0 && !audioPass) return
     let colorDirtyFiles = false
     let colorDirtyDirs = false
     const pulses = new Map<number, number>()
@@ -570,33 +408,20 @@ export class NodeField {
       else colorDirtyDirs = true
     }
 
-    if (this.cameraBound) {
-      // Camera movement requires rewriting every billboard, including pulses.
-      for (const node of nodes) {
-        const isFile = node.kind === 'file'
-        const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
-        if (instance === undefined) continue
-        const amount = pulses.get(node.id) ?? 0
-        this.writeTransform(node, instance, isFile, 1 + 0.45 * amount)
-      }
-      this.fileMesh.instanceMatrix.needsUpdate = true
-      this.dirMesh.instanceMatrix.needsUpdate = true
-    } else {
-      for (const [nodeId, amount] of pulses) {
-        const node = nodes[nodeId]
-        const isFile = node.kind === 'file'
-        const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
-        if (instance === undefined) continue
-        this.writeTransform(node, instance, isFile, 1 + 0.45 * amount)
-        if (isFile) this.fileMesh.instanceMatrix.needsUpdate = true
-        else this.dirMesh.instanceMatrix.needsUpdate = true
-      }
+    for (const [nodeId, amount] of pulses) {
+      const node = nodes[nodeId]
+      const isFile = node.kind === 'file'
+      const instance = isFile ? this.fileInstanceOf[node.id] : this.dirInstanceOf[node.id]
+      if (instance === undefined) continue
+      this.writeTransform(node, instance, isFile, 1 + 0.45 * amount)
+      if (isFile) this.fileMesh.instanceMatrix.needsUpdate = true
+      else this.dirMesh.instanceMatrix.needsUpdate = true
     }
 
     if (audioPass) {
       // Claps cycle the file palette (and flash it); low-mid energy tints the
-      // folder rings. The modulation is applied on top of the change highlight,
-      // so recent commits remain visible while the track plays.
+      // folder spheres. The modulation is applied on top of the change
+      // highlight, so recent commits remain visible while the track plays.
       const clapHue = audio ? (audio.clapCount % 12) * 0.03 + audio.clap * 0.06 : 0
       const clapLight = audio ? audio.clap * 0.12 : 0
       const folder = audio ? audio.low : 0
@@ -652,7 +477,11 @@ export class NodeField {
   }
 
   dispose(): void {
-    this.setLights(false)
+    for (const light of this.lights) {
+      this.group.remove(light)
+      light.dispose()
+    }
+    this.lights.length = 0
     this.fileGeometry.dispose()
     this.dirGeometry.dispose()
     this.fileMaterial.dispose()

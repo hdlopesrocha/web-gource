@@ -756,16 +756,7 @@ export class VisualizerController {
   }
 
   resetCamera(): void {
-    // The reset button always returns to the default 3D orbit, so clear the
-    // flat-view preference as well; otherwise the next frame would switch the
-    // camera back to top-down.
-    if (store.settings.flatCamera) this.updateSettings({ flatCamera: false })
     this.engine?.resetCamera()
-  }
-
-  /** Toggle between the 3D orbit view and the flat top-down 2D view. */
-  toggleFlatCamera(): void {
-    this.updateSettings({ flatCamera: !store.settings.flatCamera })
   }
 
   /* ------------------------------------------------------------------ *
@@ -870,7 +861,6 @@ export class VisualizerController {
       plasmaDecay: settings.plasmaDecay,
       plasmaHeight: settings.plasmaHeight,
       plasmaSteps: settings.plasmaSteps,
-      renderSpheres: settings.renderSpheres,
     }
   }
 
@@ -878,7 +868,6 @@ export class VisualizerController {
     followActivity: boolean
     autoZoom: boolean
     smoothing: number
-    flat: boolean
     gamepad: boolean
     gamepadSensitivity: number
     gyro: boolean
@@ -887,7 +876,6 @@ export class VisualizerController {
       followActivity: store.settings.followActivity,
       autoZoom: store.settings.autoZoom,
       smoothing: 1.4,
-      flat: store.settings.flatCamera,
       gamepad: store.settings.gamepad,
       gamepadSensitivity: store.settings.gamepadSensitivity,
       gyro: store.settings.gyro,

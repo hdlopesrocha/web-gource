@@ -148,8 +148,8 @@ describe('XrSession', () => {
     await controller.enter()
 
     // The tree keeps its tabletop scale but is centred on the scene origin, and
-    // the user stands there at the height the on-screen camera has; the camera
-    // rides the rig so three can pose it.
+    // the rig stays on the local floor there; the headset pose supplies the
+    // real eye height. The camera rides the rig so three can pose it.
     const scale = 1.5 / 40
     expect(camera.parent).toBe(rig)
     expect(rig.parent).toBe(scene)
@@ -159,7 +159,7 @@ describe('XrSession', () => {
     expect(root.position.z).toBeCloseTo(0, 6)
     expect(rig.position.x).toBeCloseTo(0, 6)
     expect(rig.position.y).toBeCloseTo(0, 6)
-    expect(rig.position.z).toBeCloseTo(6 * scale, 6)
+    expect(rig.position.z).toBeCloseTo(0, 6)
     expect(store.ui.xrActive).toBe(true)
 
     for (const listener of [...listeners]) listener()
@@ -178,7 +178,7 @@ describe('XrSession', () => {
     expect(controller.active).toBe(false)
   })
 
-  it('stands the user at the scene origin at the on-screen eye height', async () => {
+  it('stands the user on the local floor at the scene origin', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -198,11 +198,11 @@ describe('XrSession', () => {
     await controller.enter()
 
     const scale = 1.5 / 60
-    // x = 0, y = 0: the user stands at the scene origin. The height is the
-    // on-screen camera's height, in the same scaled units as the tabletop.
+    // The rig sits on the local-floor origin; the headset pose alone supplies
+    // the real eye height, regardless of where the on-screen camera is.
     expect(rig.position.x).toBeCloseTo(0, 6)
     expect(rig.position.y).toBeCloseTo(0, 6)
-    expect(rig.position.z).toBeCloseTo(9 * scale, 6)
+    expect(rig.position.z).toBeCloseTo(0, 6)
     // The world is no longer tipped or pushed in front: it is only scaled and
     // centred, so its local axes can be treated as the room's.
     expect(root.quaternion.equals(new THREE.Quaternion())).toBe(true)

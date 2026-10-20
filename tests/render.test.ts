@@ -162,96 +162,33 @@ describe('NodeField', () => {
     field.dispose()
   })
 
-  it('billboards nodes and compensates perspective so their size stays fixed', () => {
-    const field = new NodeField({ maxFiles: 8, maxDirs: 8, colorMode: 'extension' })
-    const target = new THREE.Vector3(0, 0, 0)
-    const near = node(1, { position: { x: 0, y: 0, z: 0 } })
-    const far = node(2, { position: { x: 80, y: 0, z: 0 } })
-    const nodes = [node(0, { kind: 'root', path: '' }), near, far]
-    field.sync(nodes, true)
-
-    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 1000)
-    camera.position.set(120, 80, 160)
-    camera.lookAt(target)
-    camera.updateMatrixWorld()
-    field.update(0, nodes, camera, target)
-
-    const mesh = (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
-    const nearMatrix = new THREE.Matrix4()
-    const farMatrix = new THREE.Matrix4()
-    mesh.getMatrixAt(0, nearMatrix)
-    mesh.getMatrixAt(1, farMatrix)
-
-    const nearScale = new THREE.Vector3()
-    const farScale = new THREE.Vector3()
-    const nearQuaternion = new THREE.Quaternion()
-    const farQuaternion = new THREE.Quaternion()
-    const position = new THREE.Vector3()
-    nearMatrix.decompose(position, nearQuaternion, nearScale)
-    farMatrix.decompose(position, farQuaternion, farScale)
-
-    // Both glyphs face the camera exactly (allowing matrix round-off).
-    expect(nearQuaternion.angleTo(camera.quaternion)).toBeLessThan(1e-4)
-    expect(farQuaternion.angleTo(camera.quaternion)).toBeLessThan(1e-4)
-
-    // The far node grows in world units by the view-depth ratio, cancelling the
-    // perspective shrink; both end up the same number of pixels on screen.
-    const direction = target.clone().sub(camera.position).normalize()
-    const depthOf = (x: number) =>
-      new THREE.Vector3(x, 0, NODE_Z).sub(camera.position).dot(direction)
-    const nearDepth = depthOf(near.position.x)
-    const farDepth = depthOf(far.position.x)
-    expect(farScale.x / nearScale.x).toBeCloseTo(farDepth / nearDepth, 5)
-    field.dispose()
-  })
-
-  it('keeps every billboard the same size in the flat top-down view', () => {
-    const field = new NodeField({ maxFiles: 8, maxDirs: 8, colorMode: 'extension' })
-    const left = node(1, { position: { x: -60, y: 0, z: 0 } })
-    const right = node(2, { position: { x: 60, y: 0, z: 0 } })
-    const nodes = [node(0, { kind: 'root', path: '' }), left, right]
-    field.sync(nodes, true)
-
-    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 1000)
-    const target = new THREE.Vector3(0, 0, 0)
-    camera.position.set(0, 0, 200)
-    camera.lookAt(target)
-    camera.updateMatrixWorld()
-    field.update(0, nodes, camera, target)
-
-    const mesh = (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
-    const matrices = [new THREE.Matrix4(), new THREE.Matrix4()]
-    mesh.getMatrixAt(0, matrices[0])
-    mesh.getMatrixAt(1, matrices[1])
-    const scales = matrices.map((matrix) => new THREE.Vector3().setFromMatrixScale(matrix))
-    // Straight above the plane, every node shares one view depth, so the
-    // perspective compensation is a no-op and the old 2D framing is restored.
-    expect(scales[1].x).toBeCloseTo(scales[0].x, 5)
-    field.dispose()
-  })
-
-  it('discards the transparent margin of a ball before writing depth', () => {
+  it('draws both node kinds as lit spheres that write depth', () => {
     const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
-    const material = (field as unknown as { fileMaterial: THREE.MeshBasicMaterial }).fileMaterial
-    // Without an alpha test the whole square quad would write depth, punching a
-    // dark square hole in the additive plasma drawn behind the file.
-    expect(material.transparent).toBe(true)
-    expect(material.alphaTest).toBeGreaterThan(0)
-    field.dispose()
-  })
+    const internals = field as unknown as {
+      fileMesh: THREE.InstancedMesh
+      dirMesh: THREE.InstancedMesh
+      fileMaterial: THREE.MeshLambertMaterial
+      dirMaterial: THREE.MeshLambertMaterial
+      lights: THREE.Light[]
+    }
+    // Real geometry, not a textured quad: files and directories share the lit
+    // material path, so they occlude the branches behind them.
+    expect(internals.fileMesh.geometry.type).toBe('SphereGeometry')
+    expect(internals.dirMesh.geometry.type).toBe('SphereGeometry')
+    for (const material of [internals.fileMaterial, internals.dirMaterial]) {
+      expect(material.type).toBe('MeshLambertMaterial')
+      expect(material.transparent).toBe(false)
+      expect(material.depthWrite).toBe(true)
+      expect(material.toneMapped).toBe(false)
+    }
 
-  it('lets a directory ring fade instead of staying fully bright', () => {
-    const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
-    const material = (field as unknown as { dirMaterial: THREE.MeshBasicMaterial }).dirMaterial
-    // The annulus is pure geometry, but an opaque material ignores `opacity`:
-    // a fading ring would keep its full brightness. Alpha-testing the
-    // transparent fragments also keeps the ring's square footprint out of the
-    // depth buffer, so no dark corner can appear around it.
-    expect(material.transparent).toBe(true)
-    expect(material.alphaTest).toBeGreaterThan(0)
-    // The ring still writes depth, so branches stay hidden behind it.
-    expect(material.depthWrite).toBe(true)
+    // The field owns the ambient + key light, so both meshes are shaded.
+    expect(internals.lights.some((light) => light instanceof THREE.AmbientLight)).toBe(true)
+    expect(internals.lights.some((light) => light instanceof THREE.DirectionalLight)).toBe(true)
+
     field.dispose()
+    expect(internals.lights).toHaveLength(0)
+    expect(field.group.children.some((child) => (child as THREE.Light).isLight)).toBe(false)
   })
 
   it('cycles file colours with claps and restores them when the track stops', () => {
@@ -263,7 +200,7 @@ describe('NodeField', () => {
     mesh.getColorAt(0, color)
     const base = color.getHex()
 
-    field.update(0, nodes, undefined, undefined, {
+    field.update(0, nodes, {
       bass: 0,
       low: 0,
       mid: 0,
@@ -274,7 +211,7 @@ describe('NodeField', () => {
     mesh.getColorAt(0, color)
     expect(color.getHex()).not.toBe(base)
 
-    field.update(0, nodes, undefined, undefined, null)
+    field.update(0, nodes, null)
     mesh.getColorAt(0, color)
     expect(color.getHex()).toBe(base)
     field.dispose()

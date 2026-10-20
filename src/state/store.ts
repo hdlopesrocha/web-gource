@@ -237,8 +237,6 @@ export interface AppState {
   settings: RendererSettings & {
     followActivity: boolean
     autoZoom: boolean
-    /** Flat top-down 2D camera instead of the default 3D orbit. */
-    flatCamera: boolean
     /** Let the background track drive the plasma hue, file colours and pulses. */
     audioReactive: boolean
     /** How file circles are sized: host-reported bytes, line activity, uniform. */
@@ -347,10 +345,8 @@ const defaultSettings: AppState['settings'] = {
   plasmaDecay: 5,
   plasmaHeight: 1.5,
   plasmaSteps: 48,
-  renderSpheres: false,
   followActivity: true,
   autoZoom: true,
-  flatCamera: false,
   audioReactive: true,
   sizeMode: 'bytes',
   dynamicLayout: true,

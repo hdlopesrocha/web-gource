@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { NodeField } from '../src/render/nodes'
-import { SceneRenderer, effectiveSphereMode } from '../src/render/renderer'
-import { colorForExtension } from '../src/render/palette'
+import { NODE_Z, NodeField } from '../src/render/nodes'
+import { SceneRenderer } from '../src/render/renderer'
+import { DIR_COLOR, ROOT_COLOR, colorForExtension } from '../src/render/palette'
 import type { SimNode } from '../src/sim/simulation'
 
 /**
- * Sphere mode: files as real instanced geometry instead of camera-facing ball
- * billboards. Like the rest of `render.test.ts` this exercises the GPU
- * bookkeeping without a WebGL context — three's data structures are plain
- * JavaScript until something is rendered.
+ * Sphere-only node field: both files and directories are real instanced
+ * geometry with a lit material. Like the other renderer tests this exercises
+ * the GPU bookkeeping without a WebGL context — three's data structures are
+ * plain JavaScript until something is rendered.
  */
 
 function node(id: number, overrides: Partial<SimNode> = {}): SimNode {
@@ -42,7 +42,10 @@ function node(id: number, overrides: Partial<SimNode> = {}): SimNode {
   }
 }
 
-/** The file mesh is replaced on every mode switch, so always re-read it. */
+function directory(id: number, overrides: Partial<SimNode> = {}): SimNode {
+  return node(id, { kind: 'dir', path: `src/dir-${id}`, name: `dir-${id}`, ...overrides })
+}
+
 function fileMesh(field: NodeField): THREE.InstancedMesh {
   return (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
 }
@@ -51,153 +54,192 @@ function dirMesh(field: NodeField): THREE.InstancedMesh {
   return (field as unknown as { dirMesh: THREE.InstancedMesh }).dirMesh
 }
 
-describe('NodeField sphere mode', () => {
-  it('swaps the file geometry and material for lit spheres and back', () => {
+function lights(field: NodeField): THREE.Light[] {
+  return (field as unknown as { lights: THREE.Light[] }).lights
+}
+
+describe('NodeField spheres', () => {
+  it('renders files and directories as lit instanced spheres', () => {
     const field = new NodeField({ maxFiles: 8, maxDirs: 4, colorMode: 'extension' })
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1)]
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1), directory(2)]
     field.sync(nodes, true)
 
-    expect(fileMesh(field).geometry.type).toBe('PlaneGeometry')
-    expect((fileMesh(field).material as THREE.Material).type).toBe('MeshBasicMaterial')
-
-    field.setSphereMode(true)
     expect(fileMesh(field).geometry.type).toBe('SphereGeometry')
+    expect(dirMesh(field).geometry.type).toBe('SphereGeometry')
     expect((fileMesh(field).material as THREE.Material).type).toBe('MeshLambertMaterial')
-    // Spheres keep the file slot in the depth/render order.
+    expect((dirMesh(field).material as THREE.Material).type).toBe('MeshLambertMaterial')
+
+    // Both kinds keep their existing depth order.
     expect(fileMesh(field).renderOrder).toBe(2)
+    expect(dirMesh(field).renderOrder).toBe(3)
+    expect(fileMesh(field).count).toBe(1)
+    expect(dirMesh(field).count).toBe(2)
 
-    // Directories keep their rings: the spheres are a file-only feature.
-    expect(dirMesh(field).geometry.type).toBe('RingGeometry')
-    expect((dirMesh(field).material as THREE.Material).type).toBe('MeshBasicMaterial')
+    // Ambient + key light live in the field's group so both meshes are shaded.
+    const kinds = lights(field).map((light) => light.type)
+    expect(kinds).toContain('AmbientLight')
+    expect(kinds).toContain('DirectionalLight')
+    for (const light of lights(field)) expect(light.parent).toBe(field.group)
 
-    field.setSphereMode(false)
-    expect(fileMesh(field).geometry.type).toBe('PlaneGeometry')
-    expect((fileMesh(field).material as THREE.Material).type).toBe('MeshBasicMaterial')
     field.dispose()
   })
 
-  it('writes world-scaled transforms with no billboard rotation', () => {
+  it('writes world-scaled transforms with no billboard rotation or perspective compensation', () => {
     const field = new NodeField({ maxFiles: 8, maxDirs: 4, colorMode: 'extension' })
-    const target = new THREE.Vector3(0, 0, 0)
+    const root = node(0, { kind: 'root', path: '', radius: 0.6 })
     const near = node(1, { position: { x: 0, y: 0, z: 0 }, radius: 0.2 })
     const far = node(2, { position: { x: 80, y: 0, z: 0 }, radius: 0.2 })
-    const nodes = [node(0, { kind: 'root', path: '' }), near, far]
+    const nodes = [root, near, far]
     field.sync(nodes, true)
 
-    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 1000)
-    camera.position.set(120, 80, 160)
-    camera.lookAt(target)
-    camera.updateMatrixWorld()
-
-    field.setSphereMode(true)
-    field.update(0, nodes, camera, target)
-
-    const mesh = fileMesh(field)
     const matrix = new THREE.Matrix4()
     const position = new THREE.Vector3()
     const quaternion = new THREE.Quaternion()
     const scale = new THREE.Vector3()
+    const identity = new THREE.Quaternion()
 
-    // Near file: no billboard rotation at all...
-    mesh.getMatrixAt(0, matrix)
+    // Near file: no billboard rotation and its true world radius.
+    fileMesh(field).getMatrixAt(0, matrix)
     matrix.decompose(position, quaternion, scale)
-    expect(quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-6)
-    // ...and a true world radius (node radius × radius scale), with no
-    // perspective compensation.
+    expect(quaternion.angleTo(identity)).toBeLessThan(1e-6)
     expect(scale.x).toBeCloseTo(0.2, 6)
     expect(scale.y).toBeCloseTo(0.2, 6)
     expect(scale.z).toBeCloseTo(0.2, 6)
+    expect(position.z).toBeCloseTo(NODE_Z, 6)
 
-    // The far file is the same world size: the perspective does the shrinking,
-    // which is exactly the parallax the billboards were cancelling.
-    mesh.getMatrixAt(1, matrix)
+    // The far file keeps the same world size: perspective does the shrinking,
+    // which is the parallax the old billboards were cancelling.
+    fileMesh(field).getMatrixAt(1, matrix)
     matrix.decompose(position, quaternion, scale)
+    expect(quaternion.angleTo(identity)).toBeLessThan(1e-6)
     expect(scale.x).toBeCloseTo(0.2, 6)
+
+    // The radius scale applies to files only; directories keep their radius.
+    field.setRadiusScale(2)
+    field.sync(nodes, true)
+    fileMesh(field).getMatrixAt(0, matrix)
+    matrix.decompose(position, quaternion, scale)
+    expect(scale.x).toBeCloseTo(0.4, 6)
+    dirMesh(field).getMatrixAt(0, matrix)
+    matrix.decompose(position, quaternion, scale)
+    expect(quaternion.angleTo(identity)).toBeLessThan(1e-6)
+    expect(scale.x).toBeCloseTo(0.6, 6)
+
     field.dispose()
   })
 
-  it('keeps the palette colours and the touch highlight', () => {
+  it('keeps palette colours and touch highlights for files and directories', () => {
     const field = new NodeField({ maxFiles: 8, maxDirs: 4, colorMode: 'extension' })
-    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { path: 'src/a.ts' })]
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { path: 'src/a.ts' }), directory(2)]
     field.sync(nodes, true)
-    const expected = colorForExtension('ts').getHex()
 
-    field.setSphereMode(true)
+    const fileBase = colorForExtension('ts').getHex()
     const color = new THREE.Color()
     fileMesh(field).getColorAt(0, color)
-    expect(color.getHex()).toBe(expected)
+    expect(color.getHex()).toBe(fileBase)
+    dirMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(ROOT_COLOR.getHex())
+    dirMesh(field).getColorAt(1, color)
+    expect(color.getHex()).toBe(DIR_COLOR.getHex())
 
-    // The change highlight still blends over the palette colour.
+    // The change highlight blends over the palette colour on both kinds.
     field.touch(1, 'delete', 0)
+    field.touch(2, 'modify', 0)
     field.update(0.2, nodes)
     fileMesh(field).getColorAt(0, color)
-    expect(color.getHex()).not.toBe(expected)
+    expect(color.getHex()).not.toBe(fileBase)
+    const rootBase = ROOT_COLOR.getHex()
+    dirMesh(field).getColorAt(1, color)
+    expect(color.getHex()).not.toBe(DIR_COLOR.getHex())
+
+    // Once the touch expires, the palette colours come back.
+    field.update(2, nodes)
+    fileMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(fileBase)
+    dirMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(rootBase)
     field.dispose()
   })
 
-  it('collapses hidden nodes, grows capacity and resets in sphere mode', () => {
+  it('modulates both node kinds with audio and restores the palette', () => {
+    const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { path: 'src/a.ts' })]
+    field.sync(nodes, true)
+
+    const color = new THREE.Color()
+    const fileBase = colorForExtension('ts').getHex()
+    fileMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(fileBase)
+    const rootBase = ROOT_COLOR.getHex()
+
+    field.update(0, nodes, {
+      bass: 0,
+      low: 1,
+      mid: 0,
+      voice: 0,
+      clap: 0.5,
+      clapCount: 4,
+    })
+    fileMesh(field).getColorAt(0, color)
+    expect(color.getHex()).not.toBe(fileBase)
+    dirMesh(field).getColorAt(0, color)
+    expect(color.getHex()).not.toBe(rootBase)
+
+    field.update(0, nodes, null)
+    fileMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(fileBase)
+    dirMesh(field).getColorAt(0, color)
+    expect(color.getHex()).toBe(rootBase)
+    field.dispose()
+  })
+
+  it('collapses hidden nodes, grows capacity and resets both meshes', () => {
     const field = new NodeField({ maxFiles: 4, maxDirs: 2, colorMode: 'extension' })
     const nodes: SimNode[] = [node(0, { kind: 'root', path: '' })]
     for (let index = 1; index <= 30; index += 1) nodes.push(node(index))
+    for (let index = 31; index <= 36; index += 1) nodes.push(directory(index))
 
-    field.setSphereMode(true)
     field.sync(nodes, true)
-    expect(field.stats.files).toBe(30)
-    expect(field.drawn.files).toBe(30)
+    expect(field.stats).toEqual({ files: 30, dirs: 7 })
+    expect(field.drawn).toEqual({ files: 30, dirs: 7 })
+    // Capacity growth must keep the sphere geometry for both kinds.
+    expect(fileMesh(field).geometry.type).toBe('SphereGeometry')
+    expect(dirMesh(field).geometry.type).toBe('SphereGeometry')
 
-    // Capacity growth must reuse the sphere geometry, not the billboard plane.
-    const mesh = fileMesh(field)
-    expect(mesh.geometry.type).toBe('SphereGeometry')
     const matrix = new THREE.Matrix4()
-    mesh.getMatrixAt(3, matrix)
-    expect(matrix.elements[0]).toBeGreaterThan(0)
-
-    // Node 4 owns file instance 3 (the root takes the first directory slot).
+    // File id 4 owns file instance 3.
     nodes[4].visible = false
     field.sync(nodes, false, [4])
-    mesh.getMatrixAt(3, matrix)
+    fileMesh(field).getMatrixAt(3, matrix)
     expect(matrix.elements[0]).toBe(0)
-    expect(field.drawn.files).toBe(29)
+    // Directory id 31 owns directory instance 1 (the root is slot 0).
+    nodes[31].visible = false
+    field.sync(nodes, false, [31])
+    dirMesh(field).getMatrixAt(1, matrix)
+    expect(matrix.elements[0]).toBe(0)
+    expect(field.drawn).toEqual({ files: 29, dirs: 6 })
 
     field.reset()
-    expect(field.stats.files).toBe(0)
+    expect(field.stats).toEqual({ files: 0, dirs: 0 })
+    expect(field.drawn).toEqual({ files: 0, dirs: 0 })
     expect(fileMesh(field).count).toBe(0)
+    expect(dirMesh(field).count).toBe(0)
     field.dispose()
   })
 })
 
-describe('sphere mode wiring', () => {
-  it('documents the effective-mode rule', () => {
-    expect(effectiveSphereMode(false, false)).toBe(false)
-    expect(effectiveSphereMode(true, false)).toBe(true)
-    // A running immersive session implies spheres even when the setting is off.
-    expect(effectiveSphereMode(false, true)).toBe(true)
-    expect(effectiveSphereMode(true, true)).toBe(true)
-  })
-
-  it('switches through SceneRenderer.applySettings and follows the XR manager', () => {
+describe('sphere-only renderer wiring', () => {
+  it('builds sphere node fields and applies radius scale without a mode switch', () => {
     const renderer = new SceneRenderer(stubCanvas(), { gl: fakeGl() })
     const field = (renderer as unknown as { nodes: NodeField }).nodes
-    const xr = (renderer.webgl as unknown as { xr: { isPresenting: boolean } }).xr
 
-    expect(field.sphereMode).toBe(false)
-    renderer.applySettings({ renderSpheres: true })
-    expect(field.sphereMode).toBe(true)
     expect(fileMesh(field).geometry.type).toBe('SphereGeometry')
+    expect(dirMesh(field).geometry.type).toBe('SphereGeometry')
+    expect('renderSpheres' in renderer.currentSettings).toBe(false)
 
-    renderer.applySettings({ renderSpheres: false })
-    expect(field.sphereMode).toBe(false)
-    expect(fileMesh(field).geometry.type).toBe('PlaneGeometry')
-
-    // While an immersive session runs the spheres are forced on...
-    xr.isPresenting = true
-    renderer.applySettings({})
-    expect(field.sphereMode).toBe(true)
-
-    // ...and the setting takes over again when it ends.
-    xr.isPresenting = false
-    renderer.applySettings({})
-    expect(field.sphereMode).toBe(false)
+    renderer.applySettings({ radiusScale: 2 })
+    expect(fileMesh(field).geometry.type).toBe('SphereGeometry')
+    expect(dirMesh(field).geometry.type).toBe('SphereGeometry')
     renderer.dispose()
   })
 })

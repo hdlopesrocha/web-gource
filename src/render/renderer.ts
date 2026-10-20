@@ -17,7 +17,7 @@ export interface RendererSettings {
   showEdges: boolean
   edgeOpacity: number
   showDirs: boolean
-  /** Multiplier for file circle radii. */
+  /** Multiplier for file sphere radii. */
   radiusScale: number
   /** 0 disables particles entirely. */
   particleIntensity: number
@@ -29,7 +29,7 @@ export interface RendererSettings {
   showAuthorNames: boolean
   showAuthorGlow: boolean
   authorScale: number
-  /** Faint background grid (helps with panning/zooming in 2D). */
+  /** Faint background grid (helps with panning and zooming). */
   showGrid: boolean
   gridSpacing: number
   /** Beams from an author to the files it just changed (Gource tethers). */
@@ -59,12 +59,6 @@ export interface RendererSettings {
   plasmaHeight: number
   /** Ray-march steps per pixel. */
   plasmaSteps: number
-  /**
-   * Draw files as real 3D spheres (instanced geometry with lighting) instead of
-   * the camera-facing ball billboards. Implied while an immersive WebXR session
-   * is running, where the flat billboards read as flat discs.
-   */
-  renderSpheres: boolean
 }
 
 export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
@@ -97,7 +91,6 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
   plasmaDecay: 5,
   plasmaHeight: 1.5,
   plasmaSteps: DEFAULT_PLASMA_STEPS,
-  renderSpheres: false,
 }
 
 /**
@@ -107,7 +100,7 @@ export const DEFAULT_RENDERER_SETTINGS: RendererSettings = {
  *
  * The background is now a full-screen gradient drawn independently of the
  * camera, so it does not need a world depth. The grid is a transparent overlay,
- * so it is drawn after the opaque circles; depth testing (not the render order)
+ * so it is drawn after the opaque spheres; depth testing (not the render order)
  * is what keeps it behind the tree.
  */
 export const GRID_Z = -0.6
@@ -137,29 +130,15 @@ export interface SceneRendererOptions {
 }
 
 /**
- * Whether files should be drawn as real spheres.
- *
- * The user setting wins, and an immersive XR session forces them on: flat
- * billboards read as flat discs in a headset, where the depth cue is the whole
- * point.
- *
- * The flat top-down 2D view needs no special case: every node is at one view
- * depth there, so a sphere's world radius and a billboard's compensated radius
- * are the same number and the two modes differ only in shading.
- */
-export function effectiveSphereMode(renderSpheres: boolean, xrPresenting: boolean): boolean {
-  return renderSpheres || xrPresenting
-}
-
-/**
- * The 3D WebGL scene: file and directory billboards, branch edges, activity
+ * The 3D WebGL scene: file and directory spheres, branch edges, activity
  * particles, author avatars, labels and the background grid.
  *
  * The tree layout stays on the XY plane (as in Gource), but it is viewed
- * through a perspective orbit camera. Nodes are billboards facing the camera
- * with perspective-compensated scale, so their on-screen size stays fixed. The
- * renderer reacts to {@link SimEvent}s and to full-sync
- * requests after a seek, which keeps playback and scrubbing identical.
+ * through a perspective orbit camera. Both node kinds are real spheres with a
+ * lit material and their true world radius, so near nodes read as nearer and
+ * the tree gains parallax. The renderer reacts to {@link SimEvent}s and to
+ * full-sync requests after a seek, which keeps playback and scrubbing
+ * identical.
  */
 export class SceneRenderer {
   readonly scene = new THREE.Scene()
@@ -320,10 +299,10 @@ export class SceneRenderer {
    * Grid that follows the camera so panning and zooming stay readable.
    *
    * It is a transparent overlay (the lines fade out), which means it is drawn in
-   * the transparent pass *after* the opaque node circles. Depth testing is what
-   * keeps it behind them: the circles are nearer to the camera and already wrote
-   * depth, so the grid is rejected wherever a circle covers it. Without the
-   * depth test the grid would be painted over the tree.
+   * the transparent pass *after* the opaque node spheres. Depth testing is what
+   * keeps it behind them: the spheres are nearer to the camera and already wrote
+   * depth, so the grid is rejected wherever one covers it. Without the depth
+   * test the grid would be painted over the tree.
    */
   private createGrid(): THREE.Mesh {
     const geometry = new THREE.PlaneGeometry(1, 1)
@@ -378,10 +357,6 @@ export class SceneRenderer {
     this.settings = { ...previous, ...settings }
     this.nodes.setColorMode(this.settings.fileColorMode, this.pendingNodes ?? [])
     this.nodes.setRadiusScale(this.settings.radiusScale)
-    this.nodes.setSphereMode(
-      effectiveSphereMode(this.settings.renderSpheres, this.gl.xr.isPresenting),
-      this.pendingNodes ?? [],
-    )
     this.edges.setOpacity(this.settings.edgeOpacity)
     this.edges.lines.visible = this.settings.showEdges
     this.nodes.setDirsVisible(this.settings.showDirs, this.pendingNodes ?? [])
@@ -532,17 +507,11 @@ export class SceneRenderer {
     const simTime = sim.currentTime
     this.pendingNodes = nodes
 
-    // Files switch to real spheres either by setting or while an immersive
-    // session runs (flat billboards read as discs in a headset). The check is
-    // cheap and keeps the two sources of truth — the setting and the session —
-    // from drifting apart when a session starts or ends mid-playback.
-    const spheres = effectiveSphereMode(this.settings.renderSpheres, this.gl.xr.isPresenting)
-    if (this.nodes.sphereMode !== spheres) this.nodes.setSphereMode(spheres, nodes)
-
-    // Every billboard faces the viewer: the orbit camera normally, the headset
-    // pose while presenting. The pose arrives in world coordinates, so it is
-    // mapped into the tabletop's own frame, which is the frame the fields (and
-    // the node positions) are expressed in.
+    // The camera-facing layers (labels, beams and plasma) face the viewer: the
+    // orbit camera normally, the headset pose while presenting. The pose
+    // arrives in world coordinates, so it is mapped into the tabletop's own
+    // frame, which is the frame the fields (and the node positions) are
+    // expressed in.
     const view = this.viewCamera(camera)
 
     // Nodes easing towards a new layout position (dynamic file rings).
@@ -551,7 +520,7 @@ export class SceneRenderer {
       this.nodes.sync(nodes, false, moved)
       this.edges.sync(nodes, false, moved)
     }
-    this.nodes.update(simTime, nodes)
+    this.nodes.update(simTime, nodes, audio)
     this.edges.update(simTime, nodes)
     this.particles.update(dt)
 
@@ -573,9 +542,6 @@ export class SceneRenderer {
     const worldPerPixel = camera.worldPerPixel(this.size.height)
     this.authors.sync(authors, worldPerPixel * MIN_AVATAR_PIXELS, audio?.voice ?? 0)
 
-    // The nodes are camera-facing billboards. The fixed scale is compensated
-    // inside those layers from the same orbit target.
-    this.nodes.update(simTime, nodes, view, focus, audio)
     this.edges.applyAudio(audio)
 
     // The plasma volume is ray-marched in the fragment shader. It is drawn
@@ -618,14 +584,15 @@ export class SceneRenderer {
   }
 
   /**
-   * Camera the billboards should face.
+   * Camera for the camera-facing layers.
    *
    * Normally the orbit camera. While presenting, the headset pose comes from
    * `renderer.xr.getCamera()`; it is expressed in world coordinates, so it is
    * mapped into the tabletop's frame (the `world` group is tipped and scaled
-   * into the room) before being handed to the fields, which all work in that
-   * local frame. The projection matrices are copied for completeness, but the
-   * plasma rays come from the eye camera that is drawing the quad (see
+   * into the room) before being handed to the layers that still face the
+   * viewer (labels, beams and the plasma rays), which all work in that local
+   * frame. The projection matrices are copied for completeness, but the plasma
+   * rays come from the eye camera that is drawing the quad (see
    * `PlasmaField.syncCamera`), not from this stereo union frustum.
    */
   private viewCamera(camera: OrbitCamera): THREE.Camera {
@@ -648,7 +615,7 @@ export class SceneRenderer {
 
   /**
    * Diagnostics for the branch lines: how far every drawn endpoint sits outside
-   * the circle it belongs to. A negative clearance would mean a line running
+   * the sphere it belongs to. A negative clearance would mean a line running
    * into a node.
    */
   lineClearance(): { edges: number; minChildClearance: number; minParentClearance: number } | null {
