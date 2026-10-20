@@ -12,24 +12,13 @@ const SNAPSHOT_CHOICES = [
   { value: 4000, label: '4000 commits', hint: 'Very large snapshot. Expect a long load and heavy GPU usage.' },
 ]
 
-// A one-click set of projects for the multi-repository scene, oldest first by
-// repository creation date. The bare `hdlopesrocha/` owner page is not a
-// repository, so it is intentionally left out; `cardgame` is not currently
-// public, so it has no date and stays last.
-const BULK_REPOSITORIES = [
-  'hdlopesrocha/hydrogen-vulkan', // 2021-06-30
-  'hdlopesrocha/lora-control', // 2024-08-17
+// A one-click pair of projects for the multi-repository scene, oldest first by
+// repository creation date.
+const SAMPLE_REPOSITORIES = [
   'hdlopesrocha/lithos-engine', // 2024-12-09
   'hdlopesrocha/vulkan-engine', // 2025-12-06
-  'hdlopesrocha/card-generator', // 2026-09-30
-  'hdlopesrocha/sdf-smoke', // 2026-10-05
-  'hdlopesrocha/opencode-talk', // 2026-10-07
-  'hdlopesrocha/hdlopesrocha.github.io', // 2026-10-08
-  'hdlopesrocha/web-gource', // 2026-10-11
-  'hdlopesrocha/infinity-edge-web', // 2026-10-14
-  'hdlopesrocha/cardgame',
 ]
-const bulkFillLabel = `Fill all ${BULK_REPOSITORIES.length} repositories`
+const sampleFillLabel = `Fill ${SAMPLE_REPOSITORIES.length} repositories`
 
 // Pre-fill the projects from the last run. Profiles saved before multiple
 // projects only have `lastUrl`, which the store already migrated to `urls`.
@@ -152,8 +141,8 @@ function applyExample(url: string): void {
  * Replace the rows with a prepared multi-repository list. This only fills the
  * form: loading still starts from the primary load button.
  */
-function fillAllRepositories(): void {
-  rows.value = [...BULK_REPOSITORIES]
+function fillSampleRepositories(): void {
+  rows.value = [...SAMPLE_REPOSITORIES]
   focusedRow.value = null
   store.loading.error = null
   syncUrl()
@@ -337,12 +326,12 @@ const examples = [
           {{ example.label }}
         </button>
         <button
-          class="btn small fill-all"
+          class="btn small fill-samples"
           type="button"
-          :title="`Replace the list with all ${BULK_REPOSITORIES.length} hdlopesrocha repositories`"
-          @click="fillAllRepositories"
+          :title="`Replace the list with ${SAMPLE_REPOSITORIES.join(' and ')}`"
+          @click="fillSampleRepositories"
         >
-          {{ bulkFillLabel }}
+          {{ sampleFillLabel }}
         </button>
       </section>
 
@@ -647,13 +636,13 @@ const examples = [
   font-size: 13px;
 }
 
-.fill-all {
+.fill-samples {
   border-color: rgba(94, 200, 255, 0.38);
   background: rgba(47, 125, 224, 0.16);
   color: #d6efff;
 }
 
-.fill-all:hover:not(:disabled) {
+.fill-samples:hover:not(:disabled) {
   border-color: rgba(94, 200, 255, 0.6);
   background: rgba(47, 125, 224, 0.26);
 }

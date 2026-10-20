@@ -179,10 +179,10 @@ describe('LandingView', () => {
     expect(wrapper.text()).toContain('Load 2 repositories')
   })
 
-  it('fills the form with every repository from the bulk example', async () => {
+  it('fills the form with the two multi-repository samples', async () => {
     store.loading.error = 'old error'
     const wrapper = mount(LandingView)
-    const fill = wrapper.findAll('button').find((button) => button.text().includes('Fill all 11 repositories'))
+    const fill = wrapper.findAll('button').find((button) => button.text().includes('Fill 2 repositories'))
     expect(fill).toBeTruthy()
     await fill!.trigger('click')
 
@@ -190,21 +190,10 @@ describe('LandingView', () => {
       .findAll('input[aria-label="Repository URL"]')
       .map((input) => (input.element as HTMLInputElement).value)
     expect(values).toEqual([
-      'hdlopesrocha/hydrogen-vulkan',
-      'hdlopesrocha/lora-control',
       'hdlopesrocha/lithos-engine',
       'hdlopesrocha/vulkan-engine',
-      'hdlopesrocha/card-generator',
-      'hdlopesrocha/sdf-smoke',
-      'hdlopesrocha/opencode-talk',
-      'hdlopesrocha/hdlopesrocha.github.io',
-      'hdlopesrocha/web-gource',
-      'hdlopesrocha/infinity-edge-web',
-      'hdlopesrocha/cardgame',
     ])
-    expect(values.every((value) => value.startsWith('hdlopesrocha/'))).toBe(true)
-    expect(values).not.toContain('hdlopesrocha/')
-    expect(wrapper.text()).toContain('Load 11 repositories')
+    expect(wrapper.text()).toContain('Load 2 repositories')
     expect(store.url).toBe(values[0])
     expect(store.loading.error).toBeNull()
   })
@@ -447,7 +436,7 @@ describe('LandingView', () => {
       'vuejs/core',
       'hdlopesrocha/vulkan-engine',
       'hdlopesrocha/opencode-talk',
-      'Fill all 11 repositories',
+      'Fill 2 repositories',
     ])
   })
 
