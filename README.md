@@ -165,7 +165,7 @@ tab. The decoded track is analysed once with an FFT (no `AnalyserNode`, so the
 result does not depend on the machine's real-time performance) into a few
 envelopes sampled every ~21 ms:
 
-* **bass** (25–150 Hz) rotates the hue of each folder's glow and makes it
+* **bass** (25–150 Hz) rotates the plasma's hue and makes it
   breathe;
 * **claps** — short transients in 1.8–5.8 kHz — cycle and flash the file
   colours, so the palette changes with the beat;
@@ -256,6 +256,41 @@ The **2D** button in the stage toolbar switches to a flat top-down view with the
 framing, where a left-drag pans; **Reset** (or `C`) returns to the default 3D angle. Manual input
 pauses the automatic view for a few seconds.
 
+### Gamepad and head tracking
+
+The camera can also be flown directly, which is what turns the 3D view from a
+picture into a place. Both devices are opt-in in **Settings → Camera → Gamepad &
+head tracking**, and until one of them is enabled *and* actually reporting,
+nothing about the camera changes.
+
+A gamepad (standard mapping) flies a free 6-DOF camera:
+
+| input | action |
+| --- | --- |
+| left stick | rotate: yaw (left/right) and pitch (away/towards) |
+| right stick | roll (left/right) and thrust (away/towards) |
+| D-pad | strafe (left/right) and rise / sink (up/down) |
+| RT / LT | forward / back thrust (analog, added to the stick) |
+| A / cross | recalibrate the head tracking |
+
+Rotation is applied as a quaternion delta in the camera's own frame, so the sticks
+behave like a head-mounted rotation and roll is possible at all — an orbit camera
+cannot express roll, which is why a pad switches the view into a free mode. The
+orbit state is remembered: **Reset** (or simply dragging with the mouse) hands the
+camera straight back to the automatic tabletop view, and the automatic follow
+never fights the sticks while you fly.
+
+**Head tracking** follows the device's gyroscope: the camera orientation is the
+device orientation mapped into the scene, and its up vector is the device's up
+rotated by the gyroscope value — so the horizon follows your head instead of
+staying glued to the plane. Because the sensor is absolute, a click on the scene
+(or the gamepad's A button) **recalibrates** it: the current device pose becomes
+the reference and the view does not move, so you can aim the scene exactly at the
+orientation you are holding, hand the device to someone else, or turn away and
+back, and one click re-aims it without a jump. iOS asks for motion-sensor
+permission the first time the toggle is switched on; a refusal is reported in the
+panel instead of failing silently.
+
 ### VR and 3D spheres
 
 The stage toolbar has a **VR** button that opens the same scene in an immersive WebXR session:
@@ -263,15 +298,27 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
 * support is probed once with `navigator.xr.isSessionSupported('immersive-vr')`. When the browser
   has no XR device (or no `navigator.xr` at all) the button is disabled and says so, instead of
   failing when it is pressed;
-* entering a session enables `renderer.xr`, requests the `local-floor` reference space and puts the
-  camera on an XR rig, so the tree sits in front of you like a table you can walk around; leaving
-  the session (or the headset ending it) restores the exact previous camera and scene transform;
+* entering a session enables `renderer.xr`, requests the `local-floor` reference space and stands you
+  at the **scene origin at the same eye height the on-screen camera has** (the tree keeps its
+  tabletop scale, centred on the origin), so what you see matches the flat view; leaving the session
+  (or the headset ending it) restores the exact previous camera and scene transform;
 * while a session is running the frames come from the XR animation loop and the glyph billboards
   face your head, not the orbit camera;
 * **files are drawn as real spheres** in VR — instanced `SphereGeometry` with a light, world-scaled
   rather than billboarded — because flat sprites read as discs once you have stereo depth. The same
   representation is available outside VR with **Settings → Visual → 3D file spheres**, which is the
   quickest way to see it without a headset. Directories keep their rings;
+* **the timeline comes with you**: a 3D panel is placed ahead of the headset and raised into the
+  upper part of the view, drawing the commit histogram, the playhead, the date and the progress,
+  plus four controls — restart, previous commit, play/pause and next commit — and the strip itself,
+  where dwelling seeks to that point in the history. It is placed from the headset pose itself, so
+  it is in front of you whatever direction the runtime picked at start-up, then stays fixed in the
+  room;
+* it is driven by **gaze**: a circular crosshair sits at the centre of your view and an element is
+  activated once the crosshair rests on it for **2 seconds**, with the ring filling over that time
+  and the hovered control highlighted. Looking away or moving to another control resets the dwell,
+  so nothing fires by accident. The gaze ray is cast from between the eyes through the panel, so it
+  works with the room-scale rig rather than the mouse;
 * nothing here is required for the normal view: without a headset the app behaves exactly as before,
   and the deterministic export ignores the XR state.
 
@@ -303,7 +350,6 @@ src/
   render/                   WebGL layers (Three.js)
     renderer.ts             scene composition, event consumption, settings, sizing
     nodes.ts                instanced file/directory nodes with capacity growth
-    glow.ts                 Gource's directory bloom (additive halos)
     edges.ts                branch edges as a single growable line buffer
     particles.ts            additive particle pool for activity effects and author trails
     authors.ts              pooled avatar sprites with a texture cache
@@ -311,7 +357,7 @@ src/
     camera.ts               orbit camera with Gource-style automatic framing
     minimap.ts              2D overview of the tree, authors and camera position
     palette.ts              extension/author/change colours
-    textures.ts             canvas texture caches (labels, avatars, glows, ball + bloom sprites)
+    textures.ts             canvas texture caches (labels, avatars, ball sprites)
   engine/
     engine.ts               playback clock, simulation driving, camera, HUD, recording hooks
     controller.ts           app orchestration: load, filters, seek, settings, recording
@@ -385,7 +431,7 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Rendering
 
-![Files rendered as Gource's lit balls inside a folder's bloom halo](docs/screenshot-glow.png)
+![Files and folders as Gource's lit balls and rings on the tabletop plane](docs/screenshot-glow.png)
 
 * Files and directories are two `InstancedMesh` objects — Gource's lit ball sprite for files, rings
   for directories — rendered as camera-facing billboards through a perspective orbit camera. The
@@ -393,17 +439,15 @@ Given the same history and settings, the same sequence of events is produced:
   perspective attenuation: a file keeps the same apparent size on the near and far sides of the
   tilted tree, while its radius still encodes the real file size. In the flat 2D view the whole tree
   shares one depth, so the compensation drops out and the original planar framing is reproduced
-  exactly. Layer order: the backdrop gradient, then the folder glow — the first element layer, drawn
-  with the depth test off so nothing can hide it and it can never hide anything — then branches, the
-  camera-following grid, the activity plasma, circles, particles, rays, authors and labels (front).
-  Every layer above the glow is drawn on top with the depth test on, so a nearer circle occludes a
-  branch, a ray, a particle or a plasma blob behind it. Both layers grow by reallocating and copying
-  instance buffers when a repository turns out to be larger than expected.
+  exactly. Layer order: the backdrop gradient, then branches, the camera-following grid, the activity
+  plasma, circles, particles, rays, avatars and labels (front). Every element layer is depth tested,
+  so a nearer circle occludes a branch, a ray, a particle or a plasma blob behind it. Both layers grow
+  by reallocating and copying instance buffers when a repository turns out to be larger than expected.
 * File sprites use the ball from Gource's own `data/file.png` (a highlight above and to the left,
   darkening towards the rim), tinted by the instance colour, so a file still carries its own colour
   but reads as a sphere rather than a flat disc. The transparent margin around the ball is discarded
-  by an alpha test, so the ball — not its square quad — is what writes depth and occludes the folder
-  glow behind it. Directory rings are alpha-tested the same way, so a ring honours `opacity` when it
+  by an alpha test, so the ball — not its square quad — is what writes depth and occludes what lies
+  behind it. Directory rings are alpha-tested the same way, so a ring honours `opacity` when it
   fades and its square footprint can never leave a dark corner in the depth buffer.
 * Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
   depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
@@ -412,7 +456,7 @@ Given the same history and settings, the same sequence of events is produced:
   edge. A branch whose two circles already touch is dropped rather than drawn as a stub inside one.
 * Activity effects and author trails come from a single additive `Points` pool with a free-list (no
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
-  at any zoom level. The glow halos and author→file beam quads are also billboarded towards the
+  at any zoom level. The author→file beam quads are also billboarded towards the
   camera, so they keep facing it while it orbits.
 * Author→file beams are one dynamic mesh rebuilt per frame (two quads per beam: glow + core), so a
   commit touching twenty files still costs a single draw call. They are depth tested like the rest of
@@ -430,29 +474,19 @@ Given the same history and settings, the same sequence of events is produced:
   camera-following grid keeps panning, orbiting and zooming readable. The grid is a transparent
   overlay, so depth testing (not the draw order) is what keeps it behind the tree: the billboards
   write depth first and the grid is rejected wherever they cover it. The depth stack is explicit —
-  grid −0.6, branches 0, billboards +0.25, effects +0.5; the folder glow is not part of it, because
-  it is painted together with the backdrop before any of them. The minimap shows the whole tree
+  grid −0.6, branches 0, billboards +0.25, effects +0.5. The minimap shows the whole tree
   with the current view position.
-* The glow is Gource's bloom layer (`GlowField`): one additive halo per directory, sized
-  `clusterRadius * 2` and tinted `directoryColour * bloomIntensity`, using a reproduction of
-  Gource's `bloom.tga` falloff (`1 - smoothstep(0, 0.72, r)`, peaking at half white). Every halo —
-  the root's included — takes the same `activityTint` the plasma volume uses, so the two layers read
-  as one light instead of two different blues. The halos are **background light**: they are painted
-  right after the backdrop and before every element, with depth testing switched off, so they never
-  brighten (or get cut into by) the branch lines, circles, beams and avatars drawn on top of them.
-  Settings → Scene switches the layer off or drives the intensity from 0 to 1.5 (Gource's default is
-  0.75).
 * The **activity plasma** (`PlasmaField`) is a ray-marched density volume that forms around the
   files with the most recent changes. Every file carries a heat value in 0…1, bumped by each
-  activity event and decaying exponentially (4 s by default); the hottest files (up to 64) become
+  activity event and decaying exponentially (5 s by default); the hottest files (up to 64) become
   spherical metaball sources whose strength and radius both scale with their heat, so a cold file
   contributes nothing and heat alone drives the blob in and out. The summed field is rasterised into
   a 128² texture each frame and the fragment shader marches the slab covering the sources, which
   keeps the per-pixel cost bounded instead of looping over every file. It is drawn **after** the
   branch lines and the circles, with the depth test on, so their silhouettes clip the volume instead
-  of the glow washing across them; particles, beams, avatars and labels still draw on top. It shares
-  one tint with the folder glow (see above), and its own `opacity` scales how much of the volume is
-  added — the shipped default (intensity 0.60, opacity 0.35) is a faint haze. Settings → Visual
+  of the volume washing across them; particles, beams, avatars and labels still draw on top. It is
+  tinted by the shared activity tint, and its own `opacity` scales how much of the volume is
+  added — the shipped default (intensity 0.50, full opacity) draws a dim, defined surface. Settings → Visual
   toggles it and exposes the intensity, opacity, surface sharpness, metaball weight, blob radius,
   heat decay, volume height and march quality.
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
@@ -629,13 +663,13 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * music analysis: band isolation for bass, folders, lines and the vocal range, sparse-transient
   clap detection with onset counting, silence, low sample rates, and sampling outside the track;
 * audio-reactive layers: claps cycling file colours and restoring the palette when the track
-  stops, bass rotating the glow hue, and midrange brightness on the branches; the controller
+  stops, bass rotating the plasma's hue, and midrange brightness on the branches; the controller
   provider (live position sampling, export timestamps, the pause freeze and the on/off toggle);
 * microphone: the capture graph and its gain, the shared fade envelope (kept while recording), live
   band analysis matching the batch bands, the recording mix, teardown, and permission failures;
 * the plasma field: heat bumping and exponential decay, heat-gated source selection (hottest first,
-  capped), volume bounds and rasterised density, the audio hue/brightness match with the folder
-  glow, setting clamps (opacity included), and its render order after the circles and before every
+  capped), volume bounds and rasterised density, the audio hue/brightness match with the shared
+  activity tint, setting clamps (opacity included), and its render order after the circles and before every
   later transparent layer;
 * the exported overlay: the panel layout at 720p, 1080p and portrait (no overlaps), the overview
   heading, legend and map drawing inside the panel, and `overview: false` skipping it;
@@ -645,9 +679,7 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes collapsing on both dirty
   *and* full syncs (a seek or restart must not leave the previous frame on screen), every layer
   dropping its instances when the history is rebuilt (node ids are per simulation, so a filter change
-  must not keep rendering the old tree), folder glow (one halo per directory sized from the cluster
-  radius, intensity baked into the instance colours, drawn as background light with depth testing
-  off), edge buffers, particle
+  must not keep rendering the old tree), edge buffers, particle
   pool limits and decay, tabletop orbit (plane-normal up vector)/pan/zoom, the flat 2D view
   preserving the orbit, and billboard orientation and fixed-size compensation;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
