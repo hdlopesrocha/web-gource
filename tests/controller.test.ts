@@ -32,6 +32,39 @@ function mockApi(commits: MockCommit[], options: MockApiOptions = {}) {
   return { mock, url: `https://github.com/acme/${repo}` }
 }
 
+interface MultiRepoSpec {
+  label: string
+  commits: MockCommit[]
+  /** Failure rules, built from the generated repository name. */
+  failures?: (repo: string) => MockGithubOptions['failures']
+}
+
+/**
+ * Serve several GitHub repositories through one fetch, routing by the
+ * repository pathname. Each call uses fresh repo names so URLs never collide.
+ */
+function mockMultiApi(specs: MultiRepoSpec[]) {
+  const routes = specs.map((spec) => {
+    counter += 1
+    const repo = `${spec.label}-${counter}`
+    const mock = createMockGithub({
+      owner: 'acme',
+      repo,
+      commits: spec.commits,
+      failures: spec.failures?.(repo),
+    })
+    return { repo, fullName: `acme/${repo}`, url: `https://github.com/acme/${repo}`, mock }
+  })
+  globalThis.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url
+    const pathname = new URL(url).pathname
+    const route = routes.find((candidate) => pathname.includes(`/repos/acme/${candidate.repo}`))
+    if (!route) return Promise.reject(new Error(`Unexpected request in multi-repository test: ${url}`))
+    return route.mock.fetch(input, init)
+  }
+  return routes
+}
+
 beforeEach(() => {
   localStorage.clear()
   resetRunState()
@@ -82,6 +115,99 @@ describe('VisualizerController', () => {
     await controller.load('https://github.com/acme/does-not-exist')
     expect(store.loading.error).toMatch(/not found/i)
     expect(store.view).toBe('landing')
+  })
+
+  it('loads two repositories into one scene', async () => {
+    const routes = mockMultiApi([
+      { label: 'alpha', commits: generateCommits(8) },
+      { label: 'beta', commits: generateCommits(8) },
+    ])
+    const [alpha, beta] = routes
+    await controller.loadMany(routes.map((route) => route.url))
+
+    expect(store.view).toBe('stage')
+    expect(store.loading.error).toBeNull()
+    expect(store.loading.index).toBe(0)
+    expect(store.loading.total).toBe(0)
+    expect(store.loading.status).toBe('Ready')
+    expect(store.timelineStats?.commits).toBe(16)
+    expect(store.repos.map((repo) => repo.fullName)).toEqual([alpha!.fullName, beta!.fullName])
+
+    const timeline = controller.currentTimeline!
+    expect(timeline.projects).toHaveLength(2)
+    for (const route of routes) {
+      const project = timeline.projects.find((entry) => entry.repo.fullName === route.fullName)
+      expect(project?.commits).toBe(8)
+      expect(project?.authors).toBe(4)
+    }
+
+    const commitsFor = (fullName: string) => timeline.commits.filter((commit) => commit.projectKey === fullName)
+    const alphaCommits = commitsFor(alpha!.fullName)
+    const betaCommits = commitsFor(beta!.fullName)
+    expect(alphaCommits).toHaveLength(8)
+    expect(betaCommits).toHaveLength(8)
+
+    const alphaPaths = alphaCommits.flatMap((commit) => commit.changes.map((change) => change.path))
+    const betaPaths = betaCommits.flatMap((commit) => commit.changes.map((change) => change.path))
+    expect(alphaPaths.length).toBeGreaterThan(0)
+    expect(betaPaths.length).toBeGreaterThan(0)
+    expect(alphaPaths.every((path) => path.startsWith(`${alpha!.fullName}/`))).toBe(true)
+    expect(betaPaths.every((path) => path.startsWith(`${beta!.fullName}/`))).toBe(true)
+
+    const alphaAuthors = timeline.authors.filter((author) => author.projectKey === alpha!.fullName)
+    const betaAuthors = timeline.authors.filter((author) => author.projectKey === beta!.fullName)
+    expect(alphaAuthors).toHaveLength(4)
+    expect(betaAuthors).toHaveLength(4)
+    expect(alphaAuthors.every((author) => author.id.startsWith(`${alpha!.fullName}::`))).toBe(true)
+    expect(betaAuthors.every((author) => author.id.startsWith(`${beta!.fullName}::`))).toBe(true)
+
+    // The same login is one person per project: distinct rows, shared identity
+    // and colour, so avatars still read as the same person across the scene.
+    const alphaAuthor = alphaAuthors.find((author) => author.login === 'author0')!
+    const betaAuthor = betaAuthors.find((author) => author.login === 'author0')!
+    expect(timeline.authors.filter((author) => author.login === 'author0')).toHaveLength(2)
+    expect(alphaAuthor.id).not.toBe(betaAuthor.id)
+    expect(alphaAuthor.baseId).toBe('login:author0')
+    expect(betaAuthor.baseId).toBe('login:author0')
+    expect(alphaAuthor.colorIndex).toBe(betaAuthor.colorIndex)
+  })
+
+  it('keeps successful repositories when another fails', async () => {
+    const routes = mockMultiApi([
+      { label: 'alpha', commits: generateCommits(6) },
+      {
+        label: 'beta',
+        commits: generateCommits(6),
+        failures: (repo) => [{ path: new RegExp(`/repos/acme/${repo}`), status: 404 }],
+      },
+    ])
+    const [alpha, beta] = routes
+    await controller.loadMany(routes.map((route) => route.url))
+
+    expect(store.view).toBe('stage')
+    expect(store.loading.error).toBeNull()
+    expect(store.timelineStats?.commits).toBe(6)
+    expect(store.repos.map((repo) => repo.fullName)).toEqual([alpha!.fullName])
+    expect(controller.currentTimeline?.projects.map((project) => project.repo.fullName)).toEqual([alpha!.fullName])
+    expect(store.warnings.join(' ')).toContain(beta!.fullName)
+    expect(store.warnings.join(' ')).toMatch(/not found/i)
+    expect(store.loading.status).toMatch(/1 of 2 repositories failed/)
+    expect(store.loading.index).toBe(0)
+    expect(store.loading.total).toBe(0)
+  })
+
+  it('dedupes repeated repository inputs', async () => {
+    const { url } = mockApi(generateCommits(10))
+    await controller.loadMany([url, ` ${url} `])
+
+    expect(store.timelineStats?.commits).toBe(10)
+    expect(store.repos).toHaveLength(1)
+    expect(controller.currentTimeline?.projects).toHaveLength(1)
+    expect(controller.currentTimeline?.projects[0]?.commits).toBe(10)
+    // A single project stays unscoped, exactly like `load()`.
+    const paths = controller.currentTimeline!.commits.flatMap((commit) => commit.changes.map((change) => change.path))
+    expect(paths.every((path) => path.startsWith('src/'))).toBe(true)
+    expect(controller.currentTimeline!.commits.every((commit) => !commit.projectKey)).toBe(true)
   })
 
   it('keeps commits and warns when the API quota runs out', async () => {
@@ -202,6 +328,48 @@ describe('VisualizerController', () => {
     controller.toggleAuthor(author.id)
     expect(store.hiddenAuthors).toHaveLength(0)
     expect(store.timelineStats?.commits).toBe(16)
+  })
+
+  it('scopes an author toggle to one project but a base id to all projects', async () => {
+    const routes = mockMultiApi([
+      { label: 'alpha', commits: generateCommits(8) },
+      { label: 'beta', commits: generateCommits(8) },
+    ])
+    const [alpha, beta] = routes
+    await controller.loadMany(routes.map((route) => route.url))
+
+    const total = store.timelineStats?.commits ?? 0
+    expect(total).toBe(16)
+    const alphaAuthor = controller
+      .timelineAuthors()
+      .find((author) => author.projectKey === alpha!.fullName && author.login === 'author0')!
+    const betaAuthor = controller
+      .timelineAuthors()
+      .find((author) => author.projectKey === beta!.fullName && author.login === 'author0')!
+    expect(alphaAuthor.commits).toBeGreaterThan(0)
+    expect(betaAuthor.commits).toBeGreaterThan(0)
+
+    // A project-scoped id hides that person in alpha only; beta keeps theirs.
+    controller.toggleAuthor(alphaAuthor.id)
+    expect(store.hiddenAuthors).toContain(alphaAuthor.id)
+    expect(store.timelineStats?.commits).toBe(total - alphaAuthor.commits)
+    const afterToggle = controller.currentTimeline!
+    expect(afterToggle.commits.some((commit) => commit.authorId === alphaAuthor.id)).toBe(false)
+    expect(afterToggle.commits.filter((commit) => commit.authorId === betaAuthor.id)).toHaveLength(betaAuthor.commits)
+
+    // The unscoped identity hides the person in both projects.
+    const expected = total - alphaAuthor.commits - betaAuthor.commits
+    controller.applyFilters({ hiddenAuthors: [alphaAuthor.baseId!] })
+    expect(store.timelineStats?.commits).toBe(expected)
+    expect(
+      controller
+        .currentTimeline!.commits.some(
+          (commit) => commit.authorId === alphaAuthor.id || commit.authorId === betaAuthor.id,
+        ),
+    ).toBe(false)
+
+    controller.clearFilters()
+    expect(store.timelineStats?.commits).toBe(total)
   })
 
   it('jumps to a commit by SHA prefix', async () => {

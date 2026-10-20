@@ -100,7 +100,12 @@ export interface LoadOptions {
   draftToken: string
   /** Provider that received the most recent token (keeps the field populated). */
   lastTokenProvider: string | null
-  /** Last repository URL, so a reload does not start from an empty field. */
+  /** Last loaded repository URLs (multiple projects), in load order. */
+  urls: string[]
+  /**
+   * First loaded URL. Kept for the single-repository flows and for migrating
+   * profiles saved before multiple projects were supported.
+   */
   lastUrl: string
 }
 
@@ -192,7 +197,7 @@ export interface AppState {
   loading: {
     active: boolean
     status: string
-    /** Commits whose file changes are loaded. */
+    /** Commits whose file changes are loaded (current project). */
     loaded: number
     target: number
     requests: number
@@ -201,9 +206,17 @@ export interface AppState {
     error: string | null
     /** True once the first batch reached the visualization. */
     streaming: boolean
+    /** 1-based index of the project being loaded, and how many are queued. */
+    index: number
+    total: number
+    /** `owner/name` (or the raw input) of the project being loaded. */
+    project: string | null
   }
   warnings: string[]
+  /** Primary repository (the first successfully loaded project). */
   repo: RepoInfo | null
+  /** Every loaded project, in load order. */
+  repos: RepoInfo[]
   timelineStats: TimelineStats | null
   timelineTruncated: boolean
   hud: HudState | null
@@ -356,6 +369,7 @@ const defaultLoadOptions: LoadOptions = {
   tokens: {},
   draftToken: '',
   lastTokenProvider: null,
+  urls: [],
   lastUrl: '',
 }
 
@@ -379,10 +393,18 @@ const defaultMusicPreferences = {
 }
 
 const initialLoadOptions = { ...defaultLoadOptions, ...readJson(LOAD_KEY, defaultLoadOptions) }
+// Profiles saved before multiple projects only have `lastUrl`: migrate it into
+// the new list so the landing page pre-fills exactly as it used to.
+if (!Array.isArray(initialLoadOptions.urls) || initialLoadOptions.urls.length === 0) {
+  initialLoadOptions.urls = initialLoadOptions.lastUrl ? [initialLoadOptions.lastUrl] : []
+} else {
+  initialLoadOptions.urls = initialLoadOptions.urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+}
+if (!initialLoadOptions.lastUrl) initialLoadOptions.lastUrl = initialLoadOptions.urls[0] ?? ''
 
 export const store = reactive<AppState>({
   view: 'landing',
-  url: initialLoadOptions.lastUrl,
+  url: initialLoadOptions.urls[0] ?? '',
   forcedProvider: null,
   loadOptions: initialLoadOptions,
   loading: {
@@ -393,9 +415,13 @@ export const store = reactive<AppState>({
     requests: 0,
     error: null,
     streaming: false,
+    index: 0,
+    total: 0,
+    project: null,
   },
   warnings: [],
   repo: null,
+  repos: [],
   timelineStats: null,
   timelineTruncated: false,
   hud: null,
@@ -486,13 +512,24 @@ export function persistLoadOptions(): void {
     tokens: store.loadOptions.tokens,
     draftToken: store.loadOptions.draftToken,
     lastTokenProvider: store.loadOptions.lastTokenProvider,
+    urls: store.loadOptions.urls,
     lastUrl: store.loadOptions.lastUrl,
   })
 }
 
 /** Remember the URL that was loaded, so a page reload can pre-fill it. */
 export function setLastUrl(url: string): void {
+  store.loadOptions.urls = url ? [url] : []
   store.loadOptions.lastUrl = url
+  persistLoadOptions()
+}
+
+/** Remember the projects that were loaded, in order. */
+export function setLastUrls(urls: string[]): void {
+  const clean = urls.map((url) => url.trim()).filter(Boolean)
+  store.loadOptions.urls = clean
+  store.loadOptions.lastUrl = clean[0] ?? ''
+  store.url = clean[0] ?? ''
   persistLoadOptions()
 }
 
@@ -681,6 +718,8 @@ export function resetRunState(): void {
   store.dateRange = { from: null, to: null }
   store.timelineStats = null
   store.timelineTruncated = false
+  store.repo = null
+  store.repos = []
   store.loading = {
     active: false,
     status: '',
@@ -689,5 +728,8 @@ export function resetRunState(): void {
     requests: 0,
     error: null,
     streaming: false,
+    index: 0,
+    total: 0,
+    project: null,
   }
 }
