@@ -10,6 +10,7 @@ import AuthorsPanel from './AuthorsPanel.vue'
 import MinimapPanel from './MinimapPanel.vue'
 import { loadingPercent } from '../state/store'
 import { EXPORT_FPS } from '../engine/export/frames'
+import { isXrSupported } from '../render/xr'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const container = ref<HTMLDivElement | null>(null)
@@ -23,6 +24,15 @@ const warnings = computed(() => store.warnings)
 const exportFps = EXPORT_FPS
 /** The recording follows the playback speed, so show what that is right now. */
 const speedLabel = computed(() => store.hud?.speed ?? 1)
+
+/**
+ * Why the VR button is (un)available. The button stays visible but disabled when
+ * the browser exposes no immersive device, so the feature is discoverable.
+ */
+const vrTitle = computed(() => {
+  if (!store.ui.xrSupported) return 'Immersive VR needs a WebXR headset and a browser that supports it (Chrome/Edge on desktop, or a standalone headset browser)'
+  return store.ui.xrActive ? 'Leave the immersive VR session' : 'View the scene in VR (WebXR)'
+})
 
 const summary = computed(() => {
   if (!stats.value) return ''
@@ -135,6 +145,10 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   if (canvas.value && container.value) controller.attach(canvas.value, container.value)
+  // Detected once per mount: the answer does not change while the page lives.
+  void isXrSupported().then((supported) => {
+    store.ui.xrSupported = supported
+  })
 })
 
 onBeforeUnmount(() => {
@@ -196,6 +210,33 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="btn ghost small"
+          :class="{ active: store.settings.flatCamera }"
+          type="button"
+          title="Flat top-down 2D view"
+          @click="controller.toggleFlatCamera()"
+        >
+          2D
+        </button>
+        <button
+          class="btn ghost small"
+          :class="{ active: store.ui.xrActive }"
+          type="button"
+          :disabled="!store.ui.xrSupported"
+          :title="vrTitle"
+          @click="controller.toggleVr()"
+        >
+          {{ store.ui.xrActive ? 'Exit VR' : 'VR' }}
+        </button>
+        <button
+          class="btn ghost small"
+          type="button"
+          title="Reset the 3D camera view (C)"
+          @click="controller.resetCamera()"
+        >
+          Reset
+        </button>
+        <button
+          class="btn ghost small"
           type="button"
           title="Settings (S)"
           @click="store.ui.settingsOpen = !store.ui.settingsOpen; if (store.ui.settingsOpen) store.ui.activityOpen = false"
@@ -241,6 +282,12 @@ onBeforeUnmount(() => {
       </div>
       <button class="btn small" type="button" @click="controller.backToLanding()">Load another repository</button>
       <button class="btn ghost small" type="button" title="Dismiss" @click="loading.error = null">✕</button>
+    </div>
+
+    <div v-if="store.ui.xrError" class="xr-error panel">
+      <span class="warn-icon">!</span>
+      <span class="grow">{{ store.ui.xrError }}</span>
+      <button class="btn ghost small" type="button" title="Dismiss" @click="store.ui.xrError = null">✕</button>
     </div>
 
     <InfoOverlay />
@@ -451,6 +498,24 @@ onBeforeUnmount(() => {
   top: 68px;
   right: 12px;
   z-index: 8;
+}
+
+.xr-error {
+  position: absolute;
+  top: 68px;
+  right: 12px;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  z-index: 9;
+}
+
+.topbar-actions .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .error-banner {

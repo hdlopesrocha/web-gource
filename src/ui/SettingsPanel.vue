@@ -13,7 +13,7 @@ import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
-const tab = ref<'visual' | 'camera' | 'filters' | 'recording' | 'data'>('visual')
+const tab = ref<'visual' | 'camera' | 'filters' | 'music' | 'recording' | 'data'>('visual')
 const tokenSavedMessage = ref<string | null>(null)
 
 function onTokenSaved(providerId: string | null): void {
@@ -53,6 +53,7 @@ function removeIgnored(entry: string): void {
 }
 const exportSupport = computed(() => controller.exportSupport())
 const exportState = computed(() => store.export)
+const music = computed(() => store.music)
 const exportProgress = computed(() => store.export.progress)
 /** Deterministic frame-by-frame render (default) or a live real-time capture. */
 const exportMode = ref<'render' | 'live'>('render')
@@ -168,6 +169,14 @@ function setResolution(value: string): void {
   if (preset) updateRecording({ width: preset.width, height: preset.height })
 }
 
+function chooseMusic(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  // Allow choosing the same file again after a failure or removal.
+  input.value = ''
+  if (file) void controller.loadMusic(file)
+}
+
 onMounted(() => {
   // Probe the WebCodecs encoders once so the export panel can be honest about
   // what this browser can produce.
@@ -184,7 +193,7 @@ onMounted(() => {
     <header class="head">
       <div>
         <h2>Settings</h2>
-        <p class="faint">Visualization, camera, filters, pacing and video export</p>
+        <p class="faint">Visualization, camera, filters, music and video export</p>
       </div>
       <button class="btn ghost small" type="button" @click="emit('close')">✕</button>
     </header>
@@ -193,6 +202,7 @@ onMounted(() => {
       <button class="btn small" :class="{ active: tab === 'visual' }" type="button" @click="tab = 'visual'">Visual</button>
       <button class="btn small" :class="{ active: tab === 'camera' }" type="button" @click="tab = 'camera'">Camera</button>
       <button class="btn small" :class="{ active: tab === 'filters' }" type="button" @click="tab = 'filters'">Filters</button>
+      <button class="btn small" :class="{ active: tab === 'music' }" type="button" @click="tab = 'music'">Music</button>
       <button class="btn small" :class="{ active: tab === 'recording' }" type="button" @click="tab = 'recording'">Recording</button>
       <button class="btn small" :class="{ active: tab === 'data' }" type="button" @click="tab = 'data'">Data</button>
     </nav>
@@ -259,6 +269,12 @@ onMounted(() => {
         <section class="group">
           <h3>Scene</h3>
           <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Directory rings</label>
+          <label class="switch"><input type="checkbox" :checked="settings.renderSpheres" @change="update({ renderSpheres: ($event.target as HTMLInputElement).checked })" /> 3D file spheres</label>
+          <p class="faint note">
+            Files are drawn as Gource's lit ball sprites. Switch on 3D file spheres to replace them with real instanced
+            sphere geometry — lit and world-scaled, so they gain depth and parallax. It is switched on automatically
+            while an immersive VR session is running.
+          </p>
           <label class="switch"><input type="checkbox" :checked="settings.showEdges" @change="update({ showEdges: ($event.target as HTMLInputElement).checked })" /> Branch edges</label>
           <label class="switch"><input type="checkbox" :checked="settings.showGrid" @change="update({ showGrid: ($event.target as HTMLInputElement).checked })" /> Background grid</label>
           <label class="switch"><input type="checkbox" :checked="settings.showBloom" @change="update({ showBloom: ($event.target as HTMLInputElement).checked })" /> Folder glow</label>
@@ -278,6 +294,50 @@ onMounted(() => {
             <label>Activity particles · {{ settings.particleIntensity.toFixed(2) }}×</label>
             <input type="range" min="0" max="2" step="0.05" :value="settings.particleIntensity" @input="update({ particleIntensity: Number(($event.target as HTMLInputElement).value) })" />
           </div>
+        </section>
+
+        <section class="group">
+          <h3>Plasma</h3>
+          <label class="switch"><input type="checkbox" :checked="settings.showPlasma" @change="update({ showPlasma: ($event.target as HTMLInputElement).checked })" /> Activity plasma</label>
+          <div class="field">
+            <label>Intensity · {{ settings.plasmaIntensity.toFixed(2) }}</label>
+            <input type="range" min="0" max="2" step="0.05" :value="settings.plasmaIntensity" @input="update({ plasmaIntensity: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Opacity · {{ settings.plasmaOpacity.toFixed(2) }}</label>
+            <input type="range" min="0" max="1" step="0.05" :value="settings.plasmaOpacity" @input="update({ plasmaOpacity: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Sharpness · {{ settings.plasmaSharpness.toFixed(1) }}</label>
+            <input type="range" min="1" max="8" step="0.1" :value="settings.plasmaSharpness" @input="update({ plasmaSharpness: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Metaball weight · {{ settings.plasmaWeight.toFixed(2) }}</label>
+            <input type="range" min="0" max="2" step="0.05" :value="settings.plasmaWeight" @input="update({ plasmaWeight: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Blob radius · {{ settings.plasmaRadius.toFixed(2) }}×</label>
+            <input type="range" min="0.5" max="3" step="0.05" :value="settings.plasmaRadius" @input="update({ plasmaRadius: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Heat decay · {{ settings.plasmaDecay.toFixed(1) }} s</label>
+            <input type="range" min="1" max="30" step="0.5" :value="settings.plasmaDecay" @input="update({ plasmaDecay: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>Volume height · {{ settings.plasmaHeight.toFixed(2) }}×</label>
+            <input type="range" min="0.5" max="4" step="0.1" :value="settings.plasmaHeight" @input="update({ plasmaHeight: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <div class="field">
+            <label>March quality · {{ settings.plasmaSteps }} steps</label>
+            <input type="range" min="8" max="96" step="8" :value="settings.plasmaSteps" @input="update({ plasmaSteps: Number(($event.target as HTMLInputElement).value) })" />
+          </div>
+          <p class="faint note">
+            A ray-marched plasma volume forms around the files with the most recent changes: every file's contribution
+            grows with its activity heat and fades as the heat decays (the reheat/decay time is above). The plasma uses
+            the folder-glow colour, follows the audio-reactive hue and brightness, and is depth-tested against the
+            files, folders and branch lines, so they always stay in front of it. Opacity sets how much of the volume is
+            added over the scene.
+          </p>
         </section>
 
         <section class="group">
@@ -345,7 +405,12 @@ onMounted(() => {
           <h3>Automatic view</h3>
           <label class="switch"><input type="checkbox" :checked="settings.followActivity" @change="update({ followActivity: ($event.target as HTMLInputElement).checked })" /> Follow the most recent activity</label>
           <label class="switch"><input type="checkbox" :checked="settings.autoZoom" @change="update({ autoZoom: ($event.target as HTMLInputElement).checked })" /> Fit the repository automatically</label>
-          <button class="btn small" type="button" @click="controller.resetCamera()">Reset view (C)</button>
+          <label class="switch"><input type="checkbox" :checked="settings.flatCamera" @change="update({ flatCamera: ($event.target as HTMLInputElement).checked })" /> Flat top-down 2D view</label>
+          <button class="btn small" type="button" @click="controller.resetCamera()">Reset to the 3D view (C)</button>
+          <p class="faint note">
+            In the 3D view, drag to orbit, right-drag (or Shift-drag) to pan, and scroll to zoom. The flat 2D view
+            looks straight down and uses left-drag to pan, like the original flat renderer.
+          </p>
         </section>
         <section class="group">
           <h3>Playback pacing</h3>
@@ -392,8 +457,9 @@ onMounted(() => {
         <section class="group">
           <h3>Navigation</h3>
           <p class="faint note">
-            The scene is flat: drag to pan, scroll to zoom (the pointer stays anchored), arrow keys step through
-            commits. Manual input pauses the automatic view for a few seconds.
+            Drag to spin the 3D tabletop; right-drag (or Shift-drag) pans, and the wheel zooms around the pointer.
+            Arrow keys step through commits. Manual input pauses the automatic view for a few seconds; Reset view
+            returns to the default 3D angle.
           </p>
         </section>
       </template>
@@ -452,6 +518,117 @@ onMounted(() => {
           <p class="faint note">
             Per-author toggles and the date range live in the Authors panel (<kbd>A</kbd>), together with
             “Clear every filter”.
+          </p>
+        </section>
+      </template>
+
+      <template v-else-if="tab === 'music'">
+        <section class="group">
+          <h3>Background music</h3>
+          <p class="faint note">
+            Add an MP3 to loop under the animation, or use the microphone. Audio is faded in at the start and out
+            again at the end, and is included in deterministic renders and live captures.
+          </p>
+          <div class="field">
+            <label>Audio source</label>
+            <div class="mode-row">
+              <button
+                class="btn small"
+                :class="{ active: music.source === 'file' }"
+                type="button"
+                @click="controller.setAudioSource('file')"
+              >
+                MP3 file
+              </button>
+              <button
+                class="btn small"
+                :class="{ active: music.source === 'microphone' }"
+                type="button"
+                @click="controller.setAudioSource('microphone')"
+              >
+                Microphone
+              </button>
+            </div>
+          </div>
+          <p v-if="music.source === 'microphone'" class="faint hint">
+            The microphone drives the audio-reactive visuals in real time and is mixed into live recordings with the
+            same fade envelope. A deterministic render cannot capture live audio, so it is video-only while the
+            microphone is selected.
+          </p>
+          <div class="field">
+            <label for="music-file">Music file</label>
+            <input
+              id="music-file"
+              class="file-input"
+              type="file"
+              accept="audio/mpeg,audio/mp3,.mp3"
+              :disabled="music.loading"
+              @change="chooseMusic"
+            />
+          </div>
+
+          <p v-if="music.loading" class="faint note">Decoding and analysing the track…</p>
+          <div v-else-if="music.fileName" class="music-track">
+            <span class="music-name" :title="music.fileName">{{ music.fileName }}</span>
+            <span class="faint mono">{{ formatDuration(music.duration) }} loop</span>
+            <button class="btn ghost small" type="button" title="Remove the background music" @click="controller.clearMusic()">✕</button>
+          </div>
+          <p v-else class="faint note">No track loaded. The animation plays silently.</p>
+
+          <div class="field">
+            <label>Volume · {{ Math.round(music.volume * 100) }}%</label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              :value="music.volume"
+              @input="controller.updateMusic({ volume: Number(($event.target as HTMLInputElement).value) })"
+            />
+          </div>
+          <div class="field">
+            <label>Fade in · {{ music.fadeInSeconds.toFixed(1) }} s</label>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="0.1"
+              :value="music.fadeInSeconds"
+              @input="controller.updateMusic({ fadeInSeconds: Number(($event.target as HTMLInputElement).value) })"
+            />
+          </div>
+          <div class="field">
+            <label>Fade out · {{ music.fadeOutSeconds.toFixed(1) }} s</label>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="0.1"
+              :value="music.fadeOutSeconds"
+              @input="controller.updateMusic({ fadeOutSeconds: Number(($event.target as HTMLInputElement).value) })"
+            />
+            <span class="faint hint">The fade-out ends with the final animation frame.</span>
+          </div>
+
+          <p v-if="music.error" class="warn-box">{{ music.error }}</p>
+
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="settings.audioReactive"
+              @change="controller.updateSettings({ audioReactive: ($event.target as HTMLInputElement).checked })"
+            />
+            Audio-reactive visuals
+          </label>
+          <p class="faint hint">
+            The bass shifts the folder glow hue, claps cycle the file colours, the low mids pulse the folder rings,
+            the midrange brightens the branches, and the vocal range makes the author avatars breathe.
+          </p>
+
+          <p class="faint note">
+            The uploaded file stays in this browser session only; volume and fade lengths are remembered. Exporting
+            music needs WebCodecs audio encoding, and live capture needs the selected recording format to support
+            audio.
           </p>
         </section>
       </template>
@@ -633,6 +810,7 @@ onMounted(() => {
             </template>
           </template>
         </section>
+
       </template>
 
       <template v-else>
@@ -822,6 +1000,43 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.file-input {
+  width: 100%;
+  font-size: 12px;
+}
+
+.file-input::file-selector-button {
+  margin-right: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: rgba(94, 200, 255, 0.08);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-input:disabled {
+  opacity: 0.6;
+}
+
+.music-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: rgba(94, 200, 255, 0.06);
+  font-size: 12px;
+}
+
+.music-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .progress {

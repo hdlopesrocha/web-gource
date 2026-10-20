@@ -73,9 +73,9 @@ const examples = [
           <h1>Web Gource</h1>
         </div>
         <p class="tagline">
-          Paste a public Git repository and watch its history grow into an animated 2D map — commits, authors,
-          directories and files drawn as circles sized by their real file size, rendered with WebGL in your
-          browser.
+          Paste a public Git repository and watch its history grow into an animated 3D map — commits, authors,
+          directories and files drawn as camera-facing billboards sized by their real file size, rendered with
+          WebGL in your browser. Orbit the tree with the mouse, or switch to the flat top-down 2D view.
         </p>
       </header>
 
@@ -210,10 +210,11 @@ const examples = [
           </p>
         </div>
         <div class="feature">
-          <h3>Flat Gource-style map</h3>
+          <h3>3D Gource-style map</h3>
           <p>
-            Instanced WebGL circles on a plane: directories branch out, files are sized by their real file size,
-            author avatars move between them, and effects are colour-coded per change type.
+            Instanced WebGL billboards on a Gource-style plane, seen through a perspective camera: directories
+            branch out, files are sized by their real file size, author avatars move between them, and effects are
+            colour-coded per change type. Orbit, pan and zoom with the mouse, or press 2D for the flat view.
           </p>
         </div>
         <div class="feature">

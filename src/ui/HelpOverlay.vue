@@ -8,7 +8,10 @@ const shortcuts: { keys: string; action: string }[] = [
   { keys: 'Home / End', action: 'Jump to the start / end' },
   { keys: '+ / −', action: 'Faster / slower playback' },
   { keys: 'R', action: 'Restart playback' },
-  { keys: 'C', action: 'Recentre the camera' },
+  { keys: 'Drag', action: 'Orbit the 3D camera' },
+  { keys: 'Right-drag', action: 'Pan the view (or Shift-drag)' },
+  { keys: 'Wheel', action: 'Zoom around the pointer' },
+  { keys: 'C', action: 'Reset the camera view' },
   { keys: 'L', action: 'Toggle labels' },
   { keys: 'M', action: 'Toggle the minimap' },
   { keys: 'A', action: 'Toggle the authors panel' },
@@ -35,8 +38,26 @@ const shortcuts: { keys: string; action: string }[] = [
           </li>
         </ul>
         <p class="faint small">
-          The scene is flat: drag to pan, scroll to zoom (the point under the pointer stays anchored). Manual input
-          pauses the automatic view for a few seconds.
+          The tree is laid out on a plane but rendered in 3D as a tabletop: the camera up vector is the plane
+          normal, so dragging left/right spins around the tree and dragging up/down changes the elevation while the
+          ground recedes into the distance. Right-drag (or Shift-drag) pans and the wheel zooms around the pointer.
+          Files and folders stay as camera-facing billboards at a fixed on-screen size, so they remain readable from
+          every angle. The <strong>2D</strong> button switches to a flat top-down view where dragging pans;
+          <strong>Reset</strong> (or <code>C</code>) returns to the default 3D view. Manual input pauses the
+          automatic view for a few seconds.
+        </p>
+      </section>
+
+      <section>
+        <h3>VR & spheres</h3>
+        <p class="muted small">
+          The <strong>VR</strong> button opens the scene in an immersive WebXR session when the browser has a headset;
+          otherwise the button is disabled and says why. Entering VR puts the camera on a rig so the tree sits in front
+          of you at table height, and <strong>files become real 3D spheres</strong> — instanced geometry with a light,
+          world-scaled instead of camera-facing sprites — because flat discs read badly once you have stereo depth.
+          Leaving the session (or taking the headset off) restores the exact view you had. The same sphere
+          representation is available without a headset under Settings → Visual → 3D file spheres; directories keep
+          their rings.
         </p>
       </section>
 
@@ -49,6 +70,25 @@ const shortcuts: { keys: string; action: string }[] = [
           strong ray, a one-line tweak a thin one. Authors are drawn above the rays, circles and branches so they are
           never hidden, and they move with a spring rather than jumping, so you can follow a contributor across the
           tree.
+        </p>
+      </section>
+
+      <section>
+        <h3>Music & microphone</h3>
+        <p class="muted small">
+          Settings → Music loads an MP3 and can switch on the audio-reactive visuals. The track is analysed once
+          (bass, low mids, midrange, the vocal range and short clap transients), so the same performance drives
+          live playback and the exported video: bass rotates the folder glow hue, claps cycle and flash the file
+          colours, low mids pulse the folder rings, the midrange brightens the branches, and the vocal range makes
+          the author avatars breathe. The reaction follows the same fade-in and fade-out envelope as the audio, and
+          the toggle leaves the track playing — it only stops the animation from reacting to it.
+        </p>
+        <p class="muted small">
+          The same tab can take its audio from the <strong>microphone</strong> instead of the file. It is analysed
+          live with the same bands and drives the visuals in real time through the same fade envelope, so reactions
+          fade in and out with the recording in either mode, and nothing is played back through the speakers. Live
+          recordings mix the faded microphone in place of the file; the deterministic frame-by-frame export is
+          video-only while the microphone is selected, because a live input cannot be replayed identically twice.
         </p>
       </section>
 
@@ -67,8 +107,10 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           A commit sends a beam from the author to every file it changed. By default that beam is directional: a bright
           head leaves the avatar, travels to the element and lights the rest of the line as it arrives, with a comet
-          tail behind it. Settings → Visual switches between <em>Travelling head</em> and the classic
-          <em>Solid ray</em> (a full-length line drawn immediately) and sets the travel time.
+          tail behind it. Rays are depth tested like the rest of the scene, so a beam that passes behind a file circle
+          or a folder ring disappears behind it instead of painting across it. Settings → Visual switches between
+          <em>Travelling head</em> and the classic <em>Solid ray</em> (a full-length line drawn immediately) and sets
+          the travel time.
         </p>
       </section>
 
@@ -90,13 +132,22 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           The default export renders the animation frame by frame from the beginning at exactly 60 fps, following the
           playback speed you selected, using the browser's WebCodecs encoders (hardware when available, software
-          otherwise). The video includes the info panel, the timeline, the overview, the weekday/hour heatmap and the
-          contribution calendar, drawn with the same code as the on-screen panels.
+          otherwise). The video includes the info panel, the timeline, the overview (with its heading and the
+          directories/files/authors legend) and the activity charts, drawn with the same code as the on-screen panels,
+          with the panel rectangles laid out so they never overlap at any frame size.
           Because the clock is driven by the frame index rather than by real time, a slow machine produces the same
           video as a fast one — it just takes longer. WebM (VP9) is the default; MP4 (H.264) is offered when the
           browser can encode it. Frames are streamed straight to the encoder, so memory stays flat, and the file is
           finalised (encoder flushed, durations patched) before it is offered for download. The live capture mode is
           still there for capturing manual camera moves in real time.
+        </p>
+        <p class="muted small">
+          A background MP3 loaded in Settings → Music is looped under the animation and included in both export
+          modes. The fade-out ends with the final animation frame, and the exported audio is rendered to the exact
+          video length: Opus for WebM, AAC for MP4. If the browser lacks the audio encoder for the chosen container,
+          export stops with an explanation — choose WebM or remove the track. Live capture adds the music when the
+          selected format supports audio, and otherwise records video only. With the microphone selected, live
+          capture records the faded microphone instead and the deterministic export is video-only.
         </p>
       </section>
 
@@ -116,13 +167,26 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
-        <h3>Glow</h3>
+        <h3>Glow & plasma</h3>
         <p class="muted small">
           Files are drawn from Gource's own ball sprite — a highlight above and to the left, darkening towards the
-          rim — so each circle reads as a small sphere. Behind every folder sits Gource's bloom: an additive halo
-          sized twice the folder's cluster radius and tinted with the folder colour, which is what makes a cluster of
-          files look luminous. It is drawn after the circles, so the halos wash over their own files the way they do
-          in Gource. Settings → Scene switches the glow off or drives its intensity (Gource's default is 0.75).
+          rim — so each circle reads as a small sphere, and the colours stay saturated because the palette is
+          authored in sRGB. Behind every folder sits Gource's bloom: an additive halo sized twice the folder's
+          cluster radius and tinted with the folder colour, which is what makes a cluster of files look luminous.
+          The halos are <strong>background light</strong>: they are painted together with the backdrop, before the
+          branches, circles, beams and avatars, and never depth-test against them — so they light the scene instead
+          of washing over the circles. Settings → Scene switches the glow off or drives its intensity (Gource's
+          default is 0.75).
+        </p>
+        <p class="muted small">
+          On top of that sits the <strong>activity plasma</strong>: a ray-marched volume that forms around the files
+          with the most recent changes. Every change adds heat to the file it touched, the heat decays over a few
+          seconds, and the hottest files become glowing blobs whose size and strength follow that heat — so the
+          plasma grows where work is happening and fades away when it stops. It is drawn after the branch lines and
+          the circles, with the depth test on, so their silhouettes clip the volume and it never brightens a file or
+          a folder; particles, beams, avatars and labels still draw on top. It shares one tint with the folder glow,
+          so the bass rotates and breathes both together, and Settings → Visual exposes the toggle, intensity,
+          opacity, sharpness, metaball weight, radius, decay time, volume height and march quality.
         </p>
       </section>
 
@@ -183,40 +247,6 @@ const shortcuts: { keys: string; action: string }[] = [
           visibility are derived purely from commit data (idle gaps are compressed with a fixed, documented curve).
           Seeking re-evaluates the scene from the timeline rather than replaying it, so scrubbing is instant and still
           exact.
-        </p>
-      </section>
-
-      <section>
-        <h3>Beams</h3>
-        <p class="muted small">
-          A commit sends a beam from the author to every file it changed. By default that beam is directional: a bright
-          head leaves the avatar, travels to the element and lights the rest of the line as it arrives, with a comet
-          tail behind it. Settings → Visual switches between <em>Travelling head</em> and the classic
-          <em>Solid ray</em> (a full-length line drawn immediately) and sets the travel time.
-        </p>
-      </section>
-
-      <section>
-        <h3>Activity</h3>
-        <p class="muted small">
-          The Activity panel (<kbd>H</kbd>) shows when the work happened. The first chart is a density heatmap of
-          commits per weekday and hour of day (UTC) — horizontal is the hour, vertical the weekday. The second is a
-          GitHub-style contribution calendar for the last 53 weeks, where the rightmost column is the week of the
-          current commit date, so it slides as the animation plays and days that have not happened yet stay empty.
-          Both charts count only what has already happened at the playback position — scrubbing backwards removes
-          the future — and both follow the active filters, so hiding authors, folders or a date range changes what
-          they count.
-        </p>
-      </section>
-
-      <section>
-        <h3>Video export</h3>
-        <p class="muted small">
-          Export uses the browser's <code>MediaRecorder</code> with <code>canvas.captureStream()</code>. Recording
-          renders at a fixed resolution and advances the timeline by exactly one frame step per captured frame, so the
-          exported video is a faithful sampling of the animation. Available codecs depend on the browser — WebM
-          (VP9/VP8) is offered where supported, MP4 (H.264) in browsers that can produce it. Keep the tab focused while
-          recording; background tabs throttle rendering and produce a stuttery file.
         </p>
       </section>
 

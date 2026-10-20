@@ -345,6 +345,28 @@ describe('StageView', () => {
     await wrapper.find('.warn-head').trigger('click')
     expect(wrapper.text()).toContain('Loaded the newest 2')
   })
+
+  it('toggles the flat 2D camera and resets to the 3D view from the stage toolbar', async () => {
+    store.settings.flatCamera = false
+    const wrapper = mount(StageView)
+    const buttonNamed = (label: string) => wrapper.findAll('button').find((entry) => entry.text().trim() === label)
+    const flat = buttonNamed('2D')
+    const reset = buttonNamed('Reset')
+    expect(flat).toBeTruthy()
+    expect(reset).toBeTruthy()
+
+    await flat!.trigger('click')
+    expect(store.settings.flatCamera).toBe(true)
+    expect(flat!.classes()).toContain('active')
+    await flat!.trigger('click')
+    expect(store.settings.flatCamera).toBe(false)
+    expect(flat!.classes()).not.toContain('active')
+
+    // Reset always returns to the default 3D camera, even from the flat view.
+    await flat!.trigger('click')
+    await reset!.trigger('click')
+    expect(store.settings.flatCamera).toBe(false)
+  })
 })
 
 describe('panels', () => {
@@ -509,11 +531,44 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('solid ray is the original full-length line')
   })
 
+  it('settings panel exposes the plasma opacity and the 3D sphere mode', async () => {
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Visual')
+    const field = wrapper
+      .findAll('div.field')
+      .find((entry) => entry.find('label').text().startsWith('Opacity'))
+    expect(field).toBeTruthy()
+    const slider = field!.find('input[type="range"]')
+    expect((slider.element as HTMLInputElement).value).toBe('0.35')
+    await slider.setValue('0.2')
+    expect(store.settings.plasmaOpacity).toBeCloseTo(0.2, 5)
+
+    const spheres = wrapper
+      .findAll('label.switch')
+      .find((entry) => entry.text().includes('3D file spheres'))
+    expect(spheres).toBeTruthy()
+    await spheres!.find('input').setValue(true)
+    expect(store.settings.renderSpheres).toBe(true)
+
+    // Leave the singleton store as the other tests expect it.
+    store.settings.plasmaOpacity = 0.35
+    store.settings.renderSpheres = false
+  })
+
   it('settings panel exposes visualization, camera, filter and data tabs', async () => {
     const wrapper = mount(SettingsPanel)
     expect(wrapper.text()).toContain('Visual')
     await openTab(wrapper, 'Camera')
     expect(wrapper.text()).toContain('Automatic view')
+    expect(wrapper.text()).toContain('Reset to the 3D view')
+    store.settings.flatCamera = false
+    const flatSwitch = wrapper
+      .findAll('label.switch')
+      .find((entry) => entry.text().includes('Flat top-down 2D view'))
+    expect(flatSwitch).toBeTruthy()
+    await flatSwitch!.find('input').setValue(true)
+    expect(store.settings.flatCamera).toBe(true)
+    store.settings.flatCamera = false
     await openTab(wrapper, 'Filters')
     expect(wrapper.text()).toContain('Hidden folders')
     expect(wrapper.text()).toContain('Ignored folders')
@@ -574,11 +629,92 @@ describe('panels', () => {
     exportSupport.mockRestore()
   })
 
+  it('settings panel loads and configures background music', async () => {
+    store.music.volume = 0.7
+    store.music.fadeInSeconds = 2
+    store.music.fadeOutSeconds = 2
+    store.music.fileName = null
+    store.music.duration = 0
+    store.music.loading = false
+    store.music.error = null
+
+    const loadMusic = vi.spyOn(controller, 'loadMusic').mockResolvedValue()
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Music')
+    const section = wrapper.findAll('section.group').find((entry) => entry.find('h3').text() === 'Background music')
+    expect(section).toBeDefined()
+    expect(section!.text()).toContain('No track loaded')
+    expect(section!.text()).toContain('included in deterministic renders and live captures')
+    expect(section!.text()).toContain('Audio-reactive visuals')
+
+    const input = wrapper.find('#music-file')
+    expect(input.attributes('accept')).toContain('.mp3')
+    const file = new File([new Uint8Array([1, 2, 3])], 'song.mp3', { type: 'audio/mpeg' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    expect(loadMusic).toHaveBeenCalledWith(file)
+    await flushPromises()
+    loadMusic.mockRestore()
+
+    // The loaded track is shown with its loop length.
+    store.music.fileName = 'song.mp3'
+    store.music.duration = 83
+    await wrapper.vm.$nextTick()
+    expect(section!.text()).toContain('song.mp3')
+    expect(section!.text()).toContain('1:23 loop')
+
+    const sliders = section!.findAll('input[type="range"]')
+    expect(sliders).toHaveLength(3)
+    await sliders[0].setValue('0.35')
+    await sliders[1].setValue('1.5')
+    await sliders[2].setValue('0.5')
+    expect(store.music.volume).toBeCloseTo(0.35, 5)
+    expect(store.music.fadeInSeconds).toBeCloseTo(1.5, 5)
+    expect(store.music.fadeOutSeconds).toBeCloseTo(0.5, 5)
+
+    const saved = JSON.parse(localStorage.getItem('web-gource:music:v1') ?? '{}') as {
+      volume?: number
+      fadeInSeconds?: number
+      fadeOutSeconds?: number
+    }
+    expect(saved.volume).toBeCloseTo(0.35, 5)
+    expect(saved.fadeInSeconds).toBeCloseTo(1.5, 5)
+    expect(saved.fadeOutSeconds).toBeCloseTo(0.5, 5)
+
+    const remove = section!.findAll('button').find((button) => button.attributes('title')?.includes('Remove'))
+    expect(remove).toBeDefined()
+    await remove!.trigger('click')
+    expect(store.music.fileName).toBeNull()
+    expect(store.music.duration).toBe(0)
+    expect(section!.text()).toContain('No track loaded')
+
+    // The reactive visuals toggle is a persisted setting and lives with the music.
+    store.settings.audioReactive = true
+    const toggle = section!.find('input[type="checkbox"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    await toggle.setValue(false)
+    expect(store.settings.audioReactive).toBe(false)
+    const savedSettings = JSON.parse(localStorage.getItem('web-gource:settings:v1') ?? '{}') as {
+      audioReactive?: boolean
+    }
+    expect(savedSettings.audioReactive).toBe(false)
+    store.settings.audioReactive = true
+  })
+
+  it('keeps music settings out of the recording tab', async () => {
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Recording')
+    expect(wrapper.find('#music-file').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Audio-reactive visuals')
+  })
+
   it('help overlay documents shortcuts and limitations', () => {
     const wrapper = mount(HelpOverlay)
     expect(wrapper.text()).toContain('Space')
     expect(wrapper.text()).toContain('60 requests/hour')
-    expect(wrapper.text()).toContain('MediaRecorder')
+    expect(wrapper.text()).toContain('WebCodecs')
+    expect(wrapper.text()).toContain('activity plasma')
+    expect(wrapper.text()).toContain('microphone')
   })
 })
 
@@ -613,7 +749,7 @@ describe('author layer', () => {
     }
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(stub as never)
     const authors = new AuthorField(2)
-    authors.sync([
+    const list = [
       {
         author: { id: 'x', name: 'Ada', commits: 1, first: 0, last: 0, additions: 0, deletions: 0, colorIndex: 0, unattributed: false },
         position: { x: 0, y: 0, z: 0 },
@@ -623,11 +759,12 @@ describe('author layer', () => {
         lastActiveAt: 0,
         appearedAt: 0,
         appliedCommits: 1,
-        lastKind: 'modify',
+        lastKind: 'modify' as const,
         visible: true,
         tethers: [],
       },
-    ])
+    ]
+    authors.sync(list)
     // Both the halo and the avatar itself render above the beams (12) and the
     // labels stay on top of everything.
     expect(authors.group.children.length).toBeGreaterThan(0)
@@ -635,6 +772,14 @@ describe('author layer', () => {
       expect(child.renderOrder).toBeGreaterThan(12)
       expect(child.renderOrder).toBeLessThan(30)
     }
+
+    // The vocal range makes the avatars breathe without rebuilding textures.
+    const slot = (authors as unknown as { slots: { sprite: { scale: { y: number } } }[] }).slots[0]
+    const restHeight = slot.sprite.scale.y
+    authors.sync(list, 0, 1)
+    expect(slot.sprite.scale.y).toBeGreaterThan(restHeight)
+    authors.sync(list, 0, 0)
+    expect(slot.sprite.scale.y).toBeCloseTo(restHeight, 4)
     authors.dispose()
   })
 })
