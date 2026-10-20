@@ -282,7 +282,7 @@ const model = computed(() =>
   color: var(--text-dim);
 }
 
-@media (max-width: 860px) {
+@media (max-width: 860px), (max-width: 949px) and (max-height: 480px) {
   .info {
     display: none;
   }

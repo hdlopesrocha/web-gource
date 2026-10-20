@@ -225,10 +225,98 @@ function setSpeed(value: number): void {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
   .playback {
+    left: calc(var(--safe-left) + 8px);
+    right: calc(var(--safe-right) + 8px);
+    bottom: calc(var(--safe-bottom) + 8px);
     flex-direction: column;
     align-items: stretch;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .controls {
+    justify-content: space-between;
+    gap: 4px;
+  }
+
+  .controls .btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .controls .play {
+    min-width: 52px;
+  }
+
+  .speed select {
+    width: 68px;
+    min-height: 36px;
+    padding: 6px;
+  }
+
+  .scrub-area {
+    gap: 4px;
+  }
+
+  .scrub-meta {
+    gap: 2px 10px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .date {
+    font-size: 12px;
+  }
+}
+
+/*
+ * Landscape phones have width but little height. Put the transport beside the
+ * scrubber again so the bar stays short and the scene keeps most of the screen.
+ */
+@media (max-width: 949px) and (max-height: 480px) {
+  .playback {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+  }
+
+  .controls {
+    flex: none;
+    justify-content: flex-start;
+    gap: 4px;
+  }
+
+  .controls .btn {
+    min-width: 34px;
+    min-height: 36px;
+    padding: 0 6px;
+  }
+
+  .controls .play {
+    min-width: 42px;
+  }
+
+  .speed select {
+    width: 60px;
+    min-height: 36px;
+    padding: 4px;
+  }
+
+  .scrub-area {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .scrub-area :deep(.scrubber) {
+    height: 44px;
+  }
+
+  .scrub-meta {
+    flex-wrap: wrap;
+    font-size: 10.5px;
   }
 }
 </style>

@@ -138,9 +138,36 @@ watch(canvas, (element) => {
   border-radius: 50%;
 }
 
-@media (max-width: 860px) {
+/*
+ * Phones keep the overview available (the Map button must still do something),
+ * but as a compact square floating just above the playback bar. Narrow tablets
+ * use the normal panel above the playback bar.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
   .minimap {
+    display: flex;
+    right: calc(var(--safe-right) + 8px);
+    bottom: var(--stage-playback-offset);
+    padding: 6px;
+    gap: 0;
+    z-index: 5;
+  }
+
+  .head,
+  .legend {
     display: none;
+  }
+
+  .map {
+    width: 112px !important;
+    height: 112px !important;
+  }
+}
+
+@media (max-width: 949px) and (max-height: 480px) {
+  .map {
+    width: 96px !important;
+    height: 96px !important;
   }
 }
 </style>

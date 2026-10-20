@@ -42,10 +42,9 @@ const shortcuts: { keys: string; action: string }[] = [
           The tree is laid out on a plane but rendered in 3D as a tabletop: the camera up vector is the plane
           normal, so dragging left/right spins around the tree and dragging up/down changes the elevation while the
           ground recedes into the distance. Right-drag (or Shift-drag) pans and the wheel zooms around the pointer.
-          Files and folders stay as camera-facing billboards at a fixed on-screen size, so they remain readable from
-          every angle. The <strong>2D</strong> button switches to a flat top-down view where dragging pans;
-          <strong>Reset</strong> (or <code>C</code>) returns to the default 3D view. Manual input pauses the
-          automatic view for a few seconds.
+          Files and folders are real 3D spheres with lighting and world-space scale, so they keep their depth and
+          parallax from every angle. <strong>Reset</strong> (or <code>C</code>) returns to the default 3D view.
+          Manual input pauses the automatic view for a few seconds.
         </p>
       </section>
 
@@ -92,14 +91,11 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           The <strong>VR</strong> button opens the scene in an immersive WebXR session when the browser has a headset;
           otherwise the button is disabled and says why. Entering VR puts the camera on a rig so the tree sits in front
-          of you at table height, and <strong>files become real 3D spheres</strong> — instanced geometry with a light,
-          world-scaled instead of camera-facing sprites — because flat discs read badly once you have stereo depth.
-          Leaving the session (or taking the headset off) restores the exact view you had. The same sphere
-          representation is available without a headset under Settings → Visual → 3D file spheres; directories keep
-          their rings.
+          of you at table height; files and folders are already real 3D spheres, so they keep their depth in stereo.
+          Leaving the session (or taking the headset off) restores the exact view you had.
         </p>
         <p class="muted small">
-          Inside the session you stand at the scene origin at the same eye height the flat view uses, and the
+          Inside the session you stand at the scene origin with the real headset eye height, and the
           <strong>timeline travels with you</strong>: a panel placed ahead of the headset and raised into the upper part
           of the view draws the commit histogram, the playhead, the date and the progress with four controls — restart,
           previous, play/pause and next — plus the strip itself, where dwelling seeks to that point. It is driven by
@@ -115,7 +111,7 @@ const shortcuts: { keys: string; action: string }[] = [
           Every commit is shown while it happens: the changed files pulse in the colour of the change (green added,
           amber modified, red deleted, violet renamed) and a beam connects each of them to the author who made the
           change. The bigger the change in a file, the wider and brighter its beam — a 1000-line commit draws a
-          strong ray, a one-line tweak a thin one. Authors are drawn above the rays, circles and branches so they are
+          strong ray, a one-line tweak a thin one. Authors are drawn above the rays, spheres and branches so they are
           never hidden, and they move with a spring rather than jumping, so you can follow a contributor across the
           tree.
         </p>
@@ -127,7 +123,7 @@ const shortcuts: { keys: string; action: string }[] = [
           Settings → Music loads an MP3 and can switch on the audio-reactive visuals. The track is analysed once
           (bass, low mids, midrange, the vocal range and short clap transients), so the same performance drives
           live playback and the exported video: bass rotates the plasma's hue, claps cycle and flash the file
-          colours, low mids pulse the folder rings, the midrange brightens the branches, and the vocal range makes
+          colours, low mids pulse the folder spheres, the midrange brightens the branches, and the vocal range makes
           the author avatars breathe. The reaction follows the same fade-in and fade-out envelope as the audio, and
           the toggle leaves the track playing — it only stops the animation from reacting to it.
         </p>
@@ -144,9 +140,9 @@ const shortcuts: { keys: string; action: string }[] = [
         <h3>Branches</h3>
         <p class="muted small">
           The branch lines follow the Gource convention: they are drawn behind the nodes, so a line
-          passing across a file circle or a directory ring disappears behind it, and each line starts
+          passing across a file or folder sphere disappears behind it, and each line starts
           at the edge of its parent and stops at the edge of its child instead of running into the
-          middle of a circle. Edge dimming is adjustable in Settings → Visual.
+          middle of a sphere. Edge dimming is adjustable in Settings → Visual.
         </p>
       </section>
 
@@ -155,8 +151,8 @@ const shortcuts: { keys: string; action: string }[] = [
         <p class="muted small">
           A commit sends a beam from the author to every file it changed. By default that beam is directional: a bright
           head leaves the avatar, travels to the element and lights the rest of the line as it arrives, with a comet
-          tail behind it. Rays are depth tested like the rest of the scene, so a beam that passes behind a file circle
-          or a folder ring disappears behind it instead of painting across it. Settings → Visual switches between
+          tail behind it. Rays are depth tested like the rest of the scene, so a beam that passes behind a file or
+          folder sphere disappears behind it instead of painting across it. Settings → Visual switches between
           <em>Travelling head</em> and the classic <em>Solid ray</em> (a full-length line drawn immediately) and sets
           the travel time.
         </p>
@@ -217,16 +213,16 @@ const shortcuts: { keys: string; action: string }[] = [
       <section>
         <h3>Plasma</h3>
         <p class="muted small">
-          Files are drawn from Gource's own ball sprite — a highlight above and to the left, darkening towards the
-          rim — so each circle reads as a small sphere, and the colours stay saturated because the palette is
-          authored in sRGB.
+          Files and folders are instanced sphere geometry shaded by an ambient and a key light, with the palette
+          carried by the material and the real file size carried by the radius. The colours stay saturated because
+          the palette is authored in sRGB.
         </p>
         <p class="muted small">
           The <strong>activity plasma</strong> is a ray-marched volume that forms around the files
           with the most recent changes. Every change adds heat to the file it touched, the heat decays over a few
           seconds, and the hottest files become glowing blobs whose size and strength follow that heat — so the
           plasma grows where work is happening and fades away when it stops. It is drawn after the branch lines and
-          the circles, with the depth test on, so their silhouettes clip the volume and it never brightens a file or
+          the spheres, with the depth test on, so their silhouettes clip the volume and it never brightens a file or
           a folder; particles, beams, avatars and labels still draw on top. The bass rotates and breathes its hue,
           and Settings → Visual exposes the toggle, intensity, opacity, sharpness, metaball weight, radius, decay
           time, volume height and march quality.
@@ -239,24 +235,24 @@ const shortcuts: { keys: string; action: string }[] = [
           Folder and file placement follows Gource's own algorithm. A folder's radius is the square root of the area
           its subtree needs, and its parent keeps it that far away, so a folder that grows pushes its siblings
           outwards instead of overlapping them. Inside a folder, files are grouped on concentric rings — one file
-          diameter apart, as many per ring as its circumference allows — and a circle that grows with its file size
+          diameter apart, as many per ring as its circumference allows — and a sphere that grows with its file size
           expands the rings smoothly. Directories are placed by a force relaxation: gravity towards their ideal
           distance from the parent, an outward push, and repulsion from their siblings, with a projection pass that
-          guarantees no two circles ever overlap. Positions are derived from the repository state alone, so the same
+          guarantees no two spheres ever overlap. Positions are derived from the repository state alone, so the same
           history always produces the same map. Settings → Visual can pin every node to its path-derived position
           instead.
         </p>
       </section>
 
       <section>
-        <h3>Circle sizes</h3>
+        <h3>Sphere sizes</h3>
         <p class="muted small">
-          File circles grow with the file size. Sizes come from the host's own file listing for the newest commit in
+          File spheres grow with the file size. Sizes come from the host's own file listing for the newest commit in
           the loaded window (GitHub: one recursive tree request), so they are real byte counts rather than estimates.
           The scale is logarithmic against the 95th percentile, which keeps small files visible and stops a single
           generated file from flattening the scale. Files the host does not report — and every file when sizes are
-          unavailable — fall back to line activity, and the Settings panel shows exactly how many circles use which.
-          The mapping can be switched to line activity or to uniform circles, and file labels show the size of the
+          unavailable — fall back to line activity, and the Settings panel shows exactly how many spheres use which.
+          The mapping can be switched to line activity or to uniform spheres, and file labels show the size of the
           files that were just changed.
         </p>
       </section>
@@ -395,5 +391,54 @@ section p {
 footer {
   display: flex;
   justify-content: flex-end;
+}
+
+/*
+ * Phones: full-width sheet inside the safe area, ending above the playback bar.
+ * The header sticks so the close button is always reachable.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .help-backdrop {
+    height: 100dvh;
+    align-items: stretch;
+    padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px) var(--stage-playback-offset)
+      calc(var(--safe-left) + 8px);
+  }
+
+  .help {
+    width: 100%;
+    max-height: 100%;
+    height: 100%;
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: -16px -16px 0;
+    padding: 14px 16px 10px;
+    background: var(--panel-solid);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .head .btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .keys {
+    min-width: 88px;
+  }
+
+  footer .btn {
+    min-height: 36px;
+  }
 }
 </style>

@@ -194,29 +194,31 @@ watch(currentMs, () => scheduleDraw())
       <button class="btn ghost small" type="button" @click="emit('close')">✕</button>
     </header>
 
-    <section class="group">
-      <h3>Commits per weekday and hour</h3>
-      <div class="chart">
-        <canvas ref="gridCanvas" @mousemove="onGridMove" @mouseleave="gridHover = null" />
-      </div>
-      <p class="faint hint">{{ gridHover ?? 'Horizontal: hour of day (UTC) · vertical: weekday' }}</p>
-    </section>
+    <div class="body scroll">
+      <section class="group">
+        <h3>Commits per weekday and hour</h3>
+        <div class="chart">
+          <canvas ref="gridCanvas" @mousemove="onGridMove" @mouseleave="gridHover = null" />
+        </div>
+        <p class="faint hint">{{ gridHover ?? 'Horizontal: hour of day (UTC) · vertical: weekday' }}</p>
+      </section>
 
-    <section class="group">
-      <h3>Contributions · last {{ CALENDAR_WEEKS }} weeks</h3>
-      <p class="faint">{{ calendarSummary }}</p>
-      <div class="chart">
-        <canvas ref="calendarCanvas" @mousemove="onCalendarMove" @mouseleave="calendarHover = null" />
-      </div>
-      <p class="faint hint">
-        {{ calendarHover ?? 'Right column is the current week of the commit date; the calendar slides with playback.' }}
-      </p>
-      <div class="legend">
-        <span class="faint">Less</span>
-        <span v-for="(shade, level) in SHADES" :key="level" class="swatch" :style="{ background: shade }" />
-        <span class="faint">More</span>
-      </div>
-    </section>
+      <section class="group">
+        <h3>Contributions · last {{ CALENDAR_WEEKS }} weeks</h3>
+        <p class="faint">{{ calendarSummary }}</p>
+        <div class="chart">
+          <canvas ref="calendarCanvas" @mousemove="onCalendarMove" @mouseleave="calendarHover = null" />
+        </div>
+        <p class="faint hint">
+          {{ calendarHover ?? 'Right column is the current week of the commit date; the calendar slides with playback.' }}
+        </p>
+        <div class="legend">
+          <span class="faint">Less</span>
+          <span v-for="(shade, level) in SHADES" :key="level" class="swatch" :style="{ background: shade }" />
+          <span class="faint">More</span>
+        </div>
+      </section>
+    </div>
   </aside>
 </template>
 
@@ -233,6 +235,12 @@ watch(currentMs, () => scheduleDraw())
   gap: 12px;
   overflow-y: auto;
   z-index: 9;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .head {
@@ -293,5 +301,41 @@ watch(currentMs, () => scheduleDraw())
   width: 10px;
   height: 10px;
   border-radius: 2px;
+}
+
+/*
+ * Phones: near-full-width sheet above the playback bar. Only the chart body
+ * scrolls, so the close button never leaves the viewport.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .activity {
+    left: calc(var(--safe-left) + 8px);
+    right: calc(var(--safe-right) + 8px);
+    top: calc(var(--safe-top) + 8px);
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--safe-top) - var(--stage-playback-offset) - 8px);
+    padding: 12px;
+    gap: 10px;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    z-index: 9;
+  }
+
+  .head {
+    flex: none;
+  }
+
+  .head .btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
 }
 </style>

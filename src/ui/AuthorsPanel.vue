@@ -247,4 +247,81 @@ function showAll(): void {
 .empty {
   font-size: 12px;
 }
+
+/*
+ * Phones: a near-full-width sheet over the topbar, ending above the playback
+ * bar. The whole sheet scrolls with a sticky header, so the close button is
+ * always reachable even in short landscape viewports.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .authors {
+    left: calc(var(--safe-left) + 8px);
+    right: calc(var(--safe-right) + 8px);
+    top: calc(var(--safe-top) + 8px);
+    bottom: var(--stage-playback-offset);
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--safe-top) - var(--stage-playback-offset) - 8px);
+    gap: 10px;
+    padding: 12px;
+    display: block;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    z-index: 9;
+  }
+
+  .head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: -12px -12px 10px;
+    padding: 12px 12px 8px;
+    background: var(--panel-solid);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .head .btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .filters {
+    margin-bottom: 10px;
+  }
+
+  .date-row {
+    flex-wrap: wrap;
+  }
+
+  .date-row input {
+    flex: 1 1 130px;
+    min-height: 32px;
+    font-size: 12px;
+  }
+
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .row input {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .list {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .author-row {
+    min-height: 36px;
+    padding: 6px 0;
+  }
+
+  .meta {
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+}
 </style>

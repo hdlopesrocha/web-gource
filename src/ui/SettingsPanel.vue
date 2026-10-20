@@ -241,9 +241,9 @@ onMounted(() => {
         </section>
 
         <section class="group">
-          <h3>Circle sizes</h3>
+          <h3>Sphere sizes</h3>
           <div class="field">
-            <label for="size-mode">Size circles by</label>
+            <label for="size-mode">Size spheres by</label>
             <select id="size-mode" :value="settings.sizeMode" @change="update({ sizeMode: ($event.target as HTMLSelectElement).value as typeof settings.sizeMode })">
               <option value="bytes">File size (from the host)</option>
               <option value="activity">Line activity (additions + deletions)</option>
@@ -258,7 +258,7 @@ onMounted(() => {
           </div>
           <p class="faint note">
             <template v-if="settings.sizeMode === 'bytes'">
-              {{ sizeCoverage.known }} of {{ sizeCoverage.total }} file circles use a real file size
+              {{ sizeCoverage.known }} of {{ sizeCoverage.total }} file spheres use a real file size
               ({{ sizeSourceLabel }})<template v-if="sizeCoverage.total - sizeCoverage.known > 0">; the rest fall back to line
               activity</template>. The scale is logarithmic against the 95th percentile
               ({{ formatBytes(referenceBytes) }}), so one huge generated file cannot squash everything else. Sizes come
@@ -266,12 +266,12 @@ onMounted(() => {
               still shows its current size.
             </template>
             <template v-else-if="settings.sizeMode === 'activity'">
-              Circles are scaled by added + removed lines accumulated in the loaded window.
+              Spheres are scaled by added + removed lines accumulated in the loaded window.
             </template>
-            <template v-else>Every file circle has the same size.</template>
+            <template v-else>Every file sphere has the same size.</template>
           </p>
           <div class="field">
-            <label>Circle scale · {{ settings.radiusScale.toFixed(2) }}×</label>
+            <label>Sphere scale · {{ settings.radiusScale.toFixed(2) }}×</label>
             <input type="range" min="0.4" max="2.5" step="0.05" :value="settings.radiusScale" @input="update({ radiusScale: Number(($event.target as HTMLInputElement).value) })" />
           </div>
           <label class="switch">
@@ -280,19 +280,17 @@ onMounted(() => {
           </label>
           <p class="faint note">
             With the dynamic layout on, files are grouped on rings around their directory (Gource's model): adding a
-            file, or a circle growing with its size, reflows the rings and pushes neighbouring folders outwards
+            file, or a sphere growing with its size, reflows the rings and pushes neighbouring folders outwards
             smoothly instead of overlapping them. Turn it off to pin every file to the position derived from its path.
           </p>
         </section>
 
         <section class="group">
           <h3>Scene</h3>
-          <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Directory rings</label>
-          <label class="switch"><input type="checkbox" :checked="settings.renderSpheres" @change="update({ renderSpheres: ($event.target as HTMLInputElement).checked })" /> 3D file spheres</label>
+          <label class="switch"><input type="checkbox" :checked="settings.showDirs" @change="update({ showDirs: ($event.target as HTMLInputElement).checked })" /> Folders</label>
           <p class="faint note">
-            Files are drawn as Gource's lit ball sprites. Switch on 3D file spheres to replace them with real instanced
-            sphere geometry — lit and world-scaled, so they gain depth and parallax. It is switched on automatically
-            while an immersive VR session is running.
+            Files and folders are always drawn as real 3D spheres with lighting and world-space scale, so they gain
+            depth and parallax as the camera moves.
           </p>
           <label class="switch"><input type="checkbox" :checked="settings.showEdges" @change="update({ showEdges: ($event.target as HTMLInputElement).checked })" /> Branch edges</label>
           <label class="switch"><input type="checkbox" :checked="settings.showGrid" @change="update({ showGrid: ($event.target as HTMLInputElement).checked })" /> Background grid</label>
@@ -418,11 +416,10 @@ onMounted(() => {
           <h3>Automatic view</h3>
           <label class="switch"><input type="checkbox" :checked="settings.followActivity" @change="update({ followActivity: ($event.target as HTMLInputElement).checked })" /> Follow the most recent activity</label>
           <label class="switch"><input type="checkbox" :checked="settings.autoZoom" @change="update({ autoZoom: ($event.target as HTMLInputElement).checked })" /> Fit the repository automatically</label>
-          <label class="switch"><input type="checkbox" :checked="settings.flatCamera" @change="update({ flatCamera: ($event.target as HTMLInputElement).checked })" /> Flat top-down 2D view</label>
-          <button class="btn small" type="button" @click="controller.resetCamera()">Reset to the 3D view (C)</button>
+          <button class="btn small" type="button" @click="controller.resetCamera()">Reset to the default view (C)</button>
           <p class="faint note">
-            In the 3D view, drag to orbit, right-drag (or Shift-drag) to pan, and scroll to zoom. The flat 2D view
-            looks straight down and uses left-drag to pan, like the original flat renderer.
+            Drag to orbit, right-drag (or Shift-drag) to pan, and scroll to zoom. Reset returns the camera to the
+            default 3D angle.
           </p>
         </section>
         <section class="group">
@@ -682,7 +679,7 @@ onMounted(() => {
             Audio-reactive visuals
           </label>
           <p class="faint hint">
-            The bass shifts the plasma hue, claps cycle the file colours, the low mids pulse the folder rings,
+            The bass shifts the plasma hue, claps cycle the file colours, the low mids pulse the folder spheres,
             the midrange brightens the branches, and the vocal range makes the author avatars breathe.
           </p>
 
@@ -1199,5 +1196,60 @@ onMounted(() => {
   border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, #cfe6ff, #4f9ede);
   box-shadow: 0 0 10px rgba(94, 200, 255, 0.35);
+}
+
+/*
+ * Phones: near-full-width sheet above the playback bar. The header and tab row
+ * stay put while only the body scrolls.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .settings {
+    left: calc(var(--safe-left) + 8px);
+    right: calc(var(--safe-right) + 8px);
+    top: calc(var(--safe-top) + 8px);
+    bottom: var(--stage-playback-offset);
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--safe-top) - var(--stage-playback-offset) - 8px);
+    gap: 10px;
+    padding: 12px;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    z-index: 9;
+  }
+
+  .head {
+    flex: none;
+  }
+
+  .head .btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .tabs {
+    flex: none;
+    flex-wrap: wrap;
+    padding-bottom: 2px;
+  }
+
+  .tabs .btn {
+    min-height: 34px;
+  }
+
+  .body {
+    min-height: 0;
+    padding-right: 2px;
+  }
+
+  .mode-row,
+  .record-row {
+    flex-wrap: wrap;
+  }
+
+  .facts li {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
 }
 </style>

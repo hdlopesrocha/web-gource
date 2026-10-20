@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="stage">
+  <div class="stage" :class="{ 'recording-active': store.recording.active }">
     <div ref="container" class="viewport" @pointerdown="onViewportPointerDown" @pointerup="onViewportPointerUp">
       <canvas ref="canvas" class="scene" />
       <div class="vignette" aria-hidden="true" />
@@ -199,128 +199,123 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <header class="topbar panel">
-      <button class="btn ghost small" type="button" title="Load repositories" @click="controller.backToLanding()">
-        ← {{ multiProject ? 'Repositories' : 'Repository' }}
-      </button>
-      <div class="repo-info">
-        <div class="repo-name" :title="repoTitle">
-          <strong>{{ repoLabel }}</strong>
-          <span v-for="provider in providers" :key="provider" class="badge">{{ provider }}</span>
-          <span v-if="store.timelineTruncated" class="badge warn" title="Only part of the history is loaded">partial history</span>
+    <div class="top-stack">
+      <header class="topbar panel">
+        <button class="btn ghost small back" type="button" title="Load repositories" @click="controller.backToLanding()">
+          ← {{ multiProject ? 'Repositories' : 'Repository' }}
+        </button>
+        <div class="repo-info">
+          <div class="repo-name" :title="repoTitle">
+            <strong>{{ repoLabel }}</strong>
+            <span v-for="provider in providers" :key="provider" class="badge">{{ provider }}</span>
+            <span v-if="store.timelineTruncated" class="badge warn" title="Only part of the history is loaded">partial history</span>
+          </div>
+          <span class="repo-summary muted">{{ summary }}</span>
         </div>
-        <span class="repo-summary muted">{{ summary }}</span>
-      </div>
-      <div class="topbar-actions">
-        <button
-          v-if="store.recording.active"
-          class="btn small danger"
-          type="button"
-          @click="controller.stopRecording()"
-        >
-          <span class="rec-dot" /> Stop recording
-        </button>
-        <button
-          class="btn ghost small"
-          :class="{ active: store.ui.activityOpen }"
-          type="button"
-          title="Commit activity heatmaps (H)"
-          @click="store.ui.activityOpen = !store.ui.activityOpen; if (store.ui.activityOpen) store.ui.settingsOpen = false"
-        >
-          Activity
-        </button>
-        <button class="btn ghost small" type="button" title="Authors (A)" @click="store.ui.authorsOpen = !store.ui.authorsOpen">
-          Authors
-        </button>
-        <button
-          class="btn ghost small"
-          :class="{ active: store.ui.minimapVisible }"
-          type="button"
-          title="Minimap (M)"
-          @click="store.ui.minimapVisible = !store.ui.minimapVisible"
-        >
-          Map
-        </button>
-        <button
-          class="btn ghost small"
-          :class="{ active: store.settings.flatCamera }"
-          type="button"
-          title="Flat top-down 2D view"
-          @click="controller.toggleFlatCamera()"
-        >
-          2D
-        </button>
-        <button
-          class="btn ghost small"
-          :class="{ active: store.ui.xrActive }"
-          type="button"
-          :disabled="!store.ui.xrSupported"
-          :title="vrTitle"
-          @click="controller.toggleVr()"
-        >
-          {{ store.ui.xrActive ? 'Exit VR' : 'VR' }}
-        </button>
-        <button
-          class="btn ghost small"
-          type="button"
-          title="Reset the 3D camera view (C)"
-          @click="controller.resetCamera()"
-        >
-          Reset
-        </button>
-        <button
-          class="btn ghost small"
-          type="button"
-          title="Settings (S)"
-          @click="store.ui.settingsOpen = !store.ui.settingsOpen; if (store.ui.settingsOpen) store.ui.activityOpen = false"
-        >
-          Settings
-        </button>
-        <button class="btn ghost small" type="button" title="Help (?)" @click="store.ui.helpOpen = true">?</button>
-        <button class="btn ghost small" type="button" title="Fullscreen (F)" @click="toggleFullscreen">
-          {{ fullscreen ? '⤡' : '⛶' }}
-        </button>
-      </div>
-    </header>
+        <div class="topbar-actions">
+          <button
+            v-if="store.recording.active"
+            class="btn small danger"
+            type="button"
+            @click="controller.stopRecording()"
+          >
+            <span class="rec-dot" /> Stop recording
+          </button>
+          <button
+            class="btn ghost small"
+            :class="{ active: store.ui.activityOpen }"
+            type="button"
+            title="Commit activity heatmaps (H)"
+            @click="store.ui.activityOpen = !store.ui.activityOpen; if (store.ui.activityOpen) store.ui.settingsOpen = false"
+          >
+            Activity
+          </button>
+          <button class="btn ghost small" type="button" title="Authors (A)" @click="store.ui.authorsOpen = !store.ui.authorsOpen">
+            Authors
+          </button>
+          <button
+            class="btn ghost small"
+            :class="{ active: store.ui.minimapVisible }"
+            type="button"
+            title="Minimap (M)"
+            @click="store.ui.minimapVisible = !store.ui.minimapVisible"
+          >
+            Map
+          </button>
+          <button
+            class="btn ghost small"
+            :class="{ active: store.ui.xrActive }"
+            type="button"
+            :disabled="!store.ui.xrSupported"
+            :title="vrTitle"
+            @click="controller.toggleVr()"
+          >
+            {{ store.ui.xrActive ? 'Exit VR' : 'VR' }}
+          </button>
+          <button
+            class="btn ghost small"
+            type="button"
+            title="Reset the 3D camera view (C)"
+            @click="controller.resetCamera()"
+          >
+            Reset
+          </button>
+          <button
+            class="btn ghost small"
+            type="button"
+            title="Settings (S)"
+            @click="store.ui.settingsOpen = !store.ui.settingsOpen; if (store.ui.settingsOpen) store.ui.activityOpen = false"
+          >
+            Settings
+          </button>
+          <button class="btn ghost small" type="button" title="Help (?)" @click="store.ui.helpOpen = true">?</button>
+          <button class="btn ghost small" type="button" title="Fullscreen (F)" @click="toggleFullscreen">
+            {{ fullscreen ? '⤡' : '⛶' }}
+          </button>
+        </div>
+      </header>
 
-    <div v-if="loading.active || loading.streaming" class="loading-strip panel">
-      <div class="strip-row">
-        <span class="spinner" />
-        <span class="grow">{{ loading.status }}</span>
-        <span class="muted mono">
-          {{ loading.loaded }}/{{ loading.target }} commits · {{ loading.requests }} requests
-          <template v-if="loading.rateRemaining !== undefined">· {{ loading.rateRemaining }} left</template>
-        </span>
-        <button class="btn ghost small" type="button" @click="controller.cancelLoad()">Stop</button>
+      <div class="notices">
+        <div v-if="loading.active || loading.streaming" class="loading-strip panel">
+          <div class="strip-row">
+            <span class="spinner" />
+            <span class="grow">{{ loading.status }}</span>
+            <span class="muted mono strip-meta">
+              {{ loading.loaded }}/{{ loading.target }} commits · {{ loading.requests }} requests
+              <template v-if="loading.rateRemaining !== undefined">· {{ loading.rateRemaining }} left</template>
+            </span>
+            <button class="btn ghost small" type="button" @click="controller.cancelLoad()">Stop</button>
+          </div>
+          <div class="bar"><div class="bar-fill" :style="{ width: `${Math.max(3, loadingPercent)}%` }" /></div>
+        </div>
+
+        <div v-if="warnings.length > 0 && !loading.active" class="warnings panel">
+          <button class="warn-head" type="button" @click="warningsOpen = !warningsOpen">
+            <span class="warn-icon">!</span>
+            <span class="grow">{{ warnings.length }} note{{ warnings.length === 1 ? '' : 's' }} about this load</span>
+            <span class="faint">{{ warningsOpen ? '▲' : '▼' }}</span>
+          </button>
+          <ul v-if="warningsOpen" class="warn-list scroll">
+            <li v-for="warning in warnings" :key="warning">{{ warning }}</li>
+          </ul>
+        </div>
+
+        <div v-if="loading.error && !loading.active" class="error-banner panel">
+          <span class="warn-icon">!</span>
+          <div class="grow">
+            <strong>Loading stopped</strong>
+            <p class="faint">{{ loading.error }}</p>
+          </div>
+          <button class="btn small" type="button" @click="controller.backToLanding()">Load another repository</button>
+          <button class="btn ghost small" type="button" title="Dismiss" @click="loading.error = null">✕</button>
+        </div>
+
+        <div v-if="store.ui.xrError" class="xr-error panel">
+          <span class="warn-icon">!</span>
+          <span class="grow">{{ store.ui.xrError }}</span>
+          <button class="btn ghost small" type="button" title="Dismiss" @click="store.ui.xrError = null">✕</button>
+        </div>
       </div>
-      <div class="bar"><div class="bar-fill" :style="{ width: `${Math.max(3, loadingPercent)}%` }" /></div>
-    </div>
-
-    <div v-if="warnings.length > 0 && !loading.active" class="warnings panel">
-      <button class="warn-head" type="button" @click="warningsOpen = !warningsOpen">
-        <span class="warn-icon">!</span>
-        <span class="grow">{{ warnings.length }} note{{ warnings.length === 1 ? '' : 's' }} about this load</span>
-        <span class="faint">{{ warningsOpen ? '▲' : '▼' }}</span>
-      </button>
-      <ul v-if="warningsOpen" class="warn-list scroll">
-        <li v-for="warning in warnings" :key="warning">{{ warning }}</li>
-      </ul>
-    </div>
-
-    <div v-if="loading.error && !loading.active" class="error-banner panel">
-      <span class="warn-icon">!</span>
-      <div class="grow">
-        <strong>Loading stopped</strong>
-        <p class="faint">{{ loading.error }}</p>
-      </div>
-      <button class="btn small" type="button" @click="controller.backToLanding()">Load another repository</button>
-      <button class="btn ghost small" type="button" title="Dismiss" @click="loading.error = null">✕</button>
-    </div>
-
-    <div v-if="store.ui.xrError" class="xr-error panel">
-      <span class="warn-icon">!</span>
-      <span class="grow">{{ store.ui.xrError }}</span>
-      <button class="btn ghost small" type="button" title="Dismiss" @click="store.ui.xrError = null">✕</button>
     </div>
 
     <InfoOverlay />
@@ -379,6 +374,16 @@ onBeforeUnmount(() => {
   inset: 0;
   pointer-events: none;
   background: radial-gradient(circle at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/*
+ * On desktop the topbar and notices keep their individual absolute positions;
+ * on phones the wrappers become one column so notices always sit below the
+ * topbar regardless of how many action rows it needs (see the media query).
+ */
+.top-stack,
+.notices {
+  display: contents;
 }
 
 .topbar {
@@ -602,6 +607,196 @@ onBeforeUnmount(() => {
 
   .topbar-actions .btn {
     padding: 6px 8px;
+  }
+}
+
+/*
+ * Phones: two topbar rows (identity, then actions), and every transient notice
+ * stacked below the bar instead of floating over it.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .stage {
+    height: 100dvh;
+  }
+
+  .top-stack {
+    position: absolute;
+    top: calc(var(--safe-top) + 8px);
+    left: calc(var(--safe-left) + 8px);
+    right: calc(var(--safe-right) + 8px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: calc(100dvh - var(--safe-top) - var(--stage-playback-offset) - 8px);
+    z-index: 7;
+    pointer-events: none;
+  }
+
+  .topbar {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    flex: none;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px 8px;
+    padding: 8px 10px;
+    pointer-events: auto;
+  }
+
+  .topbar > .back {
+    grid-column: 1;
+  }
+
+  .repo-info {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .repo-name {
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .repo-summary {
+    display: none;
+  }
+
+  .topbar-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .topbar-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topbar-actions .btn {
+    flex: none;
+    min-height: 32px;
+    padding: 5px 9px;
+  }
+
+  /* One stack below the topbar, never under the playback bar. */
+  .notices {
+    position: static;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow-y: auto;
+    pointer-events: none;
+  }
+
+  .notices > * {
+    position: static;
+    top: auto;
+    right: auto;
+    left: auto;
+    width: 100%;
+    max-width: none;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .strip-row {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    font-size: 12px;
+  }
+
+  .strip-row .grow {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+
+  .strip-row .btn {
+    order: 2;
+  }
+
+  .strip-meta {
+    order: 3;
+    flex: 1 1 100%;
+    line-height: 1.35;
+  }
+
+  .warn-list {
+    max-height: 26dvh;
+  }
+
+  .error-banner {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .error-banner .grow {
+    flex: 1 1 calc(100% - 32px);
+  }
+
+  .error-banner .btn:not(.ghost) {
+    flex: 1 1 auto;
+  }
+
+  .xr-error {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .xr-error .grow {
+    flex: 1 1 calc(100% - 32px);
+  }
+
+  .recording-overlay {
+    top: auto;
+    right: calc(var(--safe-right) + 8px);
+    bottom: calc(var(--stage-playback-offset) + 8px);
+    left: calc(var(--safe-left) + 8px);
+    display: flex;
+    justify-content: center;
+  }
+
+  .rec-pill {
+    flex: 1;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 2px 10px;
+    padding: 7px 10px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  /* Keep the recording pill and the minimap/notices from sharing the same space. */
+  .recording-active .top-stack {
+    max-height: calc(100dvh - var(--safe-top) - var(--stage-playback-offset) - 64px);
+  }
+
+  .recording-active :deep(.minimap) {
+    display: none;
+  }
+
+  .controls-hint {
+    left: calc(var(--safe-left) + 8px);
+    right: auto;
+    bottom: calc(var(--stage-playback-offset) + 8px);
+    max-width: calc(100% - 150px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recording-active .controls-hint {
+    display: none;
   }
 }
 </style>

@@ -22,6 +22,13 @@
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
   --font: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  /* Safe-area bands for notches and home indicators. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  /* Height reserved above the playback bar. The mobile value is set below. */
+  --stage-playback-offset: 118px;
 }
 
 * {
@@ -34,6 +41,15 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
+}
+
+/* Dynamic viewport height keeps the stage clear of mobile browser chrome. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
 }
 
 body {
@@ -360,4 +376,39 @@ code,
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* ---------------------------------------------------------------- *
+ * Phone layout bands
+ * ---------------------------------------------------------------- */
+
+/*
+ * Phones in portrait, plus landscape phones whose width is larger than the
+ * portrait cutoff (up to 949px) but whose height is clearly phone-sized.
+ */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  :root {
+    --stage-playback-offset: calc(env(safe-area-inset-bottom, 0px) + 170px);
+  }
+
+  /* Comfortable touch targets everywhere on a phone. */
+  .btn {
+    min-height: 32px;
+  }
+
+  input[type='text'],
+  input[type='url'],
+  input[type='password'],
+  input[type='date'],
+  input[type='number'],
+  select {
+    min-height: 32px;
+  }
+}
+
+/* Short landscape: the playback bar becomes one row, so less height is reserved. */
+@media (max-width: 949px) and (max-height: 480px) {
+  :root {
+    --stage-playback-offset: calc(env(safe-area-inset-bottom, 0px) + 96px);
+  }
 }

@@ -268,4 +268,21 @@ onBeforeUnmount(() => {
   color: var(--text);
   border-color: var(--panel-border-strong);
 }
+
+/* Wider invisible handles make dragging the filter edges practical on touch. */
+@media (max-width: 760px), (max-width: 949px) and (max-height: 480px) {
+  .handle {
+    width: 28px;
+    margin-left: -14px;
+  }
+
+  .handle::after {
+    left: 13px;
+  }
+
+  .clear {
+    min-height: 30px;
+    padding: 4px 9px;
+  }
+}
 </style>
