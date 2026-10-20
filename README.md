@@ -1,18 +1,19 @@
 # Web Gource
 
 A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste a public
-Git repository URL and watch its history grow into an animated 2D map — directories branching like
-a tree, files appearing as circles sized by their real file size, authors flying between the files
-they touch, and activity bursts coloured by add / modify / delete / rename.
+Git repository URL and watch its history grow into an animated 3D map — directories branching like
+a tree, files appearing as billboards sized by their real file size, authors flying between the files
+they touch, and activity bursts coloured by add / modify / delete / rename. Drag with the mouse to
+orbit around the tree.
 
 Nothing is cloned, uploaded, or built on a server. Commit history is read straight from the
 hosting provider's REST API in the browser, normalized into a timeline, and rendered with an
 independently written Three.js renderer.
 
-![Web Gource visualizing a repository as a 2D map with circles sized by file size](docs/screenshot.png)
+![Web Gource visualizing a repository as a 3D map with billboards sized by file size](docs/screenshot.png)
 
 ```
-https://github.com/owner/repository   →   animated 2D repository history
+https://github.com/owner/repository   →   animated 3D repository history
 ```
 
 **Live:** <https://hdlopesrocha.github.io/web-gource/> — the published build is the same code as
@@ -80,13 +81,14 @@ fast the machine is:
   took ~105 s of wall clock and produced the same 765 frames as a fast one);
 * the video **contains the panels**: the info panel (date, commit subject, author,
   the files it changed with sizes, tree statistics, who is working now) in the
-  bottom-left, the timeline histogram along the bottom, the overview (minimap) in
-  the bottom-right corner, and the activity charts — commits per weekday and hour,
-  plus the sliding contribution calendar — in the right column. They are drawn with
-  the same code the on-screen panels use (`render/overlays.ts` and
-  `render/info-panel.ts`; the info panel's *content* is a shared model, so the card
-  and the frame cannot drift apart), composited into each frame, and laid out from
-  the frame size so 720p, 1080p and portrait exports all work;
+  bottom-left, the timeline histogram along the bottom, the overview (minimap) with
+  its heading and the directories/files/authors legend in the bottom-right corner,
+  and the activity charts — commits per weekday and hour, plus the sliding
+  contribution calendar — in the right column. The overview is drawn by the same
+  `MinimapDrawer` the on-screen panel uses, so the exported map and the panel cannot
+  drift apart, and all four rectangles come from one pure layout function
+  (`overlayLayout`) that reserves space for each panel, which is what keeps them from
+  overlapping at any frame size — 720p, 1080p and portrait included;
 * frames are drawn by the existing WebGL pipeline (`Engine.renderExportFrame`),
   at the resolution you pick, with the camera stepping on a fixed frame cadence
   rather than a wall clock;
@@ -100,6 +102,10 @@ fast the machine is:
   browser has an AVC encoder. Containers are written in this repository
   (`src/engine/export/webm.ts`, `mp4.ts`) — no muxer dependency, and the track
   declares the export's frame duration so players report the real frame rate;
+* **background music is mixed into the file** when a track is loaded: the MP3 is
+  decoded once, looped and resampled to the video's exact length, faded in and
+  out on the animation clock, and encoded as **Opus** for WebM or **AAC** for
+  MP4. Audio and video end on the same frame;
 * progress reports frames rendered, the total frame count, and the simulated
   time reached; cancelling stops cleanly and leaves the session where it was;
 * at the end the encoder is flushed and the container is finalised (cluster
@@ -119,6 +125,60 @@ the result has to be reproducible.
 
 Both modes share the frame rate (60 fps) and the speed: there is no separate
 recording speed setting, because the video should look like what you are watching.
+
+### Background music
+
+**Settings → Music** accepts an MP3. The track loops for the whole animation,
+with a volume control and independent fade-in/fade-out lengths (0–10 s each):
+
+* the fade-out always finishes with the final animation frame, so the last
+  frame is silent; fade lengths are measured in video seconds, so they behave
+  the same at any playback speed in the app and in the exported file;
+* live playback follows the animation clock: pausing keeps the track position,
+  seeking, restarting and reaching the end of the timeline resynchronise it, and
+  a browser that blocks autoplay retries when you press Play;
+* deterministic exports decode the MP3 once and render the looped, faded audio
+  into the container, so the audio track matches the video length exactly
+  instead of depending on how many times the track happened to loop;
+* live capture mixes the same envelope through Web Audio into `MediaRecorder`
+  when the selected format can carry audio; if it cannot, the recording is
+  video-only rather than failing;
+* WebM uses Opus and MP4 uses AAC. If the browser has no encoder for the chosen
+  audio codec, the export stops with an explanatory message — choose WebM or
+  remove the track (Chrome on Linux, for example, currently has no AAC encoder);
+* the uploaded file is kept for the current browser session only. Volume and
+  fade lengths are remembered; the audio itself never leaves the browser.
+
+**The microphone** can stand in for the MP3 file: the same tab has an **Audio source** choice of
+*MP3 file* or *Microphone*. The microphone is opened with echo cancellation, noise suppression and
+automatic gain control disabled, analysed live with the same bands, FFT size, smoothing and clap
+detection as the file path, and fed through a gain node that carries the same fade-in/fade-out
+envelope — so the reactive visuals keep fading in and out with the recording in either mode. Nothing
+is routed to the speakers (no monitoring, no feedback). Live capture mixes the faded microphone into
+the recording instead of the file audio, while the deterministic frame-by-frame export is
+**video-only** in microphone mode, because a live input cannot be replayed identically twice.
+Switching back to the file stops the microphone tracks and closes its audio context; a denied
+permission leaves the file source selected and reports why.
+
+**Audio-reactive visuals** are on by default and can be switched off in the same
+tab. The decoded track is analysed once with an FFT (no `AnalyserNode`, so the
+result does not depend on the machine's real-time performance) into a few
+envelopes sampled every ~21 ms:
+
+* **bass** (25–150 Hz) rotates the hue of each folder's glow and makes it
+  breathe;
+* **claps** — short transients in 1.8–5.8 kHz — cycle and flash the file
+  colours, so the palette changes with the beat;
+* **low mids** (150–400 Hz) tint the folder rings, and the **midrange**
+  (400–2000 Hz) brightens the branch lines;
+* the **vocal range** (300–3400 Hz) makes the author avatars and their halos
+  pulse.
+
+Live playback samples the position of the looping audio element, so the
+reaction matches what is actually heard. Deterministic exports sample the same
+envelopes at the video timestamp (and apply the same fade envelope), so exported
+frames are reproducible. Switching the toggle off only stops the reaction; the
+track keeps playing and is still included in recordings and exports.
 
 ### Ignoring folders
 
@@ -181,7 +241,7 @@ browser — there is no backend.
 | `Home` / `End` | Jump to the start / end |
 | `+` / `-` | Faster / slower |
 | `R` | Restart playback |
-| `C` | Recentre the camera |
+| `C` | Reset the camera to the default 3D view |
 | `L` | Toggle labels |
 | `M` | Toggle the minimap |
 | `A` | Toggle the authors panel |
@@ -189,8 +249,31 @@ browser — there is no backend.
 | `F` | Fullscreen |
 | `?` | Help |
 
-Drag to pan, scroll to zoom (the point under the pointer stays anchored). Manual input pauses the
-automatic view for a few seconds.
+The 3D view is a tabletop: the camera up vector is the plane normal (+Z), so a left-drag spins the
+camera around the tree and tilting changes the elevation above the plane while the ground recedes
+into the distance. Right-drag (or Shift-drag) pans and the scroll wheel zooms around the pointer.
+The **2D** button in the stage toolbar switches to a flat top-down view with the original planar
+framing, where a left-drag pans; **Reset** (or `C`) returns to the default 3D angle. Manual input
+pauses the automatic view for a few seconds.
+
+### VR and 3D spheres
+
+The stage toolbar has a **VR** button that opens the same scene in an immersive WebXR session:
+
+* support is probed once with `navigator.xr.isSessionSupported('immersive-vr')`. When the browser
+  has no XR device (or no `navigator.xr` at all) the button is disabled and says so, instead of
+  failing when it is pressed;
+* entering a session enables `renderer.xr`, requests the `local-floor` reference space and puts the
+  camera on an XR rig, so the tree sits in front of you like a table you can walk around; leaving
+  the session (or the headset ending it) restores the exact previous camera and scene transform;
+* while a session is running the frames come from the XR animation loop and the glyph billboards
+  face your head, not the orbit camera;
+* **files are drawn as real spheres** in VR — instanced `SphereGeometry` with a light, world-scaled
+  rather than billboarded — because flat sprites read as discs once you have stereo depth. The same
+  representation is available outside VR with **Settings → Visual → 3D file spheres**, which is the
+  quickest way to see it without a headset. Directories keep their rings;
+* nothing here is required for the normal view: without a headset the app behaves exactly as before,
+  and the deterministic export ignores the XR state.
 
 ## How it works
 
@@ -233,8 +316,12 @@ src/
     engine.ts               playback clock, simulation driving, camera, HUD, recording hooks
     controller.ts           app orchestration: load, filters, seek, settings, recording
     recorder.ts             MediaRecorder + canvas.captureStream export (live capture)
+    audio/
+      music.ts              MP3 decode, looping playback, fade and loop helpers
+      analysis.ts           FFT band envelopes, vocal presence and clap detection
     export/                 deterministic frame-by-frame export
-      frames.ts             30 fps frame plan: time, timestamps, keyframes, progress
+      audio.ts              Opus/AAC encode of the looped, faded soundtrack
+      frames.ts             60 fps frame plan: time, timestamps, keyframes, progress
       encoder.ts            WebCodecs encoders (hardware first, software fallback)
       exporter.ts           frame loop, backpressure, cancellation, finalisation
       webm.ts               WebM/Matroska muxer (VP9/VP8/AV1)
@@ -301,13 +388,23 @@ Given the same history and settings, the same sequence of events is produced:
 ![Files rendered as Gource's lit balls inside a folder's bloom halo](docs/screenshot-glow.png)
 
 * Files and directories are two `InstancedMesh` objects — Gource's lit ball sprite for files, rings
-  for directories — viewed through an orthographic camera, with per-instance colour and matrix
-  updates only for changed nodes. Layer order: branches (behind), circles, folder glow, activity
-  particles, rays, authors, labels (front). Both grow by reallocating and copying instance buffers
-  when a repository turns out to be larger than expected.
+  for directories — rendered as camera-facing billboards through a perspective orbit camera. The
+  billboard world scale is divided by its view depth (relative to the orbit target), cancelling
+  perspective attenuation: a file keeps the same apparent size on the near and far sides of the
+  tilted tree, while its radius still encodes the real file size. In the flat 2D view the whole tree
+  shares one depth, so the compensation drops out and the original planar framing is reproduced
+  exactly. Layer order: the backdrop gradient, then the folder glow — the first element layer, drawn
+  with the depth test off so nothing can hide it and it can never hide anything — then branches, the
+  camera-following grid, the activity plasma, circles, particles, rays, authors and labels (front).
+  Every layer above the glow is drawn on top with the depth test on, so a nearer circle occludes a
+  branch, a ray, a particle or a plasma blob behind it. Both layers grow by reallocating and copying
+  instance buffers when a repository turns out to be larger than expected.
 * File sprites use the ball from Gource's own `data/file.png` (a highlight above and to the left,
   darkening towards the rim), tinted by the instance colour, so a file still carries its own colour
-  but reads as a sphere rather than a flat disc.
+  but reads as a sphere rather than a flat disc. The transparent margin around the ball is discarded
+  by an alpha test, so the ball — not its square quad — is what writes depth and occludes the folder
+  glow behind it. Directory rings are alpha-tested the same way, so a ring honours `opacity` when it
+  fades and its square footprint can never leave a dark corner in the depth buffer.
 * Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
   depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
   behind a file circle or a directory ring instead of being painted across it — and every segment is
@@ -315,26 +412,49 @@ Given the same history and settings, the same sequence of events is produced:
   edge. A branch whose two circles already touch is dropped rather than drawn as a stub inside one.
 * Activity effects and author trails come from a single additive `Points` pool with a free-list (no
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
-  at any zoom level.
+  at any zoom level. The glow halos and author→file beam quads are also billboarded towards the
+  camera, so they keep facing it while it orbits.
 * Author→file beams are one dynamic mesh rebuilt per frame (two quads per beam: glow + core), so a
-  commit touching twenty files still costs a single draw call. By default the beam is **directional**:
+  commit touching twenty files still costs a single draw call. They are depth tested like the rest of
+  the scene, so a beam that passes behind a file circle or a folder ring is occluded by it instead of
+  painting across it. By default the beam is **directional**:
   a bright head leaves the avatar and travels to the file or folder it changed, with a comet tail
   following it and the far end of the soft glow brightening as it arrives — so a change reads as a
   signal being sent. Settings → Visual offers `Travelling head` (default) or `Solid ray` (the original
   full-length line, unchanged) plus the travel time (0.15–2 s).
 * Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
-  dense repositories stay readable. File labels can include the host-reported size.
-* A camera-following background gradient and grid keep panning and zooming readable. The grid is a
-  transparent overlay, so depth testing (not the draw order) is what keeps it behind the tree: the
-  circles write depth first and the grid is rejected wherever they cover it. The depth stack is
-  explicit — background −6, grid −5, branches 0, circles +0.25, effects +0.5. The minimap shows the
-  whole tree with the current view position.
+  dense repositories stay readable. Their world size is derived from the view depth of each label,
+  keeping the text at a fixed pixel height anywhere on the tilted plane (and perfectly uniform in the
+  flat 2D view). File labels can include the host-reported size.
+* The background is a full-screen gradient shader that is independent of the orbit angle. A
+  camera-following grid keeps panning, orbiting and zooming readable. The grid is a transparent
+  overlay, so depth testing (not the draw order) is what keeps it behind the tree: the billboards
+  write depth first and the grid is rejected wherever they cover it. The depth stack is explicit —
+  grid −0.6, branches 0, billboards +0.25, effects +0.5; the folder glow is not part of it, because
+  it is painted together with the backdrop before any of them. The minimap shows the whole tree
+  with the current view position.
 * The glow is Gource's bloom layer (`GlowField`): one additive halo per directory, sized
   `clusterRadius * 2` and tinted `directoryColour * bloomIntensity`, using a reproduction of
-  Gource's `bloom.tga` falloff (`1 - smoothstep(0, 0.72, r)`, peaking at half white). It is drawn
-  after the circles (additively, so the dots stay crisp) and before the beams and avatars, so a
-  folder's halo washes over its own file cluster the way Gource's does. Settings → Scene switches it
-  off or drives the intensity from 0 to 1.5 (Gource's default is 0.75).
+  Gource's `bloom.tga` falloff (`1 - smoothstep(0, 0.72, r)`, peaking at half white). Every halo —
+  the root's included — takes the same `activityTint` the plasma volume uses, so the two layers read
+  as one light instead of two different blues. The halos are **background light**: they are painted
+  right after the backdrop and before every element, with depth testing switched off, so they never
+  brighten (or get cut into by) the branch lines, circles, beams and avatars drawn on top of them.
+  Settings → Scene switches the layer off or drives the intensity from 0 to 1.5 (Gource's default is
+  0.75).
+* The **activity plasma** (`PlasmaField`) is a ray-marched density volume that forms around the
+  files with the most recent changes. Every file carries a heat value in 0…1, bumped by each
+  activity event and decaying exponentially (4 s by default); the hottest files (up to 64) become
+  spherical metaball sources whose strength and radius both scale with their heat, so a cold file
+  contributes nothing and heat alone drives the blob in and out. The summed field is rasterised into
+  a 128² texture each frame and the fragment shader marches the slab covering the sources, which
+  keeps the per-pixel cost bounded instead of looping over every file. It is drawn **after** the
+  branch lines and the circles, with the depth test on, so their silhouettes clip the volume instead
+  of the glow washing across them; particles, beams, avatars and labels still draw on top. It shares
+  one tint with the folder glow (see above), and its own `opacity` scales how much of the volume is
+  added — the shipped default (intensity 0.60, opacity 0.35) is a faint haze. Settings → Visual
+  toggles it and exposes the intensity, opacity, surface sharpness, metaball weight, blob radius,
+  heat decay, volume height and march quality.
 * Resizing, device pixel ratio and full disposal (geometries, materials, textures, renderer) are
   handled in one place (`SceneRenderer`).
 
@@ -407,6 +527,10 @@ hiding authors, ignoring folders or narrowing the date range changes what they c
 device pixel ratio with a hover readout per cell, and the exported video draws the same charts from the same code,
 growing frame by frame as the animation plays.
 
+The scene's activity plasma is built on the same idea — each change adds heat to the file it touched
+and the light decays over a few seconds — but it lives in the 3D scene rather than in these charts;
+see [Rendering](#rendering).
+
 ### Reading the activity
 
 ![A beam connecting an author to the file it just changed](docs/screenshot-beams.png)
@@ -459,11 +583,15 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   timeline.
 * Progress (percent, frames, elapsed, size) is reported live; recording can be stopped manually,
   stops automatically at the end of the timeline, and has a safety time limit.
+* With background music loaded, live capture mixes it into the recording when the selected format
+  can carry audio; in microphone mode the faded microphone is mixed in instead and the deterministic
+  render is video-only. Otherwise the deterministic render encodes its own Opus (WebM) or AAC (MP4)
+  track for the exact length of the video.
 * Keep the tab focused while recording: background tabs throttle rendering.
 
 ## Testing
 
-`npm test` runs 119 tests with mocked provider payloads — no network access:
+`npm test` runs 387 tests with mocked provider payloads — no network access:
 
 * URL parsing (bare input, SCP syntax, `.git`, UI routes, nested GitLab groups, Enterprise hosts);
 * GitHub provider: pagination, cache reuse, rename/delete/copy mapping, 300-file truncation,
@@ -492,15 +620,36 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   folder pushes its siblings outwards, seek and playback produce identical layouts, and the static
   mode pins nodes to their path-derived positions;
 * export containers: EBML/box structure written back and parsed (clusters per keyframe, simple
-  block payloads, patched durations, `avcC`, fragment data offsets, byte-exact sample payloads),
-  and the export loop (30 fps frame plan, keyframe cadence, frame release, queue bounds, progress,
-  cancellation, encoder errors, MP4 initialisation from the encoder metadata);
+  block payloads, patched durations, `avcC`, Opus headers, AAC `esds`, audio tracks and fragments,
+  fragment data offsets, byte-exact sample payloads), and the export loop (60 fps frame plan,
+  keyframe cadence, frame release, queue bounds, progress, cancellation, encoder errors, MP4
+  initialisation from the encoder metadata);
+* background music: fade-in/fade-out envelope, seamless looping, resampling, live clock mapping,
+  and the deterministic audio encode/mux path for both WebM (Opus) and MP4 (AAC);
+* music analysis: band isolation for bass, folders, lines and the vocal range, sparse-transient
+  clap detection with onset counting, silence, low sample rates, and sampling outside the track;
+* audio-reactive layers: claps cycling file colours and restoring the palette when the track
+  stops, bass rotating the glow hue, and midrange brightness on the branches; the controller
+  provider (live position sampling, export timestamps, the pause freeze and the on/off toggle);
+* microphone: the capture graph and its gain, the shared fade envelope (kept while recording), live
+  band analysis matching the batch bands, the recording mix, teardown, and permission failures;
+* the plasma field: heat bumping and exponential decay, heat-gated source selection (hottest first,
+  capped), volume bounds and rasterised density, the audio hue/brightness match with the folder
+  glow, setting clamps (opacity included), and its render order after the circles and before every
+  later transparent layer;
+* the exported overlay: the panel layout at 720p, 1080p and portrait (no overlaps), the overview
+  heading, legend and map drawing inside the panel, and `overview: false` skipping it;
+* VR and spheres: WebXR support detection and error paths, session enter/exit and the end-event
+  restore (against fakes, since there is no headset in CI), and the instanced sphere mode (geometry
+  and material swap, world-scaled non-billboarded transforms, colours, hidden nodes, capacity);
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes collapsing on both dirty
   *and* full syncs (a seek or restart must not leave the previous frame on screen), every layer
   dropping its instances when the history is rebuilt (node ids are per simulation, so a filter change
   must not keep rendering the old tree), folder glow (one halo per directory sized from the cluster
-  radius, intensity baked into the instance colours), edge buffers, particle
-  pool limits and decay, camera panning/zooming;
+  radius, intensity baked into the instance colours, drawn as background light with depth testing
+  off), edge buffers, particle
+  pool limits and decay, tabletop orbit (plane-normal up vector)/pan/zoom, the flat 2D view
+  preserving the orbit, and billboard orientation and fixed-size compensation;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
   WebGL-unavailable degradation;
 * component smoke tests (jsdom) for the landing view, playback bar, stage, panels and help overlay;
@@ -525,7 +674,6 @@ headers, file change shapes) and skips gracefully when the quota is exhausted.
   current size; tracking size over time would need one tree request per commit.
 * **Synthetic avatars.** Profile pictures from the host are not fetched: generated initials keep the
   scene deterministic and avoid third-party requests.
-* **No audio.** Gource's background music has no browser equivalent here.
 
 ## Legal
 
