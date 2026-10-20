@@ -3,6 +3,10 @@ import type { ChangeKind } from '../timeline/types'
 import type { SimAuthor, SimNode, SimTether } from '../sim/simulation'
 import { colorForChange } from './palette'
 
+const scratchDirection = new THREE.Vector3()
+const scratchToCamera = new THREE.Vector3()
+const scratchSide = new THREE.Vector3()
+
 /**
  * Beams between an author and the files it just changed.
  *
@@ -56,7 +60,10 @@ export class BeamField {
       opacity: 1,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      // The rays are scene geometry, not an overlay: a beam that passes behind
+      // a file circle or a folder ring is occluded by it, exactly like the
+      // particles. Only the halo layer below them skips the depth test.
+      depthTest: true,
       toneMapped: false,
     })
     this.mesh = new THREE.Mesh(this.geometry, this.material)
@@ -146,6 +153,7 @@ export class BeamField {
     authors: readonly SimAuthor[],
     nodes: readonly SimNode[],
     worldPerPixel: number,
+    camera?: THREE.Camera,
   ): void {
     if (!this.enabled) {
       this.lastSegments = 0
@@ -176,28 +184,51 @@ export class BeamField {
 
         const ax = author.position.x
         const ay = author.position.y + this.authorLift
+        const az = author.position.z
         const bx = node.position.x
         const by = node.position.y
+        const bz = node.position.z
 
         // Stronger changes get a wider, brighter beam.
         const scale = this.strengthScale(tether)
         const dx = bx - ax
         const dy = by - ay
-        const length = Math.hypot(dx, dy)
+        const dz = bz - az
+        const length = Math.hypot(dx, dy, dz)
         if (length < 0.001) continue
-        // Perpendicular offset: the quad faces the camera because the scene is
-        // flat, so this is a simple 2D perpendicular.
-        const nx = (-dy / length) * halfWidth * scale
-        const ny = (dx / length) * halfWidth * scale
+        // The glow quad is always perpendicular to the view direction, so it
+        // presents its width to the camera from any orbit angle. In the old
+        // headless/2D call path there is no camera: use the XY perpendicular.
+        let nx: number
+        let ny: number
+        let nz: number
+        if (camera) {
+          scratchDirection.set(dx, dy, dz).normalize()
+          scratchToCamera.set(
+            camera.position.x - ax,
+            camera.position.y - ay,
+            camera.position.z - az,
+          )
+          scratchSide.crossVectors(scratchDirection, scratchToCamera)
+          if (scratchSide.lengthSq() < 1e-8) scratchSide.set(-dy, dx, 0)
+          scratchSide.normalize().multiplyScalar(halfWidth * scale)
+          nx = scratchSide.x
+          ny = scratchSide.y
+          nz = scratchSide.z
+        } else {
+          nx = (-dy / length) * halfWidth * scale
+          ny = (dx / length) * halfWidth * scale
+          nz = 0
+        }
         // Slightly narrower at the file end.
         const taper = 0.62
 
         const offset = segment * 36
-        const put = (index: number, x: number, y: number, brightness: number): void => {
+        const put = (index: number, x: number, y: number, z: number, brightness: number): void => {
           const base = offset + index * 3
           this.positions[base] = x
           this.positions[base + 1] = y
-          this.positions[base + 2] = 0
+          this.positions[base + 2] = z
           const value = alpha * brightness
           this.colors[base] = this.scratch.r * value
           this.colors[base + 1] = this.scratch.g * value
@@ -220,30 +251,34 @@ export class BeamField {
 
         const pointX = (t: number): number => ax + dx * t
         const pointY = (t: number): number => ay + dy * t
+        const pointZ = (t: number): number => az + dz * t
         const sx = pointX(coreStart)
         const sy = pointY(coreStart)
+        const sz = pointZ(coreStart)
         const hx = pointX(head)
         const hy = pointY(head)
+        const hz = pointZ(head)
 
         // 1. Soft glow: a wider, dimmer quad that makes the beam read even on a
         //    busy background.
         const glowX = nx * 2.6
         const glowY = ny * 2.6
-        put(0, ax + glowX, ay + glowY, 0.5 * scale)
-        put(1, ax - glowX, ay - glowY, 0.5 * scale)
-        put(2, bx + glowX * taper, by + glowY * taper, farGlow * scale)
-        put(3, ax - glowX, ay - glowY, 0.5 * scale)
-        put(4, bx + glowX * taper, by + glowY * taper, farGlow * scale)
-        put(5, bx - glowX * taper, by - glowY * taper, farGlow * scale)
+        const glowZ = nz * 2.6
+        put(0, ax + glowX, ay + glowY, az + glowZ, 0.5 * scale)
+        put(1, ax - glowX, ay - glowY, az - glowZ, 0.5 * scale)
+        put(2, bx + glowX * taper, by + glowY * taper, bz + glowZ * taper, farGlow * scale)
+        put(3, ax - glowX, ay - glowY, az - glowZ, 0.5 * scale)
+        put(4, bx + glowX * taper, by + glowY * taper, bz + glowZ * taper, farGlow * scale)
+        put(5, bx - glowX * taper, by - glowY * taper, bz - glowZ * taper, farGlow * scale)
 
         // 2. Core: the bright head travelling towards the element, with the tail
         //    trailing it (a full-length line once it has arrived).
-        put(6, sx + nx, sy + ny, startBrightness * scale)
-        put(7, sx - nx, sy - ny, startBrightness * scale)
-        put(8, hx + nx * taper, hy + ny * taper, headBrightness * scale)
-        put(9, sx - nx, sy - ny, startBrightness * scale)
-        put(10, hx + nx * taper, hy + ny * taper, headBrightness * scale)
-        put(11, hx - nx * taper, hy - ny * taper, headBrightness * scale)
+        put(6, sx + nx, sy + ny, sz + nz, startBrightness * scale)
+        put(7, sx - nx, sy - ny, sz - nz, startBrightness * scale)
+        put(8, hx + nx * taper, hy + ny * taper, hz + nz * taper, headBrightness * scale)
+        put(9, sx - nx, sy - ny, sz - nz, startBrightness * scale)
+        put(10, hx + nx * taper, hy + ny * taper, hz + nz * taper, headBrightness * scale)
+        put(11, hx - nx * taper, hy - ny * taper, hz - nz * taper, headBrightness * scale)
         segment += 1
       }
     }

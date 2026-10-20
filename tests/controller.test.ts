@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { controller } from '../src/engine/controller'
+import { analyzeMusic, type AudioLevels } from '../src/engine/audio/analysis'
+import type { MusicSource } from '../src/engine/audio/music'
 import { resetRunState, store } from '../src/state/store'
 import { createMockGithub, generateCommits, type MockCommit, type MockGithubOptions } from './helpers/mockGithub'
 import StageView from '../src/ui/StageView.vue'
@@ -265,5 +267,62 @@ describe('VisualizerController', () => {
     expect(controller.resolve('https://github.com/a/b')?.providerId).toBe('github')
     expect(controller.resolve('https://gitlab.com/a/b')?.providerId).toBe('gitlab')
     expect(controller.resolve('not a url')).toBeNull()
+  })
+
+  it('provides music bands to the renderer, freezing them while playback is paused', () => {
+    const rate = 44_100
+    const samples = new Float32Array(rate / 2)
+    for (let index = 0; index < samples.length; index += 1) {
+      samples[index] = Math.sin((2 * Math.PI * 100 * index) / rate)
+    }
+    const source: MusicSource = {
+      sampleRate: rate,
+      numberOfChannels: 1,
+      length: samples.length,
+      channels: [samples],
+      duration: samples.length / rate,
+    }
+    const internals = controller as unknown as {
+      musicAnalysis: ReturnType<typeof analyzeMusic> | null
+      musicPlayer: unknown
+      audioWasPlaying: boolean
+      audioLevelsFor: (mode: 'live' | 'export', videoTime: number) => AudioLevels | null
+    }
+    const original = {
+      analysis: internals.musicAnalysis,
+      player: internals.musicPlayer,
+      wasPlaying: internals.audioWasPlaying,
+    }
+    try {
+      internals.musicAnalysis = analyzeMusic(source)
+      internals.audioWasPlaying = false
+      // Nothing has played yet, so a paused player must not react.
+      internals.musicPlayer = { playing: false, position: 0.25 }
+      expect(internals.audioLevelsFor('live', 0)).toBeNull()
+
+      internals.musicPlayer = { playing: true, position: 0.25 }
+      const live = internals.audioLevelsFor('live', 0)
+      expect(live?.bass).toBeGreaterThan(0.5)
+
+      // Pausing keeps the palette the frame was paused with, instead of
+      // snapping every reactive layer back to its base colour.
+      internals.musicPlayer = { playing: false, position: 0.25 }
+      const frozen = internals.audioLevelsFor('live', 0)
+      expect(frozen).toBe(live)
+      expect(frozen?.bass).toBe(live?.bass)
+
+      // The export samples the same analysis at the video timestamp.
+      internals.musicPlayer = { playing: true, position: 0.25 }
+      const exported = internals.audioLevelsFor('export', 0.25)
+      expect(exported?.bass).toBeGreaterThan(0.5)
+
+      store.settings.audioReactive = false
+      expect(internals.audioLevelsFor('live', 0)).toBeNull()
+      store.settings.audioReactive = true
+    } finally {
+      internals.musicAnalysis = original.analysis
+      internals.musicPlayer = original.player
+      internals.audioWasPlaying = original.wasPlaying
+    }
   })
 })

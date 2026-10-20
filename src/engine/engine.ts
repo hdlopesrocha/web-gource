@@ -2,10 +2,12 @@ import * as THREE from 'three'
 import type { ActivityBucket, Timeline, TimelineCommit, TimelineAuthor } from '../timeline/types'
 import { buildSchedule, type Schedule, type ScheduleOptions } from '../timeline/schedule'
 import { Simulation, type SizeMode } from '../sim/simulation'
-import { Camera2D, type CameraOptions } from '../render/camera'
+import { OrbitCamera, type CameraOptions } from '../render/camera'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
+import { XrSession } from '../render/xr'
 import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
+import type { AudioLevels } from './audio/analysis'
 import { EXPORT_FPS } from './export/frames'
 import type { ExportFrame, ExportFrameRequest } from './export/exporter'
 import { ExportOverlay, type OverlayOptions } from './export/overlay'
@@ -74,7 +76,17 @@ export const DEFAULT_CAMERA_OPTIONS: CameraOptions = {
   followActivity: true,
   autoZoom: true,
   smoothing: 1.4,
+  flat: false,
 }
+
+/** Live playback or the deterministic export: the time bases differ. */
+export type AudioLevelsMode = 'live' | 'export'
+/**
+ * Supplies the music bands for the frame being drawn. Live levels come from
+ * the audible track; export levels are sampled at the video timestamp so the
+ * rendered file is deterministic.
+ */
+export type AudioLevelsProvider = (mode: AudioLevelsMode, videoTime: number) => AudioLevels | null
 
 /** HUD updates per second (kept low so Vue does not re-render every frame). */
 const HUD_RATE = 8
@@ -83,19 +95,20 @@ const HUD_RATE = 8
  * Playback engine: owns the clock, the simulation, the camera and the renderer.
  *
  * The engine never talks to Vue directly; it pushes throttled {@link HudState}
- * snapshots to a callback. Rendering is driven by `requestAnimationFrame`, and
- * during recording the clock advances by an exact `1/fps` step so the captured
- * video is a deterministic sampling of the timeline.
+ * snapshots to a callback. Rendering is driven by three's animation loop
+ * (`renderer.setAnimationLoop`), which uses the window's `requestAnimationFrame`
+ * normally and switches to the XR session's own loop while an immersive session
+ * runs. During recording the clock advances by an exact `1/fps` step so the
+ * captured video is a deterministic sampling of the timeline.
  */
 export class Engine {
   readonly renderer: SceneRenderer
-  readonly rig: Camera2D
+  readonly rig: OrbitCamera
   private sim: Simulation
   private timeline: Timeline
   private schedule: Schedule
   private canvas: HTMLCanvasElement
   private container: HTMLElement
-  private rafId = 0
   private running = false
   private lastFrameMs = 0
   private fpsAccumulator = 0
@@ -113,6 +126,12 @@ export class Engine {
   private authorColorLookup: (id: string) => string
   /** Size of the current export, used when compositing frames. */
   private exportSize = { width: 1920, height: 1080 }
+  /** Music bands for the frame being drawn, provided by the controller. */
+  private audioLevels: AudioLevelsProvider | null = null
+  /** Immersive WebXR session, created on first use. */
+  private xr: XrSession | null = null
+  /** Rig group the camera is parented to while an XR session runs. */
+  private readonly xrRig = new THREE.Group()
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -138,7 +157,7 @@ export class Engine {
     })
     if (options.renderer) this.renderer.applySettings(options.renderer)
     this.renderer.setNodes(this.sim.nodes)
-    this.rig = new Camera2D()
+    this.rig = new OrbitCamera()
     this.rig.attach(canvas)
     this.renderer.requestFullSync()
 
@@ -413,8 +432,52 @@ export class Engine {
   }
 
   resetCamera(): void {
-    this.rig.recenter(this.sim.bounds())
-    this.rig.frame(this.sim.bounds(), true)
+    this.rig.reset3D(this.sim.bounds(), true)
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Immersive WebXR
+   * ------------------------------------------------------------------ */
+
+  /** True while an immersive VR session is running. */
+  get vrActive(): boolean {
+    return this.xr?.active ?? false
+  }
+
+  /**
+   * Enter or leave an immersive VR session.
+   *
+   * The session owns the tabletop framing (the tree is placed in front of the
+   * user at table height) and the sphere mode is forced on while it runs, so the
+   * files are real geometry with parallax rather than flat billboards.
+   */
+  async toggleVr(): Promise<void> {
+    const xr = this.ensureXr()
+    if (xr.active) await xr.exit()
+    else await xr.enter()
+  }
+
+  private ensureXr(): XrSession {
+    if (!this.xr) {
+      this.xrRig.name = 'xr-rig'
+      this.renderer.scene.add(this.xrRig)
+      this.xr = new XrSession({
+        renderer: this.renderer.webgl,
+        framing: {
+          rig: this.xrRig,
+          scene: this.renderer.scene,
+          camera: this.rig.camera,
+          root: this.renderer.world,
+          bounds: () => this.sim.bounds(),
+        },
+      })
+    }
+    return this.xr
+  }
+
+  /** Attach (or detach) the music analysis used by the renderer. */
+  setAudioLevelsProvider(provider: AudioLevelsProvider | null): void {
+    this.audioLevels = provider
   }
 
   /* ------------------------------------------------------------------ *
@@ -425,24 +488,29 @@ export class Engine {
     if (this.running) return
     this.running = true
     this.lastFrameMs = performance.now()
-    const frame = (now: number) => {
-      if (!this.running || this.disposed) return
-      this.rafId = requestAnimationFrame(frame)
-      this.tick(now)
-    }
-    this.rafId = requestAnimationFrame(frame)
+    // Driving frames through three's renderer (rather than our own
+    // requestAnimationFrame) is what lets an immersive session receive frames:
+    // three swaps to the session's animation loop while presenting and falls
+    // back to the window's rAF afterwards.
+    this.renderer.webgl.setAnimationLoop(this.frame)
+  }
+
+  private frame = (now: number): void => {
+    if (!this.running || this.disposed) return
+    this.tick(now)
   }
 
   stop(): void {
+    if (!this.running) return
     this.running = false
-    cancelAnimationFrame(this.rafId)
-    this.rafId = 0
+    this.renderer.webgl.setAnimationLoop(null)
   }
 
   /** Render a single frame without advancing time (used for still captures). */
   renderOnce(): void {
+    const audio = this.audioLevels?.('live', this.simTime) ?? null
     this.renderer.consumeEvents(this.sim, performance.now() * 0.001)
-    this.renderer.update(0, performance.now() * 0.001, this.sim, this.rig)
+    this.renderer.update(0, performance.now() * 0.001, this.sim, this.rig, audio)
     this.renderer.render(this.rig.camera)
   }
 
@@ -478,9 +546,10 @@ export class Engine {
     const focus = this.sim.recentActivityCenter(4) ?? this.sim.authorCentroid()
     const bounds = this.boundsCache(clock)
     this.rig.update(simDt, this.cameraOptions, focus, bounds)
+    const audio = this.audioLevels?.('live', this.simTime) ?? null
 
     this.renderer.consumeEvents(this.sim, clock)
-    this.renderer.update(simDt, clock, this.sim, this.rig)
+    this.renderer.update(simDt, clock, this.sim, this.rig, audio)
     this.renderer.render(this.rig.camera)
 
     // While recording, keep the composite (scene + panels) up to date so the
@@ -629,8 +698,12 @@ export class Engine {
       if (!ctx) return null
       this.composite = { canvas, ctx }
     }
-    if (!this.overlay) this.overlay = new ExportOverlay(this.timeline.commits, this.timeline.authors, options)
-    else {
+    if (!this.overlay) {
+      this.overlay = new ExportOverlay(this.timeline.commits, this.timeline.authors, {
+        repository: this.timeline.repo.name,
+        ...options,
+      })
+    } else {
       this.overlay.setCommits(this.timeline.commits)
       this.overlay.setAuthors(this.timeline.authors)
       this.overlay.setFileSizes(this.timeline.fileSizes)
@@ -686,8 +759,9 @@ export class Engine {
     this.renderer.clearEffects()
     this.renderer.requestFullSync()
     this.resizeTo(width, height)
-    this.rig.recenter(this.sim.bounds())
-    this.rig.frame(this.sim.bounds(), true)
+    // Reset the orbit angles too, so an export is not affected by however the
+    // user happened to be looking at the scene before pressing record.
+    this.rig.reset(this.sim.bounds(), true)
     this.emitHud(true)
   }
 
@@ -724,8 +798,11 @@ export class Engine {
     this.rig.update(dt, this.cameraOptions, focus, this.boundsValue)
 
     // `now` is the simulated time: every time-based effect is deterministic.
+    // The music bands are sampled at the video timestamp so the rays, colours
+    // and claps in the exported file follow the encoded audio.
+    const audio = this.audioLevels?.('export', request.frame / EXPORT_FPS) ?? null
     this.renderer.consumeEvents(this.sim, this.simTime)
-    this.renderer.update(dt, this.simTime, this.sim, this.rig)
+    this.renderer.update(dt, this.simTime, this.sim, this.rig, audio)
     this.renderer.render(this.rig.camera)
 
     // Composite the panel overlay (timeline, overview, activity) into the frame.
@@ -795,6 +872,8 @@ export class Engine {
   dispose(): void {
     this.disposed = true
     this.stop()
+    this.xr?.dispose()
+    this.xr = null
     window.removeEventListener('resize', this.handleWindowResize)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null

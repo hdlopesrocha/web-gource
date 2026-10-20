@@ -135,6 +135,25 @@ export interface ExportProgressState {
   queue: number
 }
 
+/** Background music uploaded for the current session. */
+export interface MusicSettings {
+  /** Where the audible/reactive audio comes from for this session. */
+  source: 'file' | 'microphone'
+  /** File name of the loaded track; null when no track is loaded. */
+  fileName: string | null
+  /** Duration of one loop of the track in seconds. */
+  duration: number
+  /** Playback and export volume, 0…1. */
+  volume: number
+  /** Fade-in length in video seconds. */
+  fadeInSeconds: number
+  /** Fade-out length in video seconds, ending at the end of the animation. */
+  fadeOutSeconds: number
+  /** True while the file is being decoded. */
+  loading: boolean
+  error: string | null
+}
+
 export interface ExportCodecInfo {
   container: 'webm' | 'mp4'
   label: string
@@ -150,6 +169,12 @@ export interface UiState {
   authorsOpen: boolean
   minimapVisible: boolean
   timelineOpen: boolean
+  /** True when the browser exposes an immersive WebXR device. */
+  xrSupported: boolean
+  /** True while an immersive WebXR session is running. */
+  xrActive: boolean
+  /** Last WebXR failure, shown next to the VR button. */
+  xrError: string | null
 }
 
 export interface AppState {
@@ -193,6 +218,10 @@ export interface AppState {
   settings: RendererSettings & {
     followActivity: boolean
     autoZoom: boolean
+    /** Flat top-down 2D camera instead of the default 3D orbit. */
+    flatCamera: boolean
+    /** Let the background track drive glow hue, file colours and pulses. */
+    audioReactive: boolean
     /** How file circles are sized: host-reported bytes, line activity, uniform. */
     sizeMode: SizeMode
     /** Reflow file rings as files appear and circles grow. */
@@ -218,11 +247,14 @@ export interface AppState {
     lastSpeed: number
     /** True when the last export used a hardware encoder. */
     lastHardware: boolean
+    /** True when the last export contains the background music track. */
+    lastMusic: boolean
     /** Encoders this browser offers, probed by the controller. */
     codecs: ExportCodecInfo[]
     /** True once probing has run (so the UI can say "unavailable"). */
     probed: boolean
   }
+  music: MusicSettings
   recording: RecordingSettings & {
     active: boolean
     progress: RecordingProgress | null
@@ -240,6 +272,7 @@ export interface AppState {
 const SETTINGS_KEY = 'web-gource:settings:v1'
 const LOAD_KEY = 'web-gource:load-options:v1'
 const FILTER_KEY = 'web-gource:filters:v1'
+const MUSIC_KEY = 'web-gource:music:v1'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -282,8 +315,20 @@ const defaultSettings: AppState['settings'] = {
   beamTravelSeconds: 0.55,
   beamIntensity: 1.15,
   beamWidth: 3.2,
+  showPlasma: true,
+  plasmaIntensity: 0.6,
+  plasmaOpacity: 0.35,
+  plasmaSharpness: 2,
+  plasmaWeight: 0.8,
+  plasmaRadius: 1,
+  plasmaDecay: 4,
+  plasmaHeight: 1.5,
+  plasmaSteps: 48,
+  renderSpheres: false,
   followActivity: true,
   autoZoom: true,
+  flatCamera: false,
+  audioReactive: true,
   sizeMode: 'bytes',
   dynamicLayout: true,
   pacing: 'balanced',
@@ -312,6 +357,12 @@ const defaultRecording: RecordingSettings = {
 const defaultExport: ExportSettings = {
   container: 'webm',
   bitrate: 0,
+}
+
+const defaultMusicPreferences = {
+  volume: 0.7,
+  fadeInSeconds: 2,
+  fadeOutSeconds: 2,
 }
 
 const initialLoadOptions = { ...defaultLoadOptions, ...readJson(LOAD_KEY, defaultLoadOptions) }
@@ -354,8 +405,20 @@ export const store = reactive<AppState>({
     lastElapsed: 0,
     lastSpeed: 1,
     lastHardware: false,
+    lastMusic: false,
     codecs: [],
     probed: false,
+  },
+  music: {
+    ...defaultMusicPreferences,
+    ...readJson(MUSIC_KEY, defaultMusicPreferences),
+    // The source is a session choice: a persisted microphone would never be
+    // granted permission without a click anyway.
+    source: 'file',
+    fileName: null,
+    duration: 0,
+    loading: false,
+    error: null,
   },
   recording: {
     ...defaultRecording,
@@ -375,6 +438,9 @@ export const store = reactive<AppState>({
     authorsOpen: false,
     minimapVisible: true,
     timelineOpen: true,
+    xrSupported: false,
+    xrActive: false,
+    xrError: null,
   },
 })
 
@@ -385,6 +451,15 @@ export function persistSettings(): void {
 /** The ignore list is a preference, so it survives a reload. */
 export function persistFilters(): void {
   persist(FILTER_KEY, { ignoredFolders: store.ignoredFolders, hideHiddenFolders: store.hideHiddenFolders })
+}
+
+/** Music levels and fade lengths are preferences; the file itself is not persisted. */
+export function persistMusic(): void {
+  persist(MUSIC_KEY, {
+    volume: store.music.volume,
+    fadeInSeconds: store.music.fadeInSeconds,
+    fadeOutSeconds: store.music.fadeOutSeconds,
+  })
 }
 
 export function persistLoadOptions(): void {

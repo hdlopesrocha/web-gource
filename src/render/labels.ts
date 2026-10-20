@@ -106,9 +106,9 @@ export class LabelField {
       // Behind the camera or far outside the viewport: not worth a slot.
       if (projected.z > 1 || Math.abs(projected.x) > 1.1 || Math.abs(projected.y) > 1.1) continue
 
-      // Constant screen size: the world height of a label only depends on the
-      // projection scale, not on any distance.
-      const worldHeight = options.pixelHeight * viewport.worldPerPixel
+      // Constant screen size: compensate for the perspective distance of this
+      // particular label, not just for the zoom level at the orbit target.
+      const worldHeight = options.pixelHeight * worldPerPixelAt(camera, worldPosition, height)
       const texture = labelTextures.get(entry.textureKey, JSON.stringify(labelStyleFor(node)))
       const aspect = labelAspect(texture)
       const screenWidth = options.pixelHeight * aspect
@@ -201,6 +201,36 @@ function depth(path: string): number {
   let count = 0
   for (let index = 0; index < path.length; index += 1) if (path.charCodeAt(index) === 47) count += 1
   return count
+}
+
+/**
+ * World units covered by one CSS pixel at a point in a perspective or
+ * orthographic projection.
+ *
+ * Labels are sprites, so they always face the camera; sizing them from their
+ * own view depth is what keeps their text at `pixelHeight` everywhere in a 3D
+ * scene instead of shrinking towards the far side of the repository. In the
+ * flat top-down view the whole plane shares one depth, so labels stay uniform
+ * exactly like the original 2D renderer.
+ */
+const labelViewScratch = new THREE.Vector3()
+const labelDirectionScratch = new THREE.Vector3()
+
+export function worldPerPixelAt(
+  camera: THREE.Camera,
+  position: THREE.Vector3,
+  viewportHeight: number,
+): number {
+  const height = Math.max(1, viewportHeight)
+  const projectionScale = camera.projectionMatrix.elements[5]
+  if (!(projectionScale > 0)) return 1
+  const perspective = (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true
+  if (perspective) {
+    camera.getWorldDirection(labelDirectionScratch)
+    const depth = labelViewScratch.copy(position).sub(camera.position).dot(labelDirectionScratch)
+    return (2 * Math.max(0.001, depth)) / (projectionScale * height)
+  }
+  return 2 / (projectionScale * height)
 }
 
 interface ScreenRect {

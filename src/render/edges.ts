@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { ChangeKind } from '../timeline/types'
+import type { AudioLevels } from '../engine/audio/analysis'
 import type { SimNode } from '../sim/simulation'
 import { colorForChange, colorForExtension, DIR_COLOR } from './palette'
 import { extensionOf } from '../timeline/builder'
@@ -172,6 +173,21 @@ export class EdgeField {
   private baseColor(node: SimNode): THREE.Color {
     if (node.kind === 'dir' || node.kind === 'root') return DIR_COLOR
     return colorForExtension(extensionOf(node.path), scratch)
+  }
+
+  /**
+   * Brighten and cool the branches with the midrange. The tint multiplies the
+   * baked vertex colours, so this is a single material update per frame rather
+   * than a rewrite of every segment.
+   */
+  applyAudio(audio: AudioLevels | null): void {
+    const material = this.lines.material as THREE.LineBasicMaterial
+    if (!audio) {
+      material.color.setRGB(1, 1, 1)
+      return
+    }
+    const level = audio.mid
+    material.color.setRGB(1 + level * 0.15, 1 + level * 0.25, 1 + level * 0.4)
   }
 
   touch(nodeId: number, kind: ChangeKind, now: number, duration = 1.2): void {

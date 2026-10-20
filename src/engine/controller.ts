@@ -19,9 +19,13 @@ import {
 import { EXPORT_FPS } from './export/frames'
 import { ExportCancelledError, OfflineExporter, type ExportProgress } from './export/exporter'
 import { discoverCodecs, isWebCodecsSupported, type CodecChoice } from './export/encoder'
+import { BackgroundMusic, decodeMusicFile, fadeGain, type MusicSource } from './audio/music'
+import { analyzeMusic, silentLevels, type AudioAnalysis, type AudioLevels } from './audio/analysis'
+import { MicrophoneSource } from './audio/microphone'
 import {
   persistLoadOptions,
   persistFilters,
+  persistMusic,
   persistSettings,
   resetRunState,
   resolvePacing,
@@ -29,6 +33,7 @@ import {
   store,
   tokenFor,
 } from '../state/store'
+import type { MusicSettings } from '../state/store'
 import type { RendererSettings } from '../render/renderer'
 
 /**
@@ -56,6 +61,33 @@ export class VisualizerController {
   private timeline: Timeline | null = null
   /** Timeline duration used before an engine exists (settings preview, scrubber). */
   private fallbackDuration = 0
+  /** Live background music and the decoded PCM used by exports. */
+  private readonly musicPlayer = new BackgroundMusic()
+  private musicSource: MusicSource | null = null
+  private musicUrl: string | null = null
+  /** Precomputed bands that drive the reactive visuals. */
+  private musicAnalysis: AudioAnalysis | null = null
+  /** Live microphone audio, used instead of the file while it is selected. */
+  private readonly microphone = new MicrophoneSource()
+  /** Reused whenever a frame samples the analysis. */
+  private readonly audioLevels = silentLevels()
+  /** True once the track has actually produced levels; a pause freezes them. */
+  private audioWasPlaying = false
+  /** Length of the current export in video seconds (for the fade envelope). */
+  private exportVideoDuration = 0
+
+  constructor() {
+    this.musicPlayer.setClock(() => {
+      const engine = this.engine
+      if (!engine) return null
+      return {
+        time: engine.position,
+        duration: engine.duration,
+        speed: engine.currentSpeed,
+        playing: engine.isPlaying,
+      }
+    })
+  }
 
   get hasEngine(): boolean {
     return this.engine !== null
@@ -130,6 +162,9 @@ export class VisualizerController {
 
   detach(): void {
     this.resetEngine()
+    // The stage is gone: release the microphone with it instead of leaving the
+    // browser's recording indicator on.
+    this.stopMicrophone()
     this.canvas = null
     this.container = null
   }
@@ -332,6 +367,7 @@ export class VisualizerController {
     }
     engine.setSpeed(store.hud?.speed ?? 1)
     engine.setDynamicLayout(store.settings.dynamicLayout)
+    engine.setAudioLevelsProvider(this.audioLevelsFor)
     this.engine = engine
     store.view = 'stage'
     engine.start()
@@ -340,6 +376,7 @@ export class VisualizerController {
 
   private onHud(hud: HudState): void {
     store.hud = hud
+    this.syncMusic()
     if (store.recording.active && this.recorder) {
       const maxWall = store.recording.maxWallSeconds
       const elapsed = (performance.now() - this.recordingStartedAt) / 1000
@@ -421,38 +458,47 @@ export class VisualizerController {
 
   play(): void {
     this.engine?.play()
+    this.syncMusic(true)
   }
 
   pause(): void {
     this.engine?.pause()
+    this.syncMusic()
   }
 
   togglePlay(): void {
     this.engine?.togglePlay()
+    this.syncMusic(true)
   }
 
   seek(time: number): void {
     this.engine?.seek(time)
+    this.syncMusic()
   }
 
   seekToIndex(index: number): void {
     this.engine?.seekToIndex(index)
+    this.syncMusic()
   }
 
   seekToDate(ms: number): void {
     this.engine?.seekToDate(ms)
+    this.syncMusic()
   }
 
   step(delta: number): void {
     this.engine?.step(delta)
+    this.syncMusic()
   }
 
   restart(): void {
     this.engine?.restart()
+    this.syncMusic(true)
   }
 
   setSpeed(speed: number): void {
     this.engine?.setSpeed(speed)
+    this.syncMusic()
   }
 
   /** Jump to the commit matching a SHA prefix. Returns the index or null. */
@@ -466,7 +512,36 @@ export class VisualizerController {
   }
 
   resetCamera(): void {
+    // The reset button always returns to the default 3D orbit, so clear the
+    // flat-view preference as well; otherwise the next frame would switch the
+    // camera back to top-down.
+    if (store.settings.flatCamera) this.updateSettings({ flatCamera: false })
     this.engine?.resetCamera()
+  }
+
+  /** Toggle between the 3D orbit view and the flat top-down 2D view. */
+  toggleFlatCamera(): void {
+    this.updateSettings({ flatCamera: !store.settings.flatCamera })
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Immersive WebXR
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Enter or leave an immersive VR session.
+   *
+   * Frames are driven by the engine (through three's XR-aware animation loop),
+   * so this only has to hand the request to it. Failures are reported in
+   * `store.ui.xrError` by the session itself; the session is never entered
+   * without a running scene to show.
+   */
+  toggleVr(): void {
+    if (!this.engine) {
+      store.ui.xrError = 'Load a repository first: the VR view needs the running scene.'
+      return
+    }
+    void this.engine.toggleVr()
   }
 
   /* ------------------------------------------------------------------ *
@@ -498,14 +573,25 @@ export class VisualizerController {
       beamTravelSeconds: settings.beamTravelSeconds,
       beamIntensity: settings.beamIntensity,
       beamWidth: settings.beamWidth,
+      showPlasma: settings.showPlasma,
+      plasmaIntensity: settings.plasmaIntensity,
+      plasmaOpacity: settings.plasmaOpacity,
+      plasmaSharpness: settings.plasmaSharpness,
+      plasmaWeight: settings.plasmaWeight,
+      plasmaRadius: settings.plasmaRadius,
+      plasmaDecay: settings.plasmaDecay,
+      plasmaHeight: settings.plasmaHeight,
+      plasmaSteps: settings.plasmaSteps,
+      renderSpheres: settings.renderSpheres,
     }
   }
 
-  private cameraOptions(): { followActivity: boolean; autoZoom: boolean; smoothing: number } {
+  private cameraOptions(): { followActivity: boolean; autoZoom: boolean; smoothing: number; flat: boolean } {
     return {
       followActivity: store.settings.followActivity,
       autoZoom: store.settings.autoZoom,
       smoothing: 1.4,
+      flat: store.settings.flatCamera,
     }
   }
 
@@ -533,6 +619,260 @@ export class VisualizerController {
     if (patch.sizeMode) this.engine.setSizeMode(patch.sizeMode)
     if (patch.dynamicLayout !== undefined) this.engine.setDynamicLayout(patch.dynamicLayout)
     if (patch.pacing) this.engine.setScheduleOptions(this.scheduleOptions())
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Background music
+   * ------------------------------------------------------------------ */
+
+  /** True when a decoded track is ready for playback and export. */
+  get hasMusic(): boolean {
+    return this.musicSource !== null
+  }
+
+  /**
+   * Decode an uploaded MP3, start looping it with the current envelope and make
+   * it available to the next export. Decoding now (rather than at export time)
+   * also validates the file while the user is still in the music panel.
+   */
+  async loadMusic(file: File): Promise<void> {
+    const looksLikeMp3 =
+      file.type === 'audio/mpeg' || file.type === 'audio/mp3' || /\.mp3$/i.test(file.name)
+    if (!looksLikeMp3) {
+      store.music.error = 'Choose an MP3 file (audio/mpeg).'
+      return
+    }
+
+    this.releaseMusic()
+    store.music.loading = true
+    store.music.error = null
+    store.music.fileName = null
+    store.music.duration = 0
+    const url = URL.createObjectURL(file)
+
+    try {
+      const source = await decodeMusicFile(file)
+      if (!source.channels.length || source.length === 0) throw new Error('the file contains no audio samples')
+      // Analyse once, up front: the same envelopes then drive live playback and
+      // the deterministic export. A failure here must not cost the track, so it
+      // only disables the reactive visuals.
+      let analysis: AudioAnalysis | null = null
+      try {
+        analysis = analyzeMusic(source)
+      } catch {
+        analysis = null
+      }
+      this.musicSource = source
+      this.musicAnalysis = analysis
+      this.audioWasPlaying = false
+      this.musicUrl = url
+      this.musicPlayer.load(url)
+      this.musicPlayer.setSettings(this.musicSettings())
+      store.music.fileName = file.name
+      store.music.duration = source.duration
+      store.music.loading = false
+      this.syncMusic(true)
+    } catch (error) {
+      URL.revokeObjectURL(url)
+      this.musicSource = null
+      store.music.loading = false
+      store.music.fileName = null
+      store.music.error = `Could not read ${file.name}: ${(error as Error).message}`
+    }
+  }
+
+  /** Remove the current track and release its decoded data. */
+  clearMusic(): void {
+    this.releaseMusic()
+    store.music.fileName = null
+    store.music.duration = 0
+    store.music.loading = false
+    store.music.error = null
+  }
+
+  /**
+   * Choose what feeds the reactive visuals and the live recording: the uploaded
+   * file, or the microphone.
+   *
+   * Switching to the microphone pauses — but keeps — the decoded track, so
+   * switching back resumes it without decoding the file again. Permission and
+   * device failures leave the previous source untouched and are reported in
+   * `store.music.error`.
+   */
+  async setAudioSource(source: 'file' | 'microphone'): Promise<void> {
+    if (source === 'file') {
+      // Stopping the capture ends the tracks, so the browser's recording
+      // indicator goes away before the file resumes.
+      this.microphone.stop()
+      store.music.source = 'file'
+      store.music.error = null
+      this.audioWasPlaying = false
+      this.syncMusic(true)
+      return
+    }
+
+    if (this.microphone.running) {
+      store.music.source = 'microphone'
+      store.music.error = null
+      return
+    }
+
+    // Keep the decoded track loaded but silent while the microphone is live.
+    this.musicPlayer.pause()
+    this.audioWasPlaying = false
+    try {
+      await this.microphone.start()
+    } catch (error) {
+      this.microphone.stop()
+      // Still on the file: bring its playback back, then report the failure.
+      this.syncMusic(true)
+      store.music.error = describeMicrophoneError(error)
+      return
+    }
+    store.music.source = 'microphone'
+    store.music.error = null
+    // Fade in from silence; the next animation frame writes the real envelope.
+    this.microphone.setFade(0)
+  }
+
+  /** Update volume and fade lengths, then persist and apply them immediately. */
+  updateMusic(patch: Partial<Pick<MusicSettings, 'volume' | 'fadeInSeconds' | 'fadeOutSeconds'>>): void {
+    if (patch.volume !== undefined) store.music.volume = Math.max(0, Math.min(1, patch.volume))
+    if (patch.fadeInSeconds !== undefined) store.music.fadeInSeconds = Math.max(0, patch.fadeInSeconds)
+    if (patch.fadeOutSeconds !== undefined) store.music.fadeOutSeconds = Math.max(0, patch.fadeOutSeconds)
+    persistMusic()
+    this.musicPlayer.setSettings(this.musicSettings())
+    this.syncMusic()
+  }
+
+  private musicSettings(): { volume: number; fadeInSeconds: number; fadeOutSeconds: number } {
+    return {
+      volume: store.music.volume,
+      fadeInSeconds: store.music.fadeInSeconds,
+      fadeOutSeconds: store.music.fadeOutSeconds,
+    }
+  }
+
+  /**
+   * Bands for the frame being drawn.
+   *
+   * Live playback samples the position of the looping audio element (what the
+   * viewer actually hears). The export samples the same analysis at the video
+   * timestamp and applies the same fade envelope as the encoded audio, so the
+   * rendered file is deterministic and matches its soundtrack.
+   *
+   * With the microphone selected the live branch reads the bands from the
+   * microphone instead, and there are no export bands at all: a live signal
+   * cannot be rendered deterministically, so the export stays video-only.
+   */
+  private audioLevelsFor = (mode: 'live' | 'export', videoTime: number): AudioLevels | null => {
+    const microphoneLive = this.microphone.running && store.music.source === 'microphone'
+    if (microphoneLive) {
+      // The engine calls this every frame, so this is where the microphone
+      // gain follows the file player's fade envelope — even while a live
+      // recording runs or the reactive visuals are switched off. Without it a
+      // capture would start and end at full volume.
+      this.microphone.setFade(this.hudFade() * store.music.volume)
+    }
+
+    if (!store.settings.audioReactive) return null
+
+    if (microphoneLive) {
+      if (mode === 'export') return null
+      const gain = this.hudFade()
+      this.microphone.readLevels(this.audioLevels)
+      if (!(gain > 0.001)) return null
+      this.audioLevels.bass *= gain
+      this.audioLevels.low *= gain
+      this.audioLevels.mid *= gain
+      this.audioLevels.voice *= gain
+      this.audioLevels.clap *= gain
+      return this.audioLevels
+    }
+
+    const analysis = this.musicAnalysis
+    if (!analysis) return null
+
+    let gain = 1
+    if (mode === 'export') {
+      analysis.sample(analysis.duration > 0 ? videoTime % analysis.duration : 0, this.audioLevels)
+      if (this.exportVideoDuration > 0) {
+        gain = fadeGain(
+          videoTime,
+          this.exportVideoDuration,
+          store.music.fadeInSeconds,
+          store.music.fadeOutSeconds,
+        )
+      }
+    } else {
+      if (!this.musicPlayer.playing) {
+        // Pausing freezes the whole scene; keep the colours it was paused with
+        // instead of snapping the palette back to its base.
+        return this.audioWasPlaying ? this.audioLevels : null
+      }
+      this.audioWasPlaying = true
+      analysis.sample(this.musicPlayer.position, this.audioLevels)
+      const hud = store.hud
+      if (hud) {
+        const speed = hud.speed > 0.05 ? hud.speed : 1
+        gain = fadeGain(
+          hud.time / speed,
+          hud.duration / speed,
+          store.music.fadeInSeconds,
+          store.music.fadeOutSeconds,
+        )
+      }
+    }
+
+    if (!(gain > 0.001)) return null
+    this.audioLevels.bass *= gain
+    this.audioLevels.low *= gain
+    this.audioLevels.mid *= gain
+    this.audioLevels.voice *= gain
+    this.audioLevels.clap *= gain
+    return this.audioLevels
+  }
+
+  /**
+   * Fade factor at the current HUD position, with the same time/speed mapping
+   * the file branch uses. Returns 1 before the first HUD update.
+   */
+  private hudFade(): number {
+    const hud = store.hud
+    if (!hud) return 1
+    const speed = hud.speed > 0.05 ? hud.speed : 1
+    return fadeGain(
+      hud.time / speed,
+      hud.duration / speed,
+      store.music.fadeInSeconds,
+      store.music.fadeOutSeconds,
+    )
+  }
+
+  private releaseMusic(): void {
+    this.musicPlayer.unload()
+    this.musicSource = null
+    this.musicAnalysis = null
+    this.audioWasPlaying = false
+    if (this.musicUrl) URL.revokeObjectURL(this.musicUrl)
+    this.musicUrl = null
+  }
+
+  /** Start/stop the music with the animation and surface autoplay blocks. */
+  private syncMusic(retry = false): void {
+    if (store.music.source === 'microphone' && this.microphone.running) {
+      // The microphone is the audible source: keep the looping file silent
+      // while the same animation clock keeps running.
+      this.musicPlayer.pause()
+      return
+    }
+    this.musicPlayer.sync(retry)
+    const error = this.musicPlayer.error
+    if (error) {
+      if (store.music.error !== error) store.music.error = error
+    } else if (store.music.error?.startsWith('The browser blocked background music')) {
+      store.music.error = null
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -689,6 +1029,8 @@ export class VisualizerController {
       engine.beginOfflineExport(settings.width, settings.height)
 
       const speed = Math.max(0.05, store.hud?.speed ?? engine.currentSpeed ?? 1)
+      // Video seconds, used by the reactive visuals' fade envelope.
+      this.exportVideoDuration = engine.duration / speed
       const result = await exporter.run({
         duration: engine.duration,
         choice,
@@ -697,6 +1039,17 @@ export class VisualizerController {
         // The export follows the playback speed selected in the app.
         speed,
         bitrate: store.export.bitrate > 0 ? store.export.bitrate : undefined,
+        // In microphone mode there is nothing to encode deterministically: the
+        // export stays video-only.
+        audio:
+          this.musicSource && store.music.source === 'file'
+            ? {
+                source: this.musicSource,
+                volume: store.music.volume,
+                fadeInSeconds: store.music.fadeInSeconds,
+                fadeOutSeconds: store.music.fadeOutSeconds,
+              }
+            : undefined,
         onProgress: (progress: ExportProgress) => {
           store.export.progress = {
             frames: progress.frames,
@@ -712,13 +1065,14 @@ export class VisualizerController {
       })
       store.export.lastUrl = URL.createObjectURL(result.blob)
       store.export.lastExtension = result.extension
-      store.export.lastLabel = `${result.choice.label}${result.choice.hardwareAccelerated ? ' · hardware' : ''}`
+      store.export.lastLabel = `${result.choice.label}${result.choice.hardwareAccelerated ? ' · hardware' : ''}${result.audio ? ' · music' : ''}`
       store.export.lastBytes = result.bytes
       store.export.lastFrames = result.frames
       store.export.lastSeconds = result.seconds
       store.export.lastElapsed = result.elapsed
       store.export.lastSpeed = result.speed
       store.export.lastHardware = result.choice.hardwareAccelerated
+      store.export.lastMusic = result.audio
     } catch (error) {
       store.export.error =
         error instanceof ExportCancelledError
@@ -726,6 +1080,7 @@ export class VisualizerController {
           : `Export failed: ${(error as Error).message}`
     } finally {
       this.exporter = null
+      this.exportVideoDuration = 0
       store.export.active = false
       store.export.progress = null
       engine.endOfflineExport(restoreTime)
@@ -790,12 +1145,23 @@ export class VisualizerController {
       this.engine.pause()
       this.engine.resizeTo(settings.width, settings.height)
       this.engine.seek(0)
-      this.recorder.start({
-        width: settings.width,
-        height: settings.height,
-        fps: EXPORT_FPS,
-        mimeType: format,
-      })
+      // Mix the selected source into the live capture. The microphone stream
+      // already carries the fade envelope written by the render loop; the file
+      // player taps its own gain node, so the recording follows the same
+      // fade-in and fade-out as the playback. The two are never mixed together.
+      const audioStream =
+        store.music.source === 'microphone'
+          ? this.microphone.captureStream()
+          : await this.musicPlayer.captureStream()
+      this.recorder.start(
+        {
+          width: settings.width,
+          height: settings.height,
+          fps: EXPORT_FPS,
+          mimeType: format,
+        },
+        audioStream,
+      )
       store.recording.active = true
       this.recordingStartedAt = performance.now()
       this.startProgressTimer()
@@ -805,6 +1171,7 @@ export class VisualizerController {
       await this.recorder.cancel().catch(() => undefined)
       this.recorder = null
       store.recording.active = false
+      this.musicPlayer.releaseCapture()
       this.engine.endRecording()
       this.engine.clearFixedSize()
     }
@@ -830,6 +1197,7 @@ export class VisualizerController {
     store.recording.active = false
     store.recording.progress = null
     this.stopProgressTimer()
+    this.musicPlayer.releaseCapture()
     engine.clearFixedSize()
   }
 
@@ -838,6 +1206,7 @@ export class VisualizerController {
       await this.recorder.cancel().catch(() => undefined)
       this.recorder = null
     }
+    this.musicPlayer.releaseCapture()
     this.engine?.endRecording()
     this.engine?.clearFixedSize()
     store.recording.active = false
@@ -909,6 +1278,8 @@ export class VisualizerController {
   backToLanding(): void {
     this.cancelLoad()
     this.resetEngine()
+    // Back to the landing view: the microphone must not stay open.
+    this.stopMicrophone()
     this.rawCommits = []
     this.repoInfo = null
     this.timeline = null
@@ -917,12 +1288,23 @@ export class VisualizerController {
     store.view = 'landing'
   }
 
+  /** Stop the capture and fall back to the file source. */
+  private stopMicrophone(): void {
+    this.microphone.stop()
+    if (store.music.source === 'microphone') {
+      store.music.source = 'file'
+      store.music.error = null
+    }
+  }
+
   private resetEngine(): void {
     if (this.recorder) {
       void this.recorder.cancel()
       this.recorder = null
     }
     this.stopProgressTimer()
+    this.musicPlayer.releaseCapture()
+    this.musicPlayer.pause()
     store.recording.active = false
     store.recording.progress = null
     this.engine?.dispose()
@@ -943,6 +1325,22 @@ export class VisualizerController {
 
 function dedupe(values: string[]): string[] {
   return [...new Set(values)]
+}
+
+/** Turn a `getUserMedia` failure into a message the music panel can show. */
+function describeMicrophoneError(error: unknown): string {
+  const name = (error as { name?: string } | null)?.name
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone access was denied. Allow it in the browser, then choose the microphone again.'
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No microphone was found on this device.'
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'The microphone is already in use by another application.'
+  }
+  const message = error instanceof Error && error.message ? error.message : ''
+  return message ? `Could not start the microphone: ${message}` : 'Could not start the microphone.'
 }
 
 export const controller = new VisualizerController()

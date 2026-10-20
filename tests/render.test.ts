@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { NODE_Z, NodeField } from '../src/render/nodes'
 import { EdgeField } from '../src/render/edges'
-import { GlowField, GLOW_Z } from '../src/render/glow'
+import { GlowField, GLOW_Z, GLOW_RENDER_ORDER, DEFAULT_BLOOM_INTENSITY } from '../src/render/glow'
 import { ParticleField, pointSizePixels } from '../src/render/particles'
-import { Camera2D } from '../src/render/camera'
-import { colorForExtension, colorForChange, colorForAuthor } from '../src/render/palette'
+import { DEFAULT_PITCH, DEFAULT_YAW, OrbitCamera } from '../src/render/camera'
+import { colorForExtension, colorForChange, colorForAuthor, activityTint } from '../src/render/palette'
 import { overlapsAny } from '../src/render/labels'
 import { buildInfoPanelModel, fitText, wrapText } from '../src/render/info-panel'
 import { chartLabelSize } from '../src/engine/export/overlay'
 import { BeamField } from '../src/render/beams'
+import { PlasmaField } from '../src/render/plasma'
 import type { SimNode } from '../src/sim/simulation'
 
 /**
@@ -159,6 +160,124 @@ describe('NodeField', () => {
     field.update(2, nodes)
     field.dispose()
   })
+
+  it('billboards nodes and compensates perspective so their size stays fixed', () => {
+    const field = new NodeField({ maxFiles: 8, maxDirs: 8, colorMode: 'extension' })
+    const target = new THREE.Vector3(0, 0, 0)
+    const near = node(1, { position: { x: 0, y: 0, z: 0 } })
+    const far = node(2, { position: { x: 80, y: 0, z: 0 } })
+    const nodes = [node(0, { kind: 'root', path: '' }), near, far]
+    field.sync(nodes, true)
+
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 1000)
+    camera.position.set(120, 80, 160)
+    camera.lookAt(target)
+    camera.updateMatrixWorld()
+    field.update(0, nodes, camera, target)
+
+    const mesh = (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
+    const nearMatrix = new THREE.Matrix4()
+    const farMatrix = new THREE.Matrix4()
+    mesh.getMatrixAt(0, nearMatrix)
+    mesh.getMatrixAt(1, farMatrix)
+
+    const nearScale = new THREE.Vector3()
+    const farScale = new THREE.Vector3()
+    const nearQuaternion = new THREE.Quaternion()
+    const farQuaternion = new THREE.Quaternion()
+    const position = new THREE.Vector3()
+    nearMatrix.decompose(position, nearQuaternion, nearScale)
+    farMatrix.decompose(position, farQuaternion, farScale)
+
+    // Both glyphs face the camera exactly (allowing matrix round-off).
+    expect(nearQuaternion.angleTo(camera.quaternion)).toBeLessThan(1e-4)
+    expect(farQuaternion.angleTo(camera.quaternion)).toBeLessThan(1e-4)
+
+    // The far node grows in world units by the view-depth ratio, cancelling the
+    // perspective shrink; both end up the same number of pixels on screen.
+    const direction = target.clone().sub(camera.position).normalize()
+    const depthOf = (x: number) =>
+      new THREE.Vector3(x, 0, NODE_Z).sub(camera.position).dot(direction)
+    const nearDepth = depthOf(near.position.x)
+    const farDepth = depthOf(far.position.x)
+    expect(farScale.x / nearScale.x).toBeCloseTo(farDepth / nearDepth, 5)
+    field.dispose()
+  })
+
+  it('keeps every billboard the same size in the flat top-down view', () => {
+    const field = new NodeField({ maxFiles: 8, maxDirs: 8, colorMode: 'extension' })
+    const left = node(1, { position: { x: -60, y: 0, z: 0 } })
+    const right = node(2, { position: { x: 60, y: 0, z: 0 } })
+    const nodes = [node(0, { kind: 'root', path: '' }), left, right]
+    field.sync(nodes, true)
+
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 1000)
+    const target = new THREE.Vector3(0, 0, 0)
+    camera.position.set(0, 0, 200)
+    camera.lookAt(target)
+    camera.updateMatrixWorld()
+    field.update(0, nodes, camera, target)
+
+    const mesh = (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
+    const matrices = [new THREE.Matrix4(), new THREE.Matrix4()]
+    mesh.getMatrixAt(0, matrices[0])
+    mesh.getMatrixAt(1, matrices[1])
+    const scales = matrices.map((matrix) => new THREE.Vector3().setFromMatrixScale(matrix))
+    // Straight above the plane, every node shares one view depth, so the
+    // perspective compensation is a no-op and the old 2D framing is restored.
+    expect(scales[1].x).toBeCloseTo(scales[0].x, 5)
+    field.dispose()
+  })
+
+  it('discards the transparent margin of a ball before writing depth', () => {
+    const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const material = (field as unknown as { fileMaterial: THREE.MeshBasicMaterial }).fileMaterial
+    // Without an alpha test the whole square quad would write depth, punching a
+    // dark square hole in the additive glow drawn behind the file.
+    expect(material.transparent).toBe(true)
+    expect(material.alphaTest).toBeGreaterThan(0)
+    field.dispose()
+  })
+
+  it('lets a directory ring fade instead of staying fully bright', () => {
+    const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const material = (field as unknown as { dirMaterial: THREE.MeshBasicMaterial }).dirMaterial
+    // The annulus is pure geometry, but an opaque material ignores `opacity`:
+    // a fading ring would keep its full brightness. Alpha-testing the
+    // transparent fragments also keeps the ring's square footprint out of the
+    // depth buffer, so no dark corner can appear around it.
+    expect(material.transparent).toBe(true)
+    expect(material.alphaTest).toBeGreaterThan(0)
+    // The ring still writes depth, so branches stay hidden behind it.
+    expect(material.depthWrite).toBe(true)
+    field.dispose()
+  })
+
+  it('cycles file colours with claps and restores them when the track stops', () => {
+    const field = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { path: 'src/a.ts' })]
+    field.sync(nodes, true)
+    const mesh = (field as unknown as { fileMesh: THREE.InstancedMesh }).fileMesh
+    const color = new THREE.Color()
+    mesh.getColorAt(0, color)
+    const base = color.getHex()
+
+    field.update(0, nodes, undefined, undefined, {
+      bass: 0,
+      low: 0,
+      mid: 0,
+      voice: 0,
+      clap: 0.5,
+      clapCount: 4,
+    })
+    mesh.getColorAt(0, color)
+    expect(color.getHex()).not.toBe(base)
+
+    field.update(0, nodes, undefined, undefined, null)
+    mesh.getColorAt(0, color)
+    expect(color.getHex()).toBe(base)
+    field.dispose()
+  })
 })
 
 describe('GlowField', () => {
@@ -186,6 +305,42 @@ describe('GlowField', () => {
     field.sync(nodes, false, [2])
     mesh.getMatrixAt(1, matrix)
     expect(matrix.elements[0]).toBe(0)
+    field.dispose()
+  })
+
+  it('tints every halo with the plasma activity colour, the root included', () => {
+    const field = new GlowField(4)
+    const nodes = [
+      node(0, { kind: 'root', path: '', clusterRadius: 12 }),
+      node(1, { kind: 'dir', path: 'src', name: 'src', clusterRadius: 4 }),
+    ]
+    field.sync(nodes, true)
+    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const root = new THREE.Color()
+    const dir = new THREE.Color()
+    mesh.getColorAt(0, root)
+    mesh.getColorAt(1, dir)
+    // One light for the whole scene: the halos carry exactly the tint the
+    // plasma volume uses (the directory colour at the bloom intensity), so the
+    // root's halo is no longer a warmer cream than the rest.
+    expect(root.getHex()).toBe(dir.getHex())
+    expect(root.getHex()).toBe(activityTint(DEFAULT_BLOOM_INTENSITY, null).getHex())
+    field.dispose()
+  })
+
+  it('paints the halos as background light, before every element', () => {
+    const field = new GlowField(4)
+    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const material = mesh.material as THREE.MeshBasicMaterial
+    // Opaque queue + depth testing off is the only way to be drawn underneath
+    // the opaque branch lines and rings: the halos must never brighten, or be
+    // depth-cut by, the circles on top of them.
+    expect(material.transparent).toBe(false)
+    expect(material.depthTest).toBe(false)
+    expect(material.depthWrite).toBe(false)
+    // After the background gradient (-20), before the edges (-1) and circles.
+    expect(mesh.renderOrder).toBeLessThan(-1)
+    expect(mesh.renderOrder).toBeGreaterThan(-20)
     field.dispose()
   })
 
@@ -244,6 +399,26 @@ describe('GlowField', () => {
     expect(field.stats).toBe(9)
     field.dispose()
   })
+
+  it('rotates the halo hue with the bass and restores it afterwards', () => {
+    const field = new GlowField(4)
+    const nodes = [node(0, { kind: 'root', path: '' }), node(1, { kind: 'dir', path: 'src', name: 'src' })]
+    field.sync(nodes, true)
+    const mesh = (field as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const color = new THREE.Color()
+    mesh.getColorAt(0, color)
+    const base = color.getHex()
+
+    field.applyAudio({ bass: 1, low: 0, mid: 0, voice: 0, clap: 0, clapCount: 0 })
+    mesh.getColorAt(0, color)
+    expect(color.getHex()).not.toBe(base)
+    expect(color.r).toBeGreaterThan(0.3)
+
+    field.applyAudio(null)
+    mesh.getColorAt(0, color)
+    expect(color.getHex()).toBe(base)
+    field.dispose()
+  })
 })
 
 describe('EdgeField', () => {
@@ -293,6 +468,18 @@ describe('EdgeField', () => {
     child.visible = false
     field.sync(nodes, true)
     expect(positions.getX(3)).toBe(0)
+    field.dispose()
+  })
+
+  it('brightens the branches with the midrange and resets to neutral', () => {
+    const field = new EdgeField(8)
+    const material = field.lines.material as THREE.LineBasicMaterial
+    expect(material.color.getHex()).toBe(0xffffff)
+    field.applyAudio({ bass: 0, low: 0, mid: 1, voice: 0, clap: 0, clapCount: 0 })
+    expect(material.color.r).toBeGreaterThan(1)
+    expect(material.color.b).toBeGreaterThan(material.color.r)
+    field.applyAudio(null)
+    expect(material.color.getHex()).toBe(0xffffff)
     field.dispose()
   })
 
@@ -441,19 +628,26 @@ describe('ParticleField', () => {
   })
 })
 
-describe('Camera2D', () => {
-  it('stays flat: an orthographic camera looking down the Z axis', () => {
-    const rig = new Camera2D()
+describe('OrbitCamera', () => {
+  it('is a perspective camera orbiting a tabletop with the plane normal up', () => {
+    const rig = new OrbitCamera()
     rig.setViewport(1600, 900)
-    expect(rig.camera.isOrthographicCamera).toBe(true)
-    // The frustum spans the visible world area, and every point of the scene
-    // sits on the z = 0 plane.
-    expect(rig.camera.top - rig.camera.bottom).toBeCloseTo(rig.viewHeight, 6)
+    rig.frame({ center: { x: 0, y: 0 }, radius: 20 }, true)
+    expect(rig.camera.isPerspectiveCamera).toBe(true)
+    expect(rig.camera.fov).toBeGreaterThan(20)
+    // The eye sits on a sphere around the target; the default elevation lifts
+    // it above the XY plane so the flat layout gains visible perspective.
+    expect(rig.camera.position.distanceTo(rig.focusPoint)).toBeCloseTo(rig.targetDistance, 5)
     expect(rig.camera.position.z).toBeGreaterThan(0)
+    expect(rig.camera.up.x).toBeCloseTo(0, 6)
+    expect(rig.camera.up.y).toBeCloseTo(0, 6)
+    expect(rig.camera.up.z).toBeCloseTo(1, 6)
+    expect(rig.angles.yaw).toBeCloseTo(DEFAULT_YAW, 5)
+    expect(rig.angles.pitch).toBeCloseTo(DEFAULT_PITCH, 5)
   })
 
   it('follows recent activity and fits the repository', () => {
-    const rig = new Camera2D()
+    const rig = new OrbitCamera()
     rig.setViewport(1600, 900)
     rig.frame({ center: { x: 0, y: 0 }, radius: 20 }, true)
     const options = { followActivity: true, autoZoom: true, smoothing: 2 }
@@ -468,8 +662,8 @@ describe('Camera2D', () => {
     expect(rig.currentZoom).toBeLessThan(bigZoom)
   })
 
-  it('zooms around a world point and converts pixels to world units', () => {
-    const rig = new Camera2D()
+  it('zooms and pans while keeping the orbit target under control', () => {
+    const rig = new OrbitCamera()
     rig.setViewport(800, 600)
     rig.frame({ center: { x: 0, y: 0 }, radius: 50 }, true)
     const worldPerPixel = rig.worldPerPixel(600)
@@ -480,7 +674,7 @@ describe('Camera2D', () => {
       radius: 50,
     })
     expect(rig.currentZoom).toBeGreaterThan(1)
-    // Panning moves the centre in world units.
+    // Panning moves the orbit target in world units.
     const before = rig.center2D.x
     rig.nudge({ panX: 10 })
     rig.update(0.5, { followActivity: false, autoZoom: false, smoothing: 1 }, null, {
@@ -490,8 +684,92 @@ describe('Camera2D', () => {
     expect(rig.center2D.x).toBeGreaterThan(before)
   })
 
+  it('orbits with the mouse and restores the default angle on reset', () => {
+    const rig = new OrbitCamera()
+    rig.setViewport(1000, 700)
+    const bounds = { center: { x: 0, y: 0 }, radius: 40 }
+    rig.frame(bounds, true)
+    const before = rig.angles
+    rig.orbitBy(120, -60)
+    rig.update(1 / 60, { followActivity: true, autoZoom: true, smoothing: 1 }, null, bounds)
+    expect(rig.angles.yaw).not.toBeCloseTo(before.yaw, 5)
+    expect(rig.angles.pitch).toBeGreaterThan(before.pitch)
+
+    rig.reset(bounds, true)
+    expect(rig.angles.yaw).toBeCloseTo(DEFAULT_YAW, 6)
+    expect(rig.angles.pitch).toBeCloseTo(DEFAULT_PITCH, 6)
+    expect(rig.camera.position.z).toBeGreaterThan(0)
+  })
+
+  it('switches to a flat top-down 2D view with pan-only controls', () => {
+    const rig = new OrbitCamera()
+    rig.setViewport(1000, 700)
+    const bounds = { center: { x: 0, y: 0 }, radius: 40 }
+    const flatOptions = { followActivity: false, autoZoom: false, smoothing: 1, flat: true }
+    rig.frame(bounds, true)
+    rig.setFlatMode(true)
+    expect(rig.isFlat).toBe(true)
+    for (let index = 0; index < 240; index += 1) rig.update(1 / 60, flatOptions, null, bounds)
+
+    // The eye is straight above the target, looking down the Z axis. Up must
+    // lie in the plane for this view; +Y preserves the old 2D orientation.
+    expect(rig.angles.yaw).toBeCloseTo(DEFAULT_YAW, 4)
+    expect(rig.angles.pitch).toBeCloseTo(DEFAULT_PITCH, 4)
+    expect(rig.camera.position.x).toBeCloseTo(rig.focusPoint.x, 3)
+    expect(rig.camera.position.y).toBeCloseTo(rig.focusPoint.y, 3)
+    expect(rig.camera.position.z).toBeGreaterThan(rig.focusPoint.z)
+    expect(rig.camera.up.y).toBeCloseTo(1, 6)
+    expect(rig.camera.up.z).toBeCloseTo(0, 6)
+
+    // Orbit input is ignored, panning and zooming still work.
+    rig.orbitBy(100, -50)
+    rig.update(1 / 60, flatOptions, null, bounds)
+    expect(rig.angles.yaw).toBeCloseTo(DEFAULT_YAW, 6)
+    expect(rig.angles.pitch).toBeCloseTo(DEFAULT_PITCH, 6)
+    const zoomBefore = rig.currentZoom
+    rig.nudge({ zoom: 1.5 })
+    rig.update(0.5, flatOptions, null, bounds)
+    expect(rig.currentZoom).toBeGreaterThan(zoomBefore)
+    const centerX = rig.center2D.x
+    rig.nudge({ panX: 12 })
+    rig.update(0.5, flatOptions, null, bounds)
+    expect(rig.center2D.x).toBeGreaterThan(centerX)
+  })
+
+  it('restores the 3D orbit when leaving the flat view and resets to 3D explicitly', () => {
+    const rig = new OrbitCamera()
+    rig.setViewport(1000, 700)
+    const bounds = { center: { x: 0, y: 0 }, radius: 40 }
+    const autoOptions = { followActivity: false, autoZoom: false, smoothing: 1 }
+    const flatOptions = { ...autoOptions, flat: true }
+    rig.frame(bounds, true)
+    rig.orbitBy(40, -20)
+    for (let index = 0; index < 1000; index += 1) rig.update(1 / 60, autoOptions, null, bounds)
+    const orbit = rig.angles
+
+    rig.setFlatMode(true)
+    // Entering the flat view does not alter the orbit; the camera just looks
+    // down the plane normal instead.
+    expect(rig.angles.yaw).toBeCloseTo(orbit.yaw, 6)
+    expect(rig.angles.pitch).toBeCloseTo(orbit.pitch, 6)
+    for (let index = 0; index < 60; index += 1) rig.update(1 / 60, flatOptions, null, bounds)
+    rig.setFlatMode(false)
+    // The angle the user had before switching to 2D comes back.
+    expect(rig.angles.yaw).toBeCloseTo(orbit.yaw, 6)
+    expect(rig.angles.pitch).toBeCloseTo(orbit.pitch, 6)
+
+    rig.setFlatMode(true)
+    rig.update(1 / 60, flatOptions, null, bounds)
+    rig.reset3D(bounds, true)
+    expect(rig.isFlat).toBe(false)
+    expect(rig.angles.yaw).toBeCloseTo(DEFAULT_YAW, 6)
+    expect(rig.angles.pitch).toBeCloseTo(DEFAULT_PITCH, 6)
+    expect(rig.camera.position.z).toBeGreaterThan(0)
+    expect(rig.camera.up.z).toBeCloseTo(1, 6)
+  })
+
   it('keeps automatic behaviour inside finite bounds', () => {
-    const rig = new Camera2D()
+    const rig = new OrbitCamera()
     rig.setViewport(1280, 720)
     const options = { followActivity: false, autoZoom: true, smoothing: 1 }
     for (let index = 0; index < 200; index += 1) {
@@ -499,6 +777,7 @@ describe('Camera2D', () => {
     }
     expect(Number.isFinite(rig.camera.position.x)).toBe(true)
     expect(Number.isFinite(rig.camera.position.y)).toBe(true)
+    expect(Number.isFinite(rig.camera.position.z)).toBe(true)
     expect(rig.viewHeight).toBeGreaterThan(0)
   })
 })
@@ -624,14 +903,51 @@ describe('palette', () => {
 describe('background layers', () => {
   it('keeps the grid behind the tree', async () => {
     const { GRID_Z, BACKGROUND_Z } = await import('../src/render/renderer')
-    // The grid sits behind the branches (z = 0) and the nodes (+0.25), in front
-    // of the backdrop.
+    // The grid sits behind the branches (z = 0) and the nodes (+0.25). The
+    // screen-space backdrop is a full-frame shader, so its old world depth is
+    // kept only for callers that still refer to it.
     expect(GRID_Z).toBeLessThan(0)
     expect(BACKGROUND_Z).toBeLessThan(GRID_Z)
   })
 })
 
 describe('layer ordering', () => {
+  it('keeps the glow first and everything above it depth tested', () => {
+    const glow = new GlowField(4)
+    const edges = new EdgeField(4)
+    const nodes = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })
+    const plasma = new PlasmaField()
+    const particles = new ParticleField(8)
+    const beams = new BeamField(4)
+    const glowMesh = (glow as unknown as { mesh: THREE.InstancedMesh }).mesh
+    const nodeMeshes = nodes as unknown as { fileMesh: THREE.InstancedMesh; dirMesh: THREE.InstancedMesh }
+    const plasmaMesh = (plasma as unknown as { mesh: THREE.Mesh }).mesh
+
+    // The halos are the first element layer: after the backdrop gradient (-20),
+    // before every other layer, and the only geometry layer without a depth test.
+    expect(GLOW_RENDER_ORDER).toBeGreaterThan(-20)
+    expect(GLOW_RENDER_ORDER).toBeLessThan(edges.lines.renderOrder)
+    expect(GLOW_RENDER_ORDER).toBeLessThan(nodeMeshes.fileMesh.renderOrder)
+    const glowMaterial = glowMesh.material as THREE.MeshBasicMaterial
+    expect(glowMaterial.depthTest).toBe(false)
+    expect(glowMaterial.depthWrite).toBe(false)
+
+    // Everything drawn on top of it tests depth against what is already there.
+    expect((edges.lines.material as THREE.Material).depthTest).toBe(true)
+    expect((nodeMeshes.fileMesh.material as THREE.Material).depthTest).toBe(true)
+    expect((nodeMeshes.dirMesh.material as THREE.Material).depthTest).toBe(true)
+    expect((plasmaMesh.material as THREE.Material).depthTest).toBe(true)
+    expect((particles.points.material as THREE.Material).depthTest).toBe(true)
+    expect((beams.mesh.material as THREE.Material).depthTest).toBe(true)
+
+    glow.dispose()
+    edges.dispose()
+    nodes.dispose()
+    plasma.dispose()
+    particles.dispose()
+    beams.dispose()
+  })
+
   it('draws branches behind the circles and effects above them', () => {
     const edges = new EdgeField(4)
     const nodes = new NodeField({ maxFiles: 4, maxDirs: 4, colorMode: 'extension' })

@@ -78,8 +78,12 @@ export class AuthorField {
   /**
    * Position the visible avatars, updating textures only when they change.
    * `minimumHeight` keeps them readable when the scene is zoomed far out.
+   * `voice` (0…1) makes the avatars and their halos breathe with the vocal
+   * range, tying the people in the scene to the voices in the track.
    */
-  sync(authors: readonly SimAuthor[], minimumHeight = 0): void {
+  sync(authors: readonly SimAuthor[], minimumHeight = 0, voice = 0): void {
+    const level = Math.max(0, Math.min(1, Number.isFinite(voice) ? voice : 0))
+    const pulse = 1 + level * 0.18
     let index = 0
     for (const author of authors) {
       if (!author.visible) continue
@@ -100,15 +104,16 @@ export class AuthorField {
         )
         slot.material.map = texture
         slot.material.needsUpdate = true
-        const aspect = (texture.userData.aspect as number) ?? 1
-        const height = Math.max(AVATAR_HEIGHT * this.options.scale, minimumHeight)
-        slot.sprite.scale.set(height * aspect, height, 1)
       }
-      if (!slot.material.map) continue
+      const texture = slot.material.map
+      if (!texture) continue
+      const aspect = (texture.userData.aspect as number) ?? 1
+      const height = Math.max(AVATAR_HEIGHT * this.options.scale, minimumHeight) * pulse
+      slot.sprite.scale.set(height * aspect, height, 1)
       slot.sprite.position.set(author.position.x, author.position.y + 2.5, author.position.z)
       slot.glow.position.copy(slot.sprite.position)
-      const spriteHeight = slot.sprite.scale.y
-      slot.glow.scale.setScalar(Math.max(6.5 * this.options.scale, spriteHeight * 1.9))
+      slot.glow.scale.setScalar(Math.max(6.5 * this.options.scale, height * 1.9) * (1 + level * 0.2))
+      slot.glowMaterial.opacity = 0.8 + level * 0.2
       slot.sprite.visible = true
       slot.glow.visible = this.options.showGlow
       slot.sprite.material.opacity = author.lastKind === 'delete' ? 0.95 : 1
