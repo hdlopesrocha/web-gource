@@ -12,6 +12,23 @@ const SNAPSHOT_CHOICES = [
   { value: 4000, label: '4000 commits', hint: 'Very large snapshot. Expect a long load and heavy GPU usage.' },
 ]
 
+// A one-click set of projects for the multi-repository scene. The bare
+// `hdlopesrocha/` owner page is not a repository, so it is intentionally left out.
+const BULK_REPOSITORIES = [
+  'hdlopesrocha/lithos-engine',
+  'hdlopesrocha/vulkan-engine',
+  'hdlopesrocha/infinity-edge-web',
+  'hdlopesrocha/card-generator',
+  'hdlopesrocha/lora-control',
+  'hdlopesrocha/opencode-talk',
+  'hdlopesrocha/web-gource',
+  'hdlopesrocha/hdlopesrocha.github.io',
+  'hdlopesrocha/sdf-smoke',
+  'hdlopesrocha/hydrogen-vulkan',
+  'hdlopesrocha/cardgame',
+]
+const bulkFillLabel = `Fill all ${BULK_REPOSITORIES.length} repositories`
+
 // Pre-fill the projects from the last run. Profiles saved before multiple
 // projects only have `lastUrl`, which the store already migrated to `urls`.
 const initialUrls = store.loadOptions.urls.length > 0
@@ -129,6 +146,17 @@ function applyExample(url: string): void {
   syncUrl()
 }
 
+/**
+ * Replace the rows with a prepared multi-repository list. This only fills the
+ * form: loading still starts from the primary load button.
+ */
+function fillAllRepositories(): void {
+  rows.value = [...BULK_REPOSITORIES]
+  focusedRow.value = null
+  store.loading.error = null
+  syncUrl()
+}
+
 const examples = [
   { url: 'https://github.com/hdlopesrocha/vulkan-engine', label: 'hdlopesrocha/vulkan-engine' },
   { url: 'https://github.com/hdlopesrocha/opencode-talk', label: 'hdlopesrocha/opencode-talk' },
@@ -153,9 +181,9 @@ const examples = [
         </div>
         <p class="tagline">
           Add one or more public Git repositories and watch their histories grow side by side in one animated 3D
-          map — commits, authors, directories and files drawn as camera-facing billboards sized by their real file
-          size, rendered with WebGL in your browser. Each project keeps its own tree and its own people: the same
-          contributor appears once per project. Orbit with the mouse, or switch to the flat top-down 2D view.
+          map — commits, authors, and files and folders drawn as lit spheres sized by their real file size, rendered
+          with WebGL in your browser. Each project keeps its own tree and its own people: the same contributor
+          appears once per project. Orbit, pan and zoom with the mouse or a touch gesture.
         </p>
       </header>
 
@@ -305,6 +333,14 @@ const examples = [
         >
           {{ example.label }}
         </button>
+        <button
+          class="btn small fill-all"
+          type="button"
+          :title="`Replace the list with all ${BULK_REPOSITORIES.length} hdlopesrocha repositories`"
+          @click="fillAllRepositories"
+        >
+          {{ bulkFillLabel }}
+        </button>
       </section>
 
       <section class="features">
@@ -318,15 +354,15 @@ const examples = [
         <div class="feature">
           <h3>3D Gource-style map</h3>
           <p>
-            Instanced WebGL billboards on a Gource-style plane, seen through a perspective camera: directories
-            branch out, files are sized by their real file size, author avatars move between them, and effects are
-            colour-coded per change type. Orbit, pan and zoom with the mouse, or press 2D for the flat view.
+            Instanced lit spheres on a Gource-style plane, seen through a perspective camera: folders branch out,
+            files are sized by their real file size, author avatars move between them, and effects are colour-coded
+            per change type. Orbit, pan and zoom with the mouse or a touch gesture.
           </p>
         </div>
         <div class="feature">
           <h3>Playback & export</h3>
           <p>
-            Seek, scrub, filter by author or date, change pacing, switch circle sizing between file size and line
+            Seek, scrub, filter by author or date, change pacing, switch sphere sizing between file size and line
             activity, then export the animation to WebM/MP4 with the browser's own recorder.
           </p>
         </div>
@@ -608,6 +644,17 @@ const examples = [
   font-size: 13px;
 }
 
+.fill-all {
+  border-color: rgba(94, 200, 255, 0.38);
+  background: rgba(47, 125, 224, 0.16);
+  color: #d6efff;
+}
+
+.fill-all:hover:not(:disabled) {
+  border-color: rgba(94, 200, 255, 0.6);
+  background: rgba(47, 125, 224, 0.26);
+}
+
 .features {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -635,16 +682,174 @@ const examples = [
 }
 
 @media (max-width: 720px) {
+  .content {
+    padding: 24px 16px 40px;
+    gap: 18px;
+  }
+
+  .hero h1 {
+    font-size: clamp(26px, 7vw, 34px);
+  }
+
+  .tagline {
+    margin-top: 8px;
+    font-size: 14px;
+  }
+
+  .card {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .repo-list {
+    gap: 10px;
+  }
+
+  .url-field {
+    min-width: 0;
+  }
+
+  .url-field input {
+    padding: 12px;
+    font-size: 14px;
+  }
+
+  /* The detected-provider line below the form already names every host. */
+  .provider-badge {
+    display: none;
+  }
+
+  .icon-btn {
+    width: 44px;
+    min-height: 44px;
+    font-size: 15px;
+  }
+
   .repo-actions {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .repo-actions .grow {
     display: none;
   }
 
+  .add-repo {
+    align-self: stretch;
+    min-height: 44px;
+  }
+
+  .load,
+  .demo {
+    width: 100%;
+    min-height: 48px;
+    padding: 0 18px;
+    white-space: normal;
+  }
+
+  .provider-line,
+  .hint,
+  .alert {
+    overflow-wrap: anywhere;
+  }
+
+  .progress-head {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .options {
+    grid-template-columns: 1fr;
+  }
+
+  .options select,
+  .options input,
+  .token-provider select {
+    min-height: 44px;
+  }
+
+  .token-provider {
+    max-width: none;
+  }
+
+  .card-footer .btn {
+    min-height: 44px;
+  }
+
+  .advanced {
+    padding: 12px;
+  }
+
+  .advanced :deep(.token-field .row) {
+    flex-wrap: wrap;
+  }
+
+  .advanced :deep(.token-field .row .btn),
+  .advanced :deep(.token-input) {
+    min-height: 44px;
+  }
+
+  .examples {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .examples .btn {
+    width: 100%;
+    min-height: 44px;
+    white-space: normal;
+  }
+
+  .features {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 480px) {
   .content {
-    padding: 28px 16px 48px;
+    padding: 20px 12px 32px;
+    gap: 16px;
+  }
+
+  .hero h1 {
+    font-size: clamp(24px, 8vw, 30px);
+  }
+
+  .tagline {
+    font-size: 13.5px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .repo-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .repo-row .icon-btn {
+    align-self: flex-end;
+    width: 44px;
+    min-height: 44px;
+  }
+
+  .advanced :deep(.token-input) {
+    flex: 1 1 100%;
+  }
+
+  .advanced :deep(.token-field .row .btn) {
+    flex: 1 1 auto;
+  }
+
+  .alert {
+    padding: 10px 12px;
+  }
+
+  .feature {
+    padding: 14px;
   }
 }
 </style>
