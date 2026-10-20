@@ -1,10 +1,10 @@
 # Web Gource
 
-A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste a public
-Git repository URL and watch its history grow into an animated 3D map — directories branching like
-a tree, files appearing as billboards sized by their real file size, authors flying between the files
-they touch, and activity bursts coloured by add / modify / delete / rename. Drag with the mouse to
-orbit around the tree.
+A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste one or more
+public repository URLs and watch their histories grow side by side in one animated 3D map —
+directories branching like trees, files appearing as billboards sized by their real file size, authors
+flying between the files they touch, and activity bursts coloured by add / modify / delete / rename.
+Drag with the mouse to orbit around the scene.
 
 Nothing is cloned, uploaded, or built on a server. Commit history is read straight from the
 hosting provider's REST API in the browser, normalized into a timeline, and rendered with an
@@ -13,7 +13,7 @@ independently written Three.js renderer.
 ![Web Gource visualizing a repository as a 3D map with billboards sized by file size](docs/screenshot.png)
 
 ```
-https://github.com/owner/repository   →   animated 3D repository history
+one or more repository URLs   →   animated 3D map of their histories
 ```
 
 **Live:** <https://hdlopesrocha.github.io/web-gource/> — the published build is the same code as
@@ -61,10 +61,36 @@ On GitHub, Pages must point at the branch once: **Settings → Pages → Source:
 
 1. Paste a repository URL — `https://github.com/owner/repository`, `owner/repository`,
    `git@github.com:owner/repository.git` and GitHub Enterprise / GitLab URLs all work.
-2. Optionally add a token (see below) for a much larger quota and private repos.
-3. Press **Load Repository**. Commit metadata is fetched first, then file changes are hydrated in
-   small batches; the visualization starts as soon as the first batch is ready.
-4. Play with it: scrub, seek, filter, and export a video.
+2. Use **Add repository** to add another row and the **✕** button to remove one. Each filled row is
+   its own project; the examples fill an empty row, or add a new one when every row is in use. With
+   more than one row filled, the primary button reads **Load N repositories**.
+3. Optionally add a token (see below) for a much larger quota and private repos. Tokens are per host;
+   when the rows span several providers, a **Token host** selector appears so the token field edits
+   one host at a time.
+4. Press **Load Repository** — or **Load N repositories** when several rows are filled. Commit
+   metadata is fetched first, then file changes are hydrated in small batches; the visualization
+   starts as soon as the first batch is ready. Projects load one at a time, and later ones join the
+   scene when their load completes.
+5. Play with it: scrub, seek, filter, and export a video.
+
+### Multiple projects
+
+The landing page can load several repositories into one shared scene. **Add repository** adds a row,
+the **✕** button removes one, and the primary button becomes **Load N repositories** once more than
+one row is filled. A single row still loads exactly as before, with unscoped paths and authors.
+
+Each project keeps its own file tree and its own author instances, so identical paths or the same
+contributor in two repositories never collide. Paths are prefixed with `owner/name/`, and the same
+person appears once per project — the Authors panel counts **author instances** and badges each with
+its project. Hiding an author hides that instance only in its project; the same person in another
+project stays visible. The stage header reports the repository/project count, and Settings → Data
+lists each project's commit and author counts.
+
+Projects load sequentially: the first streams live, and later ones merge into the scene when complete.
+Tokens are per host, and a **Token host** selector appears when the rows span providers. A failed
+repository does not abort the others: the successful projects stay loaded, a warning names the
+failure, and the status reads **Ready · N of M repositories failed**. Downloads from a multi-project
+run use an `N-repositories` name.
 
 ### Exporting video
 

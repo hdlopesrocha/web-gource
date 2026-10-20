@@ -50,6 +50,27 @@ const shortcuts: { keys: string; action: string }[] = [
       </section>
 
       <section>
+        <h3>Multiple projects</h3>
+        <p class="muted small">
+          <strong>Add repository</strong> adds another URL row to the landing page, and the <strong>✕</strong>
+          button removes one. Once more than one row is filled, the main button reads
+          <strong>Load N repositories</strong>; the examples fill an empty row or add a new one. The
+          projects share one scene but keep separate trees and separate author instances: paths are
+          prefixed with <code>owner/name/</code>, so the same file path in two repositories stays
+          distinct, and the same person appears once per project. The Authors panel counts
+          <em>author instances</em> and badges each with its project.
+        </p>
+        <p class="muted small">
+          Author filters are project-scoped: hiding an instance hides that person only in that project,
+          while the same person in another project stays visible. Tokens are per host, and a
+          <strong>Token host</strong> selector appears when the rows mix providers. Projects load one at
+          a time — the first streams live, and later ones join the scene when complete — and a failed
+          repository does not abort the rest: the successful projects stay loaded with a warning and a
+          status such as <strong>Ready · N of M repositories failed</strong>.
+        </p>
+      </section>
+
+      <section>
         <h3>Gamepad & head tracking</h3>
         <p class="muted small">
           <strong>Settings → Camera</strong> can hand the camera to a gamepad or to the device's gyroscope. The pad
