@@ -179,6 +179,26 @@ describe('LandingView', () => {
     expect(wrapper.text()).toContain('Load 2 repositories')
   })
 
+  it('fills the form with every repository from the bulk example', async () => {
+    store.loading.error = 'old error'
+    const wrapper = mount(LandingView)
+    const fill = wrapper.findAll('button').find((button) => button.text().includes('Fill all 11 repositories'))
+    expect(fill).toBeTruthy()
+    await fill!.trigger('click')
+
+    const values = wrapper
+      .findAll('input[aria-label="Repository URL"]')
+      .map((input) => (input.element as HTMLInputElement).value)
+    expect(values).toHaveLength(11)
+    expect(values[0]).toBe('hdlopesrocha/lithos-engine')
+    expect(values.at(-1)).toBe('hdlopesrocha/cardgame')
+    expect(values.every((value) => value.startsWith('hdlopesrocha/'))).toBe(true)
+    expect(values).not.toContain('hdlopesrocha/')
+    expect(wrapper.text()).toContain('Load 11 repositories')
+    expect(store.url).toBe(values[0])
+    expect(store.loading.error).toBeNull()
+  })
+
   it('shows a token host selector when the projects span several providers', async () => {
     const wrapper = mount(LandingView)
     await wrapper.findAll('button').find((button) => button.text().includes('Add repository'))!.trigger('click')
@@ -511,26 +531,11 @@ describe('StageView', () => {
     expect(wrapper.text()).toContain('← Repositories')
   })
 
-  it('toggles the flat 2D camera and resets to the 3D view from the stage toolbar', async () => {
-    store.settings.flatCamera = false
+  it('always offers the 3D view without a flat 2D toggle', () => {
     const wrapper = mount(StageView)
     const buttonNamed = (label: string) => wrapper.findAll('button').find((entry) => entry.text().trim() === label)
-    const flat = buttonNamed('2D')
-    const reset = buttonNamed('Reset')
-    expect(flat).toBeTruthy()
-    expect(reset).toBeTruthy()
-
-    await flat!.trigger('click')
-    expect(store.settings.flatCamera).toBe(true)
-    expect(flat!.classes()).toContain('active')
-    await flat!.trigger('click')
-    expect(store.settings.flatCamera).toBe(false)
-    expect(flat!.classes()).not.toContain('active')
-
-    // Reset always returns to the default 3D camera, even from the flat view.
-    await flat!.trigger('click')
-    await reset!.trigger('click')
-    expect(store.settings.flatCamera).toBe(false)
+    expect(buttonNamed('2D')).toBeUndefined()
+    expect(buttonNamed('Reset')).toBeTruthy()
   })
 })
 
@@ -716,7 +721,7 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('solid ray is the original full-length line')
   })
 
-  it('settings panel exposes the plasma opacity and the 3D sphere mode', async () => {
+  it('settings panel exposes the plasma opacity', async () => {
     const wrapper = mount(SettingsPanel)
     await openTab(wrapper, 'Visual')
     const field = wrapper
@@ -728,16 +733,11 @@ describe('panels', () => {
     await slider.setValue('0.2')
     expect(store.settings.plasmaOpacity).toBeCloseTo(0.2, 5)
 
-    const spheres = wrapper
-      .findAll('label.switch')
-      .find((entry) => entry.text().includes('3D file spheres'))
-    expect(spheres).toBeTruthy()
-    await spheres!.find('input').setValue(true)
-    expect(store.settings.renderSpheres).toBe(true)
+    // Files and folders are always spheres; the old billboard toggle is gone.
+    expect(wrapper.text()).not.toContain('3D file spheres')
 
     // Leave the singleton store as the other tests expect it.
     store.settings.plasmaOpacity = 1
-    store.settings.renderSpheres = false
   })
 
   it('settings panel exposes visualization, camera, filter and data tabs', async () => {
@@ -745,15 +745,8 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('Visual')
     await openTab(wrapper, 'Camera')
     expect(wrapper.text()).toContain('Automatic view')
-    expect(wrapper.text()).toContain('Reset to the 3D view')
-    store.settings.flatCamera = false
-    const flatSwitch = wrapper
-      .findAll('label.switch')
-      .find((entry) => entry.text().includes('Flat top-down 2D view'))
-    expect(flatSwitch).toBeTruthy()
-    await flatSwitch!.find('input').setValue(true)
-    expect(store.settings.flatCamera).toBe(true)
-    store.settings.flatCamera = false
+    expect(wrapper.text()).toContain('Reset to the default view')
+    expect(wrapper.text()).not.toContain('Flat top-down 2D view')
     await openTab(wrapper, 'Filters')
     expect(wrapper.text()).toContain('Hidden folders')
     expect(wrapper.text()).toContain('Ignored folders')
