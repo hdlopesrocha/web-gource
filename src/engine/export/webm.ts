@@ -28,6 +28,20 @@ export interface WebmVideoInfo {
   frameDurationUs?: number
 }
 
+/** Optional Opus audio track (the background music). */
+export interface WebmAudioInfo {
+  /** Opus decoder description (OpusHead), as required by Matroska. */
+  codecPrivate: Uint8Array
+  sampleRate: number
+  numberOfChannels: number
+  /** Encoder delay in nanoseconds, written as CodecDelay. */
+  codecDelayNs?: number
+  /** Seek pre-roll in nanoseconds (80 ms is the Opus recommendation). */
+  seekPreRollNs?: number
+  /** Nominal packet duration in microseconds, used for the duration patch. */
+  frameDurationUs?: number
+}
+
 const CODEC_IDS: Record<WebmCodec, string> = {
   vp9: 'V_VP9',
   vp8: 'V_VP8',
@@ -145,10 +159,16 @@ export const WEBM_ID = {
   flagEnabled: 0xb9,
   language: 0x22b59c,
   codecId: 0x86,
+  codecPrivate: 0x63a2,
+  codecDelay: 0x56aa,
+  seekPreRoll: 0x56bb,
   defaultDuration: 0x23e383,
   video: 0xe0,
   pixelWidth: 0xb0,
   pixelHeight: 0xba,
+  audio: 0xe1,
+  samplingFrequency: 0xb5,
+  channels: 0x9f,
   cluster: 0x1f43b675,
   timecode: 0xe7,
   simpleBlock: 0xa3,
@@ -171,12 +191,15 @@ export class WebmMuxer {
   /** Absolute offset of the patchable Duration payload inside the header. */
   private durationOffset = -1
   private info: WebmVideoInfo | null = null
+  private audio: WebmAudioInfo | null = null
   private cluster: Uint8Array[] = []
   private clusterTimecode = 0
   private clusterFrames = 0
   private frames = 0
+  private audioFrames = 0
   private written = 0
   private lastTimestamp = 0
+  private lastAudioTimestamp = 0
   private finished = false
 
   get bytesWritten(): number {
@@ -187,11 +210,20 @@ export class WebmMuxer {
     return this.frames
   }
 
-  /** Write the container header. Call once, before `addFrame`. */
-  initialize(info: WebmVideoInfo): void {
+  get audioFrameCount(): number {
+    return this.audioFrames
+  }
+
+  /**
+   * Write the container header. Call once, before adding frames.
+   *
+   * `audio` is optional: without it the file contains only the video track.
+   */
+  initialize(info: WebmVideoInfo, audio?: WebmAudioInfo): void {
     if (this.info) return
     this.info = info
-    const built = buildHeader(info, 0)
+    this.audio = audio ?? null
+    const built = buildHeader(info, 0, this.audio ?? undefined)
     this.header = built.bytes
     this.durationOffset = built.durationOffset
     this.parts.push(this.header)
@@ -199,7 +231,7 @@ export class WebmMuxer {
   }
 
   /**
-   * Push one encoded frame.
+   * Push one encoded video frame.
    *
    * A cluster starts at every keyframe (and when one grows too large), so
    * memory stays flat and every cluster begins with a seekable keyframe.
@@ -213,21 +245,45 @@ export class WebmMuxer {
       this.flushCluster()
       this.clusterTimecode = timecode
     }
+    this.addBlock(1, timecode, frame.keyFrame ? 0x80 : 0x00, frame.data)
+    this.frames += 1
+    this.lastTimestamp = frame.timestamp
+  }
+
+  /** Push one encoded Opus packet into the current cluster. */
+  addAudioFrame(frame: WebmFrame): void {
+    if (this.finished) throw new Error('WebM: the muxer has already been finished')
+    if (!this.info) throw new Error('WebM: initialize() must be called first')
+    if (!this.audio) throw new Error('WebM: this file was initialized without an audio track')
+    const timecode = Math.round(frame.timestamp / 1000)
+    if (this.cluster.length === 0 || this.clusterFrames >= MAX_CLUSTER_FRAMES) {
+      this.flushCluster()
+      this.clusterTimecode = timecode
+    }
     const relative = timecode - this.clusterTimecode
     if (relative > 32767 || relative < -32768) {
       this.flushCluster()
       this.clusterTimecode = timecode
     }
-    const flags = frame.keyFrame ? 0x80 : 0x00
+    // Audio packets are always keyframes from Matroska's point of view.
+    this.addBlock(2, timecode, 0x80, frame.data)
+    this.audioFrames += 1
+    this.lastAudioTimestamp = frame.timestamp
+  }
+
+  private addBlock(track: number, timecode: number, flags: number, data: Uint8Array): void {
+    const relative = timecode - this.clusterTimecode
+    if (relative > 32767 || relative < -32768) {
+      this.flushCluster()
+      this.clusterTimecode = timecode
+    }
     this.cluster.push(
       element(
         WEBM_ID.simpleBlock,
-        concat([vint(1), uintBytes(timecode - this.clusterTimecode, 2), new Uint8Array([flags]), frame.data]),
+        concat([vint(track), uintBytes(timecode - this.clusterTimecode, 2), new Uint8Array([flags]), data]),
       ),
     )
     this.clusterFrames += 1
-    this.frames += 1
-    this.lastTimestamp = frame.timestamp
   }
 
   private flushCluster(): void {
@@ -249,7 +305,12 @@ export class WebmMuxer {
       this.flushCluster()
       // Duration is measured in TimecodeScale units (milliseconds here).
       const frameDurationUs = this.info.frameDurationUs ?? FALLBACK_FRAME_DURATION_US
-      const durationMs = (this.lastTimestamp + frameDurationUs) / 1000
+      const videoEnd = this.lastTimestamp + frameDurationUs
+      const audioEnd =
+        this.audio && this.audioFrames > 0
+          ? this.lastAudioTimestamp + (this.audio.frameDurationUs ?? 20_000)
+          : 0
+      const durationMs = Math.max(videoEnd, audioEnd) / 1000
       const payload = new Uint8Array(8)
       new DataView(payload.buffer).setFloat64(0, durationMs, false)
       if (this.header && this.durationOffset >= 0) this.header.set(payload, this.durationOffset)
@@ -273,6 +334,7 @@ export class WebmMuxer {
 export function buildHeader(
   info: WebmVideoInfo,
   durationMs: number,
+  audio?: WebmAudioInfo,
 ): { bytes: Uint8Array; durationOffset: number } {
   const ebml = element(
     WEBM_ID.ebml,
@@ -287,7 +349,7 @@ export function buildHeader(
     ]),
   )
 
-  const track = element(
+  const videoTrack = element(
     WEBM_ID.trackEntry,
     concat([
       uintElement(WEBM_ID.trackNumber, 1, 1),
@@ -310,6 +372,35 @@ export function buildHeader(
     ]),
   )
 
+  const trackEntries = [videoTrack]
+  if (audio) {
+    trackEntries.push(
+      element(
+        WEBM_ID.trackEntry,
+        concat([
+          uintElement(WEBM_ID.trackNumber, 2, 1),
+          uintElement(WEBM_ID.trackUid, 2, 8),
+          uintElement(WEBM_ID.trackType, 2, 1),
+          uintElement(WEBM_ID.flagEnabled, 1, 1),
+          uintElement(WEBM_ID.flagDefault, 0, 1),
+          uintElement(WEBM_ID.flagLacing, 0, 1),
+          stringElement(WEBM_ID.language, 'und'),
+          stringElement(WEBM_ID.codecId, 'A_OPUS'),
+          element(WEBM_ID.codecPrivate, audio.codecPrivate),
+          uintElement(WEBM_ID.codecDelay, Math.round(audio.codecDelayNs ?? 0), 4),
+          uintElement(WEBM_ID.seekPreRoll, Math.round(audio.seekPreRollNs ?? 80_000_000), 4),
+          element(
+            WEBM_ID.audio,
+            concat([
+              floatElement(WEBM_ID.samplingFrequency, audio.sampleRate),
+              uintElement(WEBM_ID.channels, audio.numberOfChannels, 1),
+            ]),
+          ),
+        ]),
+      ),
+    )
+  }
+
   const infoBody = concat([
     uintElement(WEBM_ID.timecodeScale, TIMECODE_SCALE_NS, 4),
     stringElement(WEBM_ID.muxingApp, 'web-gource'),
@@ -317,7 +408,10 @@ export function buildHeader(
     floatElement(WEBM_ID.duration, durationMs),
   ])
   const infoElement = element(WEBM_ID.info, infoBody)
-  const segment = unknownElement(WEBM_ID.segment, concat([infoElement, element(WEBM_ID.tracks, track)]))
+  const segment = unknownElement(
+    WEBM_ID.segment,
+    concat([infoElement, element(WEBM_ID.tracks, concat(trackEntries))]),
+  )
   const bytes = concat([ebml, segment])
 
   // Absolute offset of the 8 duration bytes. The Duration element is last in the

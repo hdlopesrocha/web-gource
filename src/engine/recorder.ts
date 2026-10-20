@@ -69,6 +69,27 @@ export function preferredFormat(): RecordingFormat | null {
   return formats.find((format) => format.supported) ?? null
 }
 
+/** Combined video+audio MIME type for live capture with background music. */
+function combinedMimeType(videoMimeType: string): string | null {
+  const candidates = videoMimeType.includes('mp4')
+    ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4']
+    : [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp9',
+        'video/webm',
+      ]
+  if (typeof MediaRecorder === 'undefined') return null
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported?.(candidate) ?? false) return candidate
+  }
+  return null
+}
+
+function extensionForMimeType(mimeType: string): string {
+  return mimeType.includes('mp4') ? 'mp4' : 'webm'
+}
+
 /** Resolution presets offered in the settings panel. */
 export const RESOLUTION_PRESETS: { label: string; width: number; height: number }[] = [
   { label: '1280 × 720 (720p)', width: 1280, height: 720 },
@@ -95,6 +116,7 @@ export class VideoRecorder {
   private stream: MediaStream | null = null
   private chunks: Blob[] = []
   private options: RecordingOptions | null = null
+  private actualMimeType = ''
   private startedAt = 0
   private elapsed = 0
   private result: RecordingResult | null = null
@@ -118,7 +140,7 @@ export class VideoRecorder {
   }
 
   /** Begin recording. Throws when the browser cannot record. */
-  start(options: RecordingOptions): MediaStream {
+  start(options: RecordingOptions, audioStream?: MediaStream | null): MediaStream {
     if (!isRecordingSupported()) {
       throw new Error('This browser cannot record canvas video (MediaRecorder or captureStream is unavailable).')
     }
@@ -133,7 +155,15 @@ export class VideoRecorder {
       this.options = options
     }
 
+    // A video-only MIME type rejects audio tracks in some browsers, so upgrade
+    // to a combined codec string when music is being recorded too.
+    const audioTracks = audioStream?.getAudioTracks() ?? []
+    const audioMimeType = audioTracks.length > 0 ? combinedMimeType(this.options.mimeType) : null
+    if (audioMimeType) this.options = { ...this.options, mimeType: audioMimeType }
+    else if (audioTracks.length > 0) audioTracks.length = 0
+
     const stream = this.canvas.captureStream(options.fps)
+    for (const track of audioTracks) stream.addTrack(track)
     this.stream = stream
     this.chunks = []
     this.result = null
@@ -147,7 +177,9 @@ export class VideoRecorder {
       this.recorder = new MediaRecorder(stream, {
         mimeType: this.options.mimeType,
         videoBitsPerSecond: bitrate,
+        ...(audioTracks.length > 0 ? { audioBitsPerSecond: 128_000 } : {}),
       })
+      this.actualMimeType = this.recorder.mimeType || this.options.mimeType
     } catch (error) {
       this.error = `The browser refused the recording configuration: ${(error as Error).message}`
       this.cleanupStream()
@@ -190,8 +222,8 @@ export class VideoRecorder {
     await finished
 
     this.cleanupStream()
-    const mimeType = this.options?.mimeType ?? 'video/webm'
-    const extension = availableFormats().find((format) => format.mimeType === mimeType)?.extension ?? 'webm'
+    const mimeType = this.actualMimeType || this.options?.mimeType || 'video/webm'
+    const extension = extensionForMimeType(mimeType)
     const blob = new Blob(this.chunks, { type: mimeType })
     this.chunks = []
     this.recorder = null

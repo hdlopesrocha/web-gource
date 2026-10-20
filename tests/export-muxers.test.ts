@@ -188,6 +188,95 @@ describe('WebmMuxer', () => {
     expect(bytes[start + 3]).toBe(0x80) // keyframe flag
     expect(bytes[start + 4]).toBe(0) // first frame payload
   })
+
+  it('writes an Opus track and interleaves its packets with the video', () => {
+    const muxer = new WebmMuxer()
+    const opusHead = new Uint8Array(19)
+    opusHead.set(new TextEncoder().encode('OpusHead'))
+    opusHead[8] = 1
+    opusHead[9] = 2
+    muxer.initialize(
+      { width: 1280, height: 720, codec: 'vp9', frameDurationUs: 16_667 },
+      {
+        codecPrivate: opusHead,
+        sampleRate: 48_000,
+        numberOfChannels: 2,
+        codecDelayNs: 6_500_000,
+        seekPreRollNs: 80_000_000,
+        frameDurationUs: 20_000,
+      },
+    )
+
+    const total = 121
+    const audioPackets: { timestamp: number; data: Uint8Array }[] = []
+    let audioIndex = 0
+    for (let index = 0; index < total; index += 1) {
+      const video = frame(index)
+      muxer.addFrame(video)
+      while (audioIndex < 110 && audioIndex * 20_000 <= video.timestamp) {
+        const data = new Uint8Array([2, audioIndex & 0xff, 0xaa])
+        muxer.addAudioFrame({ data, timestamp: audioIndex * 20_000, keyFrame: true })
+        audioPackets.push({ timestamp: audioIndex * 20_000, data })
+        audioIndex += 1
+      }
+    }
+    // Audio may outlast the video: the duration is the end of the longest track.
+    while (audioIndex < 110) {
+      const data = new Uint8Array([2, audioIndex & 0xff, 0xaa])
+      muxer.addAudioFrame({ data, timestamp: audioIndex * 20_000, keyFrame: true })
+      audioPackets.push({ timestamp: audioIndex * 20_000, data })
+      audioIndex += 1
+    }
+    const bytes = join(muxer.finish())
+
+    const top = children(bytes, 0, bytes.length)
+    const segment = top[1]
+    const segmentChildren = children(bytes, segment.bodyStart, segment.end)
+    const tracks = childrenWithId(segmentChildren, WEBM_ID.tracks)
+    const trackEntries = children(bytes, tracks[0].bodyStart, tracks[0].end)
+    expect(trackEntries).toHaveLength(2)
+
+    const audioTrack = children(bytes, trackEntries[1].bodyStart, trackEntries[1].end)
+    expect(readString(bytes, audioTrack.find((element) => element.id === WEBM_ID.codecId)!)).toBe('A_OPUS')
+    expect(readUint(bytes, audioTrack.find((element) => element.id === WEBM_ID.trackNumber)!)).toBe(2)
+    expect(readUint(bytes, audioTrack.find((element) => element.id === WEBM_ID.codecDelay)!)).toBe(6_500_000)
+    expect(readUint(bytes, audioTrack.find((element) => element.id === WEBM_ID.seekPreRoll)!)).toBe(80_000_000)
+    const privateBytes = audioTrack.find((element) => element.id === WEBM_ID.codecPrivate)!
+    expect(Array.from(bytes.subarray(privateBytes.bodyStart, privateBytes.end))).toEqual(Array.from(opusHead))
+    const audioElement = audioTrack.find((element) => element.id === WEBM_ID.audio)!
+    const audioChildren = children(bytes, audioElement.bodyStart, audioElement.end)
+    expect(readFloat(bytes, audioChildren.find((element) => element.id === WEBM_ID.samplingFrequency)!)).toBe(48_000)
+    expect(readUint(bytes, audioChildren.find((element) => element.id === WEBM_ID.channels)!)).toBe(2)
+
+    const blocks: { track: number; data: Uint8Array; flags: number }[] = []
+    for (const cluster of childrenWithId(segmentChildren, WEBM_ID.cluster)) {
+      for (const block of childrenWithId(children(bytes, cluster.bodyStart, cluster.end), WEBM_ID.simpleBlock)) {
+        const track = readVint(bytes, block.bodyStart)
+        const relative = (bytes[block.bodyStart + track.length] << 8) | bytes[block.bodyStart + track.length + 1]
+        const signed = relative >= 0x8000 ? relative - 0x10000 : relative
+        const flags = bytes[block.bodyStart + track.length + 2]
+        const dataStart = block.bodyStart + track.length + 3
+        const timecode = readUint(
+          bytes,
+          children(bytes, cluster.bodyStart, cluster.end).find((element) => element.id === WEBM_ID.timecode)!,
+        )
+        blocks.push({ track: track.value, flags, data: bytes.subarray(dataStart, block.end) })
+        expect(timecode + signed).toBeGreaterThanOrEqual(0)
+      }
+    }
+    expect(blocks.filter((block) => block.track === 2)).toHaveLength(audioPackets.length)
+    expect(blocks.filter((block) => block.track === 1)).toHaveLength(total)
+    for (const block of blocks.filter((entry) => entry.track === 2)) {
+      expect(block.flags).toBe(0x80)
+      expect(block.data[0]).toBe(2)
+    }
+    expect(muxer.audioFrameCount).toBe(audioPackets.length)
+
+    const info = children(bytes, childrenWithId(segmentChildren, WEBM_ID.info)[0].bodyStart, childrenWithId(segmentChildren, WEBM_ID.info)[0].end)
+    const duration = info.find((element) => element.id === WEBM_ID.duration)!
+    // The audio ends at 2.2 s, after the final video frame (2.0167 s).
+    expect(readFloat(bytes, duration)).toBeCloseTo(2200, 3)
+  })
 })
 
 describe('vint', () => {
@@ -233,6 +322,24 @@ function child(bytes: Uint8Array, parent: Box | null, type: string, skip = 0): B
   return boxes(bytes, start, end).find((box) => box.type === type) ?? null
 }
 
+function containsSequence(haystack: Uint8Array, needle: Uint8Array): boolean {
+  for (let start = 0; start + needle.length <= haystack.length; start += 1) {
+    let match = true
+    for (let index = 0; index < needle.length; index += 1) {
+      if (haystack[start + index] !== needle[index]) {
+        match = false
+        break
+      }
+    }
+    if (match) return true
+  }
+  return false
+}
+
+function readBoxUint32(bytes: Uint8Array, box: Box, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset + box.bodyStart + offset, 4).getUint32(0)
+}
+
 describe('Mp4Muxer', () => {
   const description = new Uint8Array([1, 0x42, 0xc0, 0x33, 0xff, 0xe1, 0x00, 0x03, 1, 2, 3, 0x01, 0x00, 0x02, 4, 5])
   const frame = (index: number, size = 10, keyFrame = index % 30 === 0): { data: Uint8Array; timestamp: number; duration: number; keyFrame: boolean; decodeTime: number } => ({
@@ -267,6 +374,7 @@ describe('Mp4Muxer', () => {
 
     const mvhd = child(bytes, moov, 'mvhd')!
     // mvhd v0: version/flags, creation, modification, timescale, duration.
+    expect(mvhd.end - mvhd.start).toBe(108)
     expect(new DataView(bytes.buffer, bytes.byteOffset + mvhd.bodyStart + 16, 4).getUint32(0)).toBe(2033)
 
     const moofs = top.filter((box) => box.type === 'moof')
@@ -286,6 +394,94 @@ describe('Mp4Muxer', () => {
     }
     expect(samples).toBe(total)
     expect(muxer.frameCount).toBe(total)
+  })
+
+  it('writes an AAC track with esds and separate audio fragments', () => {
+    const audioDescription = new Uint8Array([0x11, 0x88])
+    const muxer = new Mp4Muxer()
+    muxer.initialize({
+      width: 1280,
+      height: 720,
+      description,
+      audio: {
+        sampleRate: 48_000,
+        numberOfChannels: 1,
+        description: audioDescription,
+        bitrate: 128_000,
+      },
+    })
+
+    const total = 61
+    const audioTotal = 110
+    let audioIndex = 0
+    const addAudioThrough = (timestamp: number): void => {
+      while (audioIndex < audioTotal && audioIndex * 20_000 <= timestamp) {
+        muxer.addAudioFrame({
+          data: new Uint8Array([audioIndex & 0xff, 0xaa]),
+          timestamp: audioIndex * 20_000,
+          duration: 20_000,
+        })
+        audioIndex += 1
+      }
+    }
+    for (let index = 0; index < total; index += 1) {
+      const video = frame(index)
+      muxer.addFrame(video)
+      addAudioThrough(video.timestamp)
+    }
+    // The music runs slightly past the final video frame.
+    addAudioThrough(2_200_000)
+    const bytes = join(muxer.finish())
+
+    const top = boxes(bytes)
+    const moov = top.find((box) => box.type === 'moov')!
+    const traks = boxes(bytes, moov.bodyStart, moov.end).filter((box) => box.type === 'trak')
+    expect(traks).toHaveLength(2)
+
+    const audioTrak = traks[1]
+    const mdia = child(bytes, audioTrak, 'mdia')!
+    const mdhd = child(bytes, mdia, 'mdhd')!
+    // mdhd v0: version/flags, creation, modification, timescale, duration.
+    expect(readBoxUint32(bytes, mdhd, 12)).toBe(1_000_000)
+    expect(readBoxUint32(bytes, mdhd, 16)).toBe(2_200_000)
+
+    const hdlr = child(bytes, mdia, 'hdlr')!
+    expect(String.fromCharCode(...bytes.subarray(hdlr.bodyStart + 8, hdlr.bodyStart + 12))).toBe('soun')
+    const minf = child(bytes, mdia, 'minf')!
+    const stbl = child(bytes, minf, 'stbl')!
+    const stsd = child(bytes, stbl, 'stsd')!
+    const mp4a = child(bytes, stsd, 'mp4a', 8)!
+    expect(mp4a).not.toBeNull()
+    // Audio sample entry fixed fields use 16.16 for the sample rate.
+    expect(readBoxUint32(bytes, mp4a, 24)).toBe(48_000 * 65536)
+    const esds = child(bytes, mp4a, 'esds', 28)!
+    expect(esds).not.toBeNull()
+    const esdsBody = bytes.subarray(esds.bodyStart, esds.end)
+    // Full-box version/flags, then ES_Descriptor → DecoderConfig → ASC.
+    expect(Array.from(esdsBody.subarray(0, 4))).toEqual([0, 0, 0, 0])
+    expect(esdsBody[4]).toBe(0x03)
+    expect(Array.from(esdsBody)).toContain(0x04)
+    expect(containsSequence(esdsBody, audioDescription)).toBe(true)
+
+    const mvhd = child(bytes, moov, 'mvhd')!
+    expect(mvhd.end - mvhd.start).toBe(108)
+    expect(readBoxUint32(bytes, mvhd, 16)).toBe(2200)
+
+    let videoSamples = 0
+    let audioSamples = 0
+    for (const moof of top.filter((box) => box.type === 'moof')) {
+      const traf = child(bytes, moof, 'traf')!
+      const tfhd = child(bytes, traf, 'tfhd')!
+      const trun = child(bytes, traf, 'trun')!
+      const trackId = readBoxUint32(bytes, tfhd, 4)
+      const sampleCount = readBoxUint32(bytes, trun, 4)
+      if (trackId === 1) videoSamples += sampleCount
+      else if (trackId === 2) audioSamples += sampleCount
+    }
+    expect(videoSamples).toBe(total)
+    expect(audioSamples).toBe(audioTotal)
+    expect(muxer.frameCount).toBe(total)
+    expect(muxer.audioFrameCount).toBe(audioTotal)
   })
 
   it('keeps sample payloads byte exact', () => {

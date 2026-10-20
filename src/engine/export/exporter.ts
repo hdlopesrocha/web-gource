@@ -17,6 +17,15 @@ import { EXPORT_FPS, durationForFrame, framePercent, isKeyFrame, planFrames, tim
 import { Mp4Muxer } from './mp4'
 import { WebmMuxer, type WebmCodec } from './webm'
 import { defaultBitrate, WebCodecsBackend, type CodecChoice, type ExportFrame, type VideoEncoderBackend } from './encoder'
+import {
+  EXPORT_AUDIO_SAMPLE_RATE,
+  MusicEncodingCancelledError,
+  OPUS_PRE_SKIP,
+  OPUS_SEEK_PRE_ROLL_NS,
+  encodeMusicTrack,
+  type EncodedMusicTrack,
+} from './audio'
+import type { MusicEnvelope, MusicSource } from '../audio/music'
 
 export type { ExportFrame }
 
@@ -67,6 +76,13 @@ export interface ExportResult {
   elapsed: number
   choice: CodecChoice
   bitrate: number
+  /** True when the background music track is part of the file. */
+  audio: boolean
+}
+
+/** Music source and envelope for the export. */
+export interface ExportMusicOptions extends MusicEnvelope {
+  source: MusicSource
 }
 
 export interface OfflineExportOptions {
@@ -82,6 +98,8 @@ export interface OfflineExportOptions {
   fps?: number
   /** Playback speed to follow (the speed selected in the app). */
   speed?: number
+  /** Background music, looped and faded over the video's duration. */
+  audio?: ExportMusicOptions
   onProgress?: (progress: ExportProgress) => void
   /** Injection point for tests; defaults to the WebCodecs backend. */
   backendFactory?: (plan: FramePlan, bitrate: number) => Promise<VideoEncoderBackend>
@@ -149,6 +167,28 @@ export class OfflineExporter {
     let samplesOut = 0
 
     try {
+      let encodedMusic: EncodedMusicTrack | null = null
+      if (options.audio) {
+        try {
+          encodedMusic = await encodeMusicTrack({
+            source: options.audio.source,
+            container: options.choice.container,
+            volume: options.audio.volume,
+            fadeInSeconds: options.audio.fadeInSeconds,
+            fadeOutSeconds: options.audio.fadeOutSeconds,
+            // Include the final frame's duration, exactly like the video track.
+            duration: plan.totalFrames / plan.fps,
+            // The fade-out finishes on the last animation frame.
+            endTime: plan.duration / plan.speed,
+            shouldCancel: () => this.cancelled,
+          })
+        } catch (error) {
+          if (this.cancelled || error instanceof MusicEncodingCancelledError) throw new ExportCancelledError()
+          throw error
+        }
+        if (this.cancelled) throw new ExportCancelledError()
+      }
+
       this.backend = await (options.backendFactory
         ? options.backendFactory(plan, bitrate)
         : WebCodecsBackend.create({
@@ -165,13 +205,44 @@ export class OfflineExporter {
           : new Mp4Muxer()
       let containerReady = false
       if (options.choice.container === 'webm') {
-        ;(muxer as WebmMuxer).initialize({
-          width: options.width,
-          height: options.height,
-          codec: options.choice.codec as WebmCodec,
-          frameDurationUs: Math.round(1_000_000 / plan.fps),
-        })
+        ;(muxer as WebmMuxer).initialize(
+          {
+            width: options.width,
+            height: options.height,
+            codec: options.choice.codec as WebmCodec,
+            frameDurationUs: Math.round(1_000_000 / plan.fps),
+          },
+          encodedMusic
+            ? {
+                codecPrivate: encodedMusic.description,
+                sampleRate: encodedMusic.sampleRate,
+                numberOfChannels: encodedMusic.numberOfChannels,
+                codecDelayNs: Math.round((OPUS_PRE_SKIP / EXPORT_AUDIO_SAMPLE_RATE) * 1_000_000_000),
+                seekPreRollNs: OPUS_SEEK_PRE_ROLL_NS,
+                frameDurationUs: 20_000,
+              }
+            : undefined,
+        )
         containerReady = true
+      }
+
+      /** Add encoded audio packets up to a video timestamp to keep the file interleaved. */
+      let audioIndex = 0
+      const addAudioUpTo = (timestamp: number): void => {
+        if (!encodedMusic) return
+        while (audioIndex < encodedMusic.chunks.length && encodedMusic.chunks[audioIndex].timestamp <= timestamp) {
+          const packet = encodedMusic.chunks[audioIndex]
+          audioIndex += 1
+          if (options.choice.container === 'webm') {
+            ;(muxer as WebmMuxer).addAudioFrame({ data: packet.data, timestamp: packet.timestamp, keyFrame: true })
+          } else {
+            ;(muxer as Mp4Muxer).addAudioFrame({
+              data: packet.data,
+              timestamp: packet.timestamp,
+              duration: packet.duration,
+            })
+          }
+        }
       }
 
       let encoderError: Error | null = null
@@ -187,6 +258,14 @@ export class OfflineExporter {
             width: options.width,
             height: options.height,
             description: metadata.description ?? new Uint8Array(0),
+            audio: encodedMusic
+              ? {
+                  sampleRate: encodedMusic.sampleRate,
+                  numberOfChannels: encodedMusic.numberOfChannels,
+                  description: encodedMusic.description,
+                  bitrate: 128_000,
+                }
+              : undefined,
           })
           containerReady = true
         }
@@ -203,6 +282,7 @@ export class OfflineExporter {
             decodeTime,
           })
         }
+        addAudioUpTo(chunk.timestamp)
       })
 
       report(true)
@@ -235,6 +315,8 @@ export class OfflineExporter {
 
       await this.backend.flush()
       if (encoderError) throw encoderError
+      // Add any audio packets after the last video timestamp (encoder padding).
+      addAudioUpTo(Number.POSITIVE_INFINITY)
 
       const parts = muxer.finish()
       const blob = new Blob(parts as BlobPart[], { type: options.choice.mimeType })
@@ -253,6 +335,7 @@ export class OfflineExporter {
         elapsed: (Date.now() - startedAt) / 1000,
         choice: options.choice,
         bitrate,
+        audio: encodedMusic !== null,
       }
     } finally {
       this.backend?.close()

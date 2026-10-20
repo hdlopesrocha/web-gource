@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   durationForFrame,
   framePercent,
@@ -9,8 +9,14 @@ import {
   timestampForFrame,
   EXPORT_FPS,
 } from '../src/engine/export/frames'
-import { ExportCancelledError, OfflineExporter, type ExportFrameRequest } from '../src/engine/export/exporter'
+import {
+  ExportCancelledError,
+  OfflineExporter,
+  type ExportFrameRequest,
+  type ExportMusicOptions,
+} from '../src/engine/export/exporter'
 import type { CodecChoice, EncodedChunk, EncoderMetadata, ExportFrame, VideoEncoderBackend } from '../src/engine/export/encoder'
+import type { MusicSource } from '../src/engine/audio/music'
 
 /**
  * Export loop tests.
@@ -115,12 +121,77 @@ class StubBackend implements VideoEncoderBackend {
   }
 }
 
+/**
+ * Minimal WebCodecs audio stubs. The exporter only needs the encoder to hand
+ * back packets and a decoder description; the actual Opus/AAC bitstream is the
+ * browser's job, and the muxer tests parse the resulting container.
+ */
+function installFakeAudioEncoder(description: Uint8Array): void {
+  class FakeAudioData {
+    constructor(readonly init: AudioDataInit) {}
+    close(): void {}
+  }
+
+  class FakeAudioEncoder {
+    static async isConfigSupported(): Promise<{ supported: boolean; config: AudioEncoderConfig }> {
+      return { supported: true, config: {} as AudioEncoderConfig }
+    }
+
+    state = 'configured'
+    encodeQueueSize = 0
+    private readonly output: (chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata) => void
+
+    constructor(init: { output: (chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata) => void }) {
+      this.output = init.output
+    }
+
+    configure(): void {}
+
+    encode(data: FakeAudioData): void {
+      const payload = new Uint8Array([0xaa, 0xbb])
+      this.output(
+        {
+          byteLength: payload.length,
+          timestamp: data.init.timestamp,
+          duration: 20_000,
+          copyTo: (destination: Uint8Array) => destination.set(payload),
+        } as unknown as EncodedAudioChunk,
+        { decoderConfig: { codec: 'opus', description } } as unknown as EncodedAudioChunkMetadata,
+      )
+    }
+
+    async flush(): Promise<void> {}
+
+    close(): void {
+      this.state = 'closed'
+    }
+  }
+
+  vi.stubGlobal('AudioData', FakeAudioData)
+  vi.stubGlobal('AudioEncoder', FakeAudioEncoder)
+}
+
+function musicSource(): MusicSource {
+  return {
+    sampleRate: 48_000,
+    numberOfChannels: 1,
+    length: 48_000,
+    channels: [new Float32Array(48_000).fill(0.25)],
+    duration: 1,
+  }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 function runExport(options: {
   duration: number
   choice?: CodecChoice
   backend?: StubBackend
   fps?: number
   speed?: number
+  audio?: ExportMusicOptions
   onProgress?: Parameters<typeof OfflineExporter.prototype.run>[0]['onProgress']
 }) {
   const backend = options.backend ?? new StubBackend(options.choice ?? choice)
@@ -133,6 +204,7 @@ function runExport(options: {
     height: 360,
     fps: options.fps,
     speed: options.speed,
+    audio: options.audio,
     onProgress: options.onProgress,
     backendFactory: async () => backend,
     frameFactory: (request) => {
@@ -223,6 +295,7 @@ describe('OfflineExporter', () => {
     expect(result.speed).toBe(1)
     expect(result.blob.type).toBe('video/webm')
     expect(result.extension).toBe('webm')
+    expect(result.audio).toBe(false)
     expect(backend.flushed).toBe(true)
     expect(backend.closed).toBe(true)
   })
@@ -309,6 +382,75 @@ describe('OfflineExporter', () => {
     expect(result.extension).toBe('mp4')
     expect(result.blob.type).toBe('video/mp4')
     expect(result.bytes).toBeGreaterThan(200)
+  })
+
+  it('muxes the background music into WebM and MP4', async () => {
+    const audioDescription = new Uint8Array([1, 2, 3, 4])
+    installFakeAudioEncoder(audioDescription)
+    for (const exportChoice of [choice, mp4Choice]) {
+      const backend = new StubBackend(exportChoice)
+      if (exportChoice.container === 'mp4') {
+        backend.metadata = { description: new Uint8Array([1, 0x42, 0xc0, 0x28, 0xff, 0xe1, 0, 2, 1, 2, 1, 0, 2, 3, 4]) }
+      }
+      const { promise } = runExport({
+        duration: 1,
+        choice: exportChoice,
+        backend,
+        audio: {
+          source: musicSource(),
+          volume: 0.5,
+          fadeInSeconds: 0.1,
+          fadeOutSeconds: 0.1,
+        },
+      })
+      const result = await promise
+      expect(result.audio).toBe(true)
+      const bytes = new Uint8Array(await result.blob.arrayBuffer())
+      const text = Buffer.from(bytes).toString('latin1')
+      if (exportChoice.container === 'webm') {
+        expect(text).toContain('A_OPUS')
+      } else {
+        expect(text).toContain('mp4a')
+        expect(text).toContain('esds')
+      }
+    }
+  })
+
+  it('resets after audio encoding fails, so a music-free export can be retried', async () => {
+    class UnsupportedAudioEncoder {
+      static async isConfigSupported(): Promise<{ supported: boolean; config: AudioEncoderConfig }> {
+        return { supported: false, config: {} as AudioEncoderConfig }
+      }
+    }
+    vi.stubGlobal('AudioData', class {})
+    vi.stubGlobal('AudioEncoder', UnsupportedAudioEncoder)
+
+    const exporter = new OfflineExporter()
+    const backend = new StubBackend()
+    const base = {
+      duration: 0.2,
+      choice,
+      width: 320,
+      height: 240,
+      backendFactory: async () => backend,
+      frameFactory: (request: ExportFrameRequest) => backend.createFrame(request.timestamp, request.duration),
+    }
+    await expect(
+      exporter.run({
+        ...base,
+        audio: {
+          source: musicSource(),
+          volume: 0.5,
+          fadeInSeconds: 0,
+          fadeOutSeconds: 0,
+        },
+      }),
+    ).rejects.toThrow(/Remove the background music/)
+
+    // A failed audio encode must not leave the exporter locked as "running".
+    const result = await exporter.run(base)
+    expect(result.audio).toBe(false)
+    expect(result.frames).toBe(planFrames(0.2).totalFrames)
   })
 
   it('refuses to run twice at the same time', async () => {

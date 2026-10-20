@@ -8,9 +8,9 @@
  * (plus the small, back-patched header) is retained; one fragment is written per
  * keyframe, which bounds memory to about a second of encoded video.
  *
- * Deliberately narrow: one video track, no audio, no edit lists, no sample
- * groups. Composition offsets are emitted when the encoder reorders frames, so
- * B-frame streams stay in sync.
+ * Deliberately narrow: one video track plus an optional AAC audio track, no edit
+ * lists, no sample groups. Composition offsets are emitted when the encoder
+ * reorders frames, so B-frame streams stay in sync.
  */
 
 export interface Mp4VideoInfo {
@@ -22,6 +22,18 @@ export interface Mp4VideoInfo {
    * parameter sets.
    */
   description: Uint8Array
+  /** Optional AAC audio track (background music). */
+  audio?: Mp4AudioInfo
+}
+
+/** AAC track metadata for the background music. */
+export interface Mp4AudioInfo {
+  sampleRate: number
+  numberOfChannels: number
+  /** AudioSpecificConfig (the payload of `DecoderSpecificInfo`). */
+  description: Uint8Array
+  /** Nominal bitrate written into the ES descriptor. */
+  bitrate?: number
 }
 
 export interface Mp4Frame {
@@ -37,6 +49,15 @@ export interface Mp4Frame {
    * monotonic decode timeline.
    */
   decodeTime?: number
+}
+
+/** One encoded AAC packet. Audio packets are always sync samples. */
+export interface Mp4AudioFrame {
+  data: Uint8Array
+  /** Presentation timestamp in microseconds. */
+  timestamp: number
+  /** Duration in microseconds. */
+  duration: number
 }
 
 /** Media timescale: microseconds, matching WebCodecs timestamps. */
@@ -158,13 +179,19 @@ export class Mp4Muxer {
   private patches = new Map<string, Patch>()
   private parts: Uint8Array[] = []
   private info: Mp4VideoInfo | null = null
+  private audio: Mp4AudioInfo | null = null
   private sequence = 0
   private samples = 0
+  private audioSamples = 0
   private written = 0
-  /** End of the last sample in the media timescale (for the patched duration). */
-  private lastEnd = 0
-  /** Samples waiting for a fragment (bounded: one per frame, flushed per keyframe). */
+  /** End of the last video sample in the media timescale. */
+  private lastVideoEnd = 0
+  /** End of the last audio sample in the media timescale. */
+  private lastAudioEnd = 0
+  /** Video samples waiting for a fragment. */
   private pending: Mp4Frame[] = []
+  /** Audio samples waiting for a fragment. */
+  private pendingAudio: Mp4AudioFrame[] = []
   private finished = false
 
   get bytesWritten(): number {
@@ -173,6 +200,10 @@ export class Mp4Muxer {
 
   get frameCount(): number {
     return this.samples
+  }
+
+  get audioFrameCount(): number {
+    return this.audioSamples
   }
 
   /**
@@ -185,6 +216,7 @@ export class Mp4Muxer {
       throw new Error('MP4: the encoder did not provide an AVC decoder description (avcC)')
     }
     this.info = info
+    this.audio = info.audio ?? null
     const buffer = new Buf()
     buffer.box('ftyp', (buf) => {
       buf.fourcc('isom')
@@ -208,102 +240,17 @@ export class Mp4Muxer {
         buf.u32(0)
         buf.u32(0)
         writeMatrix(buf)
-        buf.u32(0) // pre_defined
-        buf.u32(2) // next_track_ID
+        // pre_defined[6] (24 bytes) then next_track_ID.
+        buf.push(new Uint8Array(24))
+        buf.u32(this.audio ? 3 : 2) // next_track_ID
       })
 
-      moov.box('trak', (trak) => {
-        trak.fullBox('tkhd', 0, 0x000007, (buf) => {
-          buf.u32(0)
-          buf.u32(0)
-          buf.u32(1) // track_ID
-          buf.u32(0) // reserved
-          this.patch('tkhd.duration', buf, 4, 0)
-          buf.u32(0)
-          buf.u32(0)
-          buf.u16(0) // layer
-          buf.u16(0) // alternate_group
-          buf.u16(0) // volume
-          buf.u16(0)
-          writeMatrix(buf)
-          buf.u32(info.width * 65536)
-          buf.u32(info.height * 65536)
-        })
-
-        trak.box('mdia', (mdia) => {
-          mdia.fullBox('mdhd', 0, 0, (buf) => {
-            buf.u32(0)
-            buf.u32(0)
-            buf.u32(MEDIA_TIMESCALE)
-            this.patch('media.duration', buf, 4, 0)
-            buf.u16(0x55c4) // 'und'
-            buf.u16(0)
-          })
-          mdia.fullBox('hdlr', 0, 0, (buf) => {
-            buf.u32(0) // pre_defined
-            buf.fourcc('vide')
-            buf.u32(0)
-            buf.u32(0)
-            buf.u32(0)
-            buf.u8(0) // empty name
-          })
-          mdia.box('minf', (minf) => {
-            minf.fullBox('vmhd', 0, 1, (buf) => {
-              buf.u16(0)
-              buf.u16(0)
-              buf.u16(0)
-              buf.u16(0)
-            })
-            minf.box('dinf', (dinf) => {
-              dinf.fullBox('dref', 0, 0, (buf) => {
-                buf.u32(1)
-                buf.fullBox('url ', 0, 1, () => {
-                  /* self-contained */
-                })
-              })
-            })
-            minf.box('stbl', (stbl) => {
-              stbl.box('stsd', (buf) => {
-                buf.u32(0)
-                buf.u32(1)
-                buf.box('avc1', (entry) => {
-                  entry.push(new Uint8Array(6)) // reserved
-                  entry.u16(1) // data_reference_index
-                  entry.u16(0)
-                  entry.u16(0)
-                  entry.u32(0)
-                  entry.u32(0)
-                  entry.u32(0)
-                  entry.u16(info.width)
-                  entry.u16(info.height)
-                  entry.u32(0x00480000) // 72 dpi
-                  entry.u32(0x00480000)
-                  entry.u32(0) // reserved
-                  entry.u16(1) // frame_count
-                  entry.push(new Uint8Array(32)) // compressor name
-                  entry.u16(0x0018) // depth
-                  entry.u16(0xffff) // pre_defined
-                  entry.box('avcC', (avcc) => {
-                    avcc.push(info.description)
-                  })
-                })
-              })
-              // Sample tables stay empty: every sample lives in a fragment.
-              stbl.fullBox('stts', 0, 0, (buf) => buf.u32(0))
-              stbl.fullBox('stsc', 0, 0, (buf) => buf.u32(0))
-              stbl.fullBox('stsz', 0, 0, (buf) => {
-                buf.u32(0)
-                buf.u32(0)
-              })
-              stbl.fullBox('stco', 0, 0, (buf) => buf.u32(0))
-            })
-          })
-        })
-      })
+      this.writeVideoTrak(moov, info)
+      if (this.audio) this.writeAudioTrak(moov, this.audio)
 
       moov.box('mvex', (mvex) => {
         mvex.fullBox('mehd', 0, 0, (buf) => {
-          this.patch('tkhd.duration', buf, 4, 0)
+          this.patch('mvex.duration', buf, 4, 0)
         })
         mvex.fullBox('trex', 0, 0, (buf) => {
           buf.u32(1) // track_ID
@@ -312,12 +259,173 @@ export class Mp4Muxer {
           buf.u32(0) // default_sample_size
           buf.u32(0) // default_sample_flags
         })
+        if (this.audio) {
+          mvex.fullBox('trex', 0, 0, (buf) => {
+            buf.u32(2) // track_ID
+            buf.u32(1) // default_sample_description_index
+            buf.u32(0)
+            buf.u32(0)
+            buf.u32(0)
+          })
+        }
       })
     })
 
     this.header = buffer.data()
     this.parts.push(this.header)
     this.written += this.header.length
+  }
+
+  /** Video `trak`: AVC sample entry and empty fragment sample tables. */
+  private writeVideoTrak(moov: Buf, info: Mp4VideoInfo): void {
+    moov.box('trak', (trak) => {
+      trak.fullBox('tkhd', 0, 0x000007, (buf) => {
+        buf.u32(0)
+        buf.u32(0)
+        buf.u32(1) // track_ID
+        buf.u32(0) // reserved
+        this.patch('tkhd.video.duration', buf, 4, 0)
+        buf.u32(0)
+        buf.u32(0)
+        buf.u16(0) // layer
+        buf.u16(0) // alternate_group
+        buf.u16(0) // volume
+        buf.u16(0)
+        writeMatrix(buf)
+        buf.u32(info.width * 65536)
+        buf.u32(info.height * 65536)
+      })
+
+      trak.box('mdia', (mdia) => {
+        mdia.fullBox('mdhd', 0, 0, (buf) => {
+          buf.u32(0)
+          buf.u32(0)
+          buf.u32(MEDIA_TIMESCALE)
+          this.patch('mdhd.video.duration', buf, 4, 0)
+          buf.u16(0x55c4) // 'und'
+          buf.u16(0)
+        })
+        mdia.fullBox('hdlr', 0, 0, (buf) => {
+          buf.u32(0) // pre_defined
+          buf.fourcc('vide')
+          buf.u32(0)
+          buf.u32(0)
+          buf.u32(0)
+          buf.u8(0) // empty name
+        })
+        mdia.box('minf', (minf) => {
+          minf.fullBox('vmhd', 0, 1, (buf) => {
+            buf.u16(0)
+            buf.u16(0)
+            buf.u16(0)
+            buf.u16(0)
+          })
+          writeDinf(minf)
+          minf.box('stbl', (stbl) => {
+            stbl.box('stsd', (buf) => {
+              buf.u32(0)
+              buf.u32(1)
+              buf.box('avc1', (entry) => {
+                entry.push(new Uint8Array(6)) // reserved
+                entry.u16(1) // data_reference_index
+                entry.u16(0)
+                entry.u16(0)
+                entry.u32(0)
+                entry.u32(0)
+                entry.u32(0)
+                entry.u16(info.width)
+                entry.u16(info.height)
+                entry.u32(0x00480000) // 72 dpi
+                entry.u32(0x00480000)
+                entry.u32(0) // reserved
+                entry.u16(1) // frame_count
+                entry.push(new Uint8Array(32)) // compressor name
+                entry.u16(0x0018) // depth
+                entry.u16(0xffff) // pre_defined
+                entry.box('avcC', (avcc) => {
+                  avcc.push(info.description)
+                })
+              })
+            })
+            writeEmptySampleTables(stbl)
+          })
+        })
+      })
+    })
+  }
+
+  /** AAC audio `trak`: `mp4a` sample entry with an `esds` descriptor. */
+  private writeAudioTrak(moov: Buf, audio: Mp4AudioInfo): void {
+    moov.box('trak', (trak) => {
+      trak.fullBox('tkhd', 0, 0x000007, (buf) => {
+        buf.u32(0)
+        buf.u32(0)
+        buf.u32(2) // track_ID
+        buf.u32(0) // reserved
+        this.patch('tkhd.audio.duration', buf, 4, 0)
+        buf.u32(0)
+        buf.u32(0)
+        buf.u16(0) // layer
+        buf.u16(0) // alternate_group
+        buf.u16(0x0100) // volume 1.0
+        buf.u16(0)
+        writeMatrix(buf)
+        buf.u32(0) // width
+        buf.u32(0) // height
+      })
+
+      trak.box('mdia', (mdia) => {
+        mdia.fullBox('mdhd', 0, 0, (buf) => {
+          buf.u32(0)
+          buf.u32(0)
+          buf.u32(MEDIA_TIMESCALE)
+          this.patch('mdhd.audio.duration', buf, 4, 0)
+          buf.u16(0x55c4) // 'und'
+          buf.u16(0)
+        })
+        mdia.fullBox('hdlr', 0, 0, (buf) => {
+          buf.u32(0) // pre_defined
+          buf.fourcc('soun')
+          buf.u32(0)
+          buf.u32(0)
+          buf.u32(0)
+          buf.u8(0) // empty name
+        })
+        mdia.box('minf', (minf) => {
+          minf.fullBox('smhd', 0, 0, (buf) => {
+            buf.u16(0) // balance
+            buf.u16(0) // reserved
+          })
+          writeDinf(minf)
+          minf.box('stbl', (stbl) => {
+            stbl.box('stsd', (buf) => {
+              buf.u32(0)
+              buf.u32(1)
+              buf.box('mp4a', (entry) => {
+                entry.push(new Uint8Array(6)) // reserved
+                entry.u16(1) // data_reference_index
+                entry.u16(0) // version
+                entry.u16(0) // revision
+                entry.u32(0) // vendor
+                entry.u16(audio.numberOfChannels)
+                entry.u16(16) // sample size
+                entry.u16(0) // pre_defined
+                entry.u16(0) // reserved
+                entry.u32(audio.sampleRate * 65536)
+                entry.box('esds', (esds) => {
+                  esds.u8(0) // version
+                  esds.u8(0) // flags
+                  esds.u8(0)
+                  esds.u8(0)
+                  esds.push(buildEsds(audio))
+                })
+              })
+            })
+            writeEmptySampleTables(stbl)
+          })
+        })
+      })
+    })
   }
 
   /** Reserve a fixed-width field and remember where to patch it at the end. */
@@ -327,37 +435,74 @@ export class Mp4Muxer {
     else buf.u64(value)
   }
 
-  /** Queue one encoded sample; fragments are written per keyframe. */
+  /** Queue one encoded video sample; fragments are written per keyframe. */
   addFrame(frame: Mp4Frame): void {
     if (this.finished) throw new Error('MP4: the muxer has already been finished')
     if (!this.info) throw new Error('MP4: initialize() must be called first')
-    if (frame.keyFrame && this.pending.length > 0) this.flushFragment()
+    if (frame.keyFrame && this.pending.length > 0) this.flushVideoFragment()
     this.pending.push(frame)
-    if (this.pending.length >= MAX_FRAGMENT_SAMPLES) this.flushFragment()
+    if (this.pending.length >= MAX_FRAGMENT_SAMPLES) this.flushVideoFragment()
   }
 
-  private flushFragment(): void {
+  /** Queue one encoded AAC packet. Audio fragments are flushed in bounded batches. */
+  addAudioFrame(frame: Mp4AudioFrame): void {
+    if (this.finished) throw new Error('MP4: the muxer has already been finished')
+    if (!this.info) throw new Error('MP4: initialize() must be called first')
+    if (!this.audio) throw new Error('MP4: this file was initialized without an audio track')
+    this.pendingAudio.push(frame)
+    if (this.pendingAudio.length >= MAX_FRAGMENT_SAMPLES) this.flushAudioFragment()
+  }
+
+  private flushVideoFragment(): void {
     if (this.pending.length === 0) return
     const samples = this.pending
     this.pending = []
     this.sequence += 1
-    const fragment = buildFragment(samples, this.sequence)
+    const fragment = buildFragment(samples, this.sequence, 1)
     this.parts.push(fragment)
     this.written += fragment.length
     this.samples += samples.length
     const last = samples[samples.length - 1]
-    this.lastEnd = Math.max(this.lastEnd, last.timestamp + last.duration)
+    this.lastVideoEnd = Math.max(this.lastVideoEnd, last.timestamp + last.duration)
   }
 
-  /** Flush the last fragment, patch the durations and return the file parts. */
+  private flushAudioFragment(): void {
+    if (this.pendingAudio.length === 0) return
+    const samples: Mp4Frame[] = this.pendingAudio.map((sample) => ({
+      data: sample.data,
+      timestamp: sample.timestamp,
+      duration: sample.duration,
+      keyFrame: true,
+      decodeTime: sample.timestamp,
+    }))
+    this.pendingAudio = []
+    this.sequence += 1
+    const fragment = buildFragment(samples, this.sequence, 2)
+    this.parts.push(fragment)
+    this.written += fragment.length
+    this.audioSamples += samples.length
+    const last = samples[samples.length - 1]
+    this.lastAudioEnd = Math.max(this.lastAudioEnd, last.timestamp + last.duration)
+  }
+
+  /** Flush the last fragments, patch the durations and return the file parts. */
   finish(): Uint8Array[] {
     if (!this.info) throw new Error('MP4: initialize() must be called first')
     if (!this.finished) {
-      this.flushFragment()
+      this.flushVideoFragment()
+      this.flushAudioFragment()
       if (this.header) {
-        const movieDuration = Math.round(this.lastEnd / 1000)
+        const mediaEnd = Math.max(this.lastVideoEnd, this.lastAudioEnd)
+        const movieEnd = Math.round(mediaEnd / 1000)
         for (const [key, patch] of this.patches) {
-          const value = key === 'media.duration' ? this.lastEnd : movieDuration
+          const value =
+            key === 'mvhd.duration' || key === 'mvex.duration' || key.startsWith('tkhd.')
+              ? movieEnd
+              : key === 'mdhd.video.duration'
+                ? this.lastVideoEnd
+                : key === 'mdhd.audio.duration'
+                  ? this.lastAudioEnd
+                  : 0
           new DataView(this.header.buffer, this.header.byteOffset + patch.offset, patch.width).setUint32(0, value)
         }
       }
@@ -369,6 +514,70 @@ export class Mp4Muxer {
   finishBlob(): Blob {
     return new Blob(this.finish() as BlobPart[], { type: 'video/mp4' })
   }
+}
+
+function writeDinf(minf: Buf): void {
+  minf.box('dinf', (dinf) => {
+    dinf.fullBox('dref', 0, 0, (buf) => {
+      buf.u32(1)
+      buf.fullBox('url ', 0, 1, () => {
+        /* self-contained */
+      })
+    })
+  })
+}
+
+/** Sample tables stay empty: every sample lives in a fragment. */
+function writeEmptySampleTables(stbl: Buf): void {
+  stbl.fullBox('stts', 0, 0, (buf) => buf.u32(0))
+  stbl.fullBox('stsc', 0, 0, (buf) => buf.u32(0))
+  stbl.fullBox('stsz', 0, 0, (buf) => {
+    buf.u32(0)
+    buf.u32(0)
+  })
+  stbl.fullBox('stco', 0, 0, (buf) => buf.u32(0))
+}
+
+/** `esds` payload: ES_Descriptor → DecoderConfigDescriptor → AudioSpecificConfig. */
+function buildEsds(audio: Mp4AudioInfo): Uint8Array {
+  const bitrate = audio.bitrate ?? 128_000
+  const decoderSpecific = descriptor(0x05, audio.description)
+  const decoderConfig = new Buf()
+  decoderConfig.u8(0x40) // objectTypeIndication: MPEG-4 Audio
+  decoderConfig.u8(0x15) // streamType: audio (5 << 2) | reserved
+  decoderConfig.u8(0) // bufferSizeDB (24-bit)
+  decoderConfig.u8(0)
+  decoderConfig.u8(0)
+  decoderConfig.u32(bitrate) // maxBitrate
+  decoderConfig.u32(bitrate) // avgBitrate
+  decoderConfig.push(decoderSpecific)
+
+  const slConfig = descriptor(0x06, new Uint8Array([0x02]))
+  const es = new Buf()
+  es.u16(0) // ES_ID
+  es.u8(0) // stream priority / flags
+  es.push(descriptor(0x04, decoderConfig.data()))
+  es.push(slConfig)
+  return descriptor(0x03, es.data())
+}
+
+function descriptor(tag: number, body: Uint8Array): Uint8Array {
+  const out = new Buf()
+  out.u8(tag)
+  out.push(descriptorLength(body.length))
+  out.push(body)
+  return out.data()
+}
+
+/** MPEG-4 descriptor length: 7-bit groups, high bit set on continuation bytes. */
+function descriptorLength(length: number): Uint8Array {
+  const bytes = [length & 0x7f]
+  let value = length >>> 7
+  while (value > 0) {
+    bytes.unshift((value & 0x7f) | 0x80)
+    value >>>= 7
+  }
+  return new Uint8Array(bytes)
 }
 
 function writeMatrix(buf: Buf): void {
@@ -385,10 +594,10 @@ function writeMatrix(buf: Buf): void {
  * streams in sync. The data offset depends on the finished `moof` size, so the
  * moof is built twice: once to measure, once with the real offset.
  */
-function buildFragment(samples: Mp4Frame[], sequence: number): Uint8Array {
-  const measure = buildMoof(samples, sequence, 0)
+function buildFragment(samples: Mp4Frame[], sequence: number, trackId: number): Uint8Array {
+  const measure = buildMoof(samples, sequence, 0, trackId)
   const dataOffset = measure.length + 8 // mdat header
-  const moof = buildMoof(samples, sequence, dataOffset)
+  const moof = buildMoof(samples, sequence, dataOffset, trackId)
 
   const out = new Buf()
   out.push(moof)
@@ -399,7 +608,7 @@ function buildFragment(samples: Mp4Frame[], sequence: number): Uint8Array {
   return out.data()
 }
 
-function buildMoof(samples: Mp4Frame[], sequence: number, dataOffset: number): Uint8Array {
+function buildMoof(samples: Mp4Frame[], sequence: number, dataOffset: number, trackId: number): Uint8Array {
   const first = samples[0]
   // Decode time: samples are already in decode order, so their decode times are
   // the running sum of the durations.
@@ -408,7 +617,7 @@ function buildMoof(samples: Mp4Frame[], sequence: number, dataOffset: number): U
     const decodeTime = sample.decodeTime ?? sample.timestamp
     offsets.push(Math.round(sample.timestamp - decodeTime))
   }
-  const reordered = offsets.some((offset) => offset !== 0)
+  const reordered = trackId === 1 && offsets.some((offset) => offset !== 0)
 
   const moof = new Buf()
   const flags =
@@ -422,7 +631,7 @@ function buildMoof(samples: Mp4Frame[], sequence: number, dataOffset: number): U
     box.fullBox('mfhd', 0, 0, (buf) => buf.u32(sequence))
     box.box('traf', (traf) => {
       traf.fullBox('tfhd', 0, 0x020000, (buf) => {
-        buf.u32(1) // track_ID (default-base-is-moof)
+        buf.u32(trackId) // track_ID (default-base-is-moof)
       })
       traf.fullBox('tfdt', 1, 0, (buf) => {
         buf.u64(Math.max(0, Math.round(first.decodeTime ?? first.timestamp)))
@@ -434,7 +643,8 @@ function buildMoof(samples: Mp4Frame[], sequence: number, dataOffset: number): U
           const sample = samples[index]
           buf.u32(Math.max(1, Math.round(sample.duration)))
           buf.u32(sample.data.length)
-          buf.u32(sample.keyFrame ? 0x02000000 : 0x01010000)
+          // Audio packets are all sync samples; video keeps the original flags.
+          buf.u32(trackId === 2 ? 0x02000000 : sample.keyFrame ? 0x02000000 : 0x01010000)
           if (reordered) buf.u32(Math.round(offsets[index]))
         }
       })
