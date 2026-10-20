@@ -43,8 +43,7 @@ export const DEFAULT_YAW = -Math.PI / 2
  */
 export const DEFAULT_PITCH = 0.92
 /** Below the horizon the plane would be seen edge-on; at the normal the camera
- *  up vector becomes parallel to the view direction. The 2D button is the
- *  explicit top-down view. */
+ *  up vector becomes parallel to the view direction. */
 const MIN_PITCH = 0.08
 const MAX_PITCH = 1.45
 /** Radians of orbit per CSS pixel of pointer travel. */
@@ -72,8 +71,8 @@ const scratchLookAt = new THREE.Vector3()
  *
  * Dragging with the left button rotates the camera, dragging with the right or
  * middle button pans, and the wheel zooms. In automatic mode the view follows
- * recent activity and fits the repository, just like the old flat camera; the
- * manual orbit angles are kept unless the view is reset.
+ * recent activity and fits the repository; the manual orbit angles are kept
+ * unless the view is reset.
  */
 export class OrbitCamera {
   readonly camera: THREE.PerspectiveCamera

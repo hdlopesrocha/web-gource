@@ -10,7 +10,7 @@
  * The bands map directly onto the visualization:
  *
  *  - bass (25–150 Hz) shifts the plasma's hue;
- *  - low mids (150–400 Hz) tint the folder rings;
+ *  - low mids (150–400 Hz) tint the folder spheres;
  *  - midrange (400–2000 Hz) brightens the branch lines;
  *  - the 300–3400 Hz voice range pulses the author avatars;
  *  - short transients in 1800–5800 Hz are detected as claps and cycle the file
@@ -43,7 +43,7 @@ export const LIVE_FFT_SIZE = 1024
 export interface AudioLevels {
   /** 25–150 Hz: drives the plasma's hue. */
   bass: number
-  /** 150–400 Hz: drives the folder rings. */
+  /** 150–400 Hz: drives the folder spheres. */
   low: number
   /** 400–2000 Hz: drives the branch lines. */
   mid: number

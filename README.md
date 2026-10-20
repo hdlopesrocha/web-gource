@@ -2,15 +2,15 @@
 
 A browser-based, WebGL-powered reimplementation of [Gource](https://gource.io/): paste one or more
 public repository URLs and watch their histories grow side by side in one animated 3D map —
-directories branching like trees, files appearing as billboards sized by their real file size, authors
-flying between the files they touch, and activity bursts coloured by add / modify / delete / rename.
-Drag with the mouse to orbit around the scene.
+folders branching like trees, files and folders rendered as lit spheres sized by their real file
+size, authors flying between the files they touch, and activity bursts coloured by add / modify /
+delete / rename. Drag with the mouse to orbit around the scene.
 
 Nothing is cloned, uploaded, or built on a server. Commit history is read straight from the
 hosting provider's REST API in the browser, normalized into a timeline, and rendered with an
 independently written Three.js renderer.
 
-![Web Gource visualizing a repository as a 3D map with billboards sized by file size](docs/screenshot.png)
+![Web Gource visualizing a repository as a 3D map of spheres sized by file size](docs/screenshot.png)
 
 ```
 one or more repository URLs   →   animated 3D map of their histories
@@ -77,7 +77,9 @@ On GitHub, Pages must point at the branch once: **Settings → Pages → Source:
 
 The landing page can load several repositories into one shared scene. **Add repository** adds a row,
 the **✕** button removes one, and the primary button becomes **Load N repositories** once more than
-one row is filled. A single row still loads exactly as before, with unscoped paths and authors.
+one row is filled. The Examples area also has **Fill all 11 repositories**, which replaces the rows
+with the `hdlopesrocha` project set in one click (it fills the form without starting a load). A
+single row still loads exactly as before, with unscoped paths and authors.
 
 Each project keeps its own file tree and its own author instances, so identical paths or the same
 contributor in two repositories never collide. Paths are prefixed with `owner/name/`, and the same
@@ -195,7 +197,7 @@ envelopes sampled every ~21 ms:
   breathe;
 * **claps** — short transients in 1.8–5.8 kHz — cycle and flash the file
   colours, so the palette changes with the beat;
-* **low mids** (150–400 Hz) tint the folder rings, and the **midrange**
+* **low mids** (150–400 Hz) tint the folder spheres, and the **midrange**
   (400–2000 Hz) brightens the branch lines;
 * the **vocal range** (300–3400 Hz) makes the author avatars and their halos
   pulse.
@@ -278,9 +280,18 @@ browser — there is no backend.
 The 3D view is a tabletop: the camera up vector is the plane normal (+Z), so a left-drag spins the
 camera around the tree and tilting changes the elevation above the plane while the ground recedes
 into the distance. Right-drag (or Shift-drag) pans and the scroll wheel zooms around the pointer.
-The **2D** button in the stage toolbar switches to a flat top-down view with the original planar
-framing, where a left-drag pans; **Reset** (or `C`) returns to the default 3D angle. Manual input
-pauses the automatic view for a few seconds.
+**Reset** (or `C`) returns to the default 3D angle. Manual input pauses the automatic view for a few
+seconds.
+
+### Phones and tablets
+
+The stage adapts below **760px** wide and on short landscape phones. The header becomes two rows
+so every action stays reachable, notices stack below it, and the playback bar uses a portrait column
+or one compact landscape row. Authors, Settings and Activity open as full-width sheets above the
+playback bar with independently scrolling bodies; Help and the compact minimap stay available. Safe
+area insets keep controls clear of notches and home indicators (`viewport-fit=cover`), and the stage
+uses the dynamic viewport height so mobile browser chrome does not clip it. Desktop layout is
+unchanged from 900px up.
 
 ### Gamepad and head tracking
 
@@ -325,15 +336,13 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   has no XR device (or no `navigator.xr` at all) the button is disabled and says so, instead of
   failing when it is pressed;
 * entering a session enables `renderer.xr`, requests the `local-floor` reference space and stands you
-  at the **scene origin at the same eye height the on-screen camera has** (the tree keeps its
-  tabletop scale, centred on the origin), so what you see matches the flat view; leaving the session
-  (or the headset ending it) restores the exact previous camera and scene transform;
-* while a session is running the frames come from the XR animation loop and the glyph billboards
-  face your head, not the orbit camera;
-* **files are drawn as real spheres** in VR — instanced `SphereGeometry` with a light, world-scaled
-  rather than billboarded — because flat sprites read as discs once you have stereo depth. The same
-  representation is available outside VR with **Settings → Visual → 3D file spheres**, which is the
-  quickest way to see it without a headset. Directories keep their rings;
+  at the **scene origin** with the real headset eye height (the tree keeps its tabletop scale,
+  centred on the origin); leaving the session (or the headset ending it) restores the exact previous
+  camera and scene transform;
+* while a session is running the frames come from the XR animation loop;
+* **files and folders are always real spheres** — instanced `SphereGeometry` with a light,
+  world-scaled and depth-tested. The same representation is used on screen and in VR, where
+  camera-facing billboards would read as discs;
 * **the timeline comes with you**: a 3D panel is placed ahead of the headset and raised into the
   upper part of the view, drawing the commit histogram, the playhead, the date and the progress,
   plus four controls — restart, previous commit, play/pause and next commit — and the strip itself,
@@ -457,36 +466,31 @@ Given the same history and settings, the same sequence of events is produced:
 
 ### Rendering
 
-![Files and folders as Gource's lit balls and rings on the tabletop plane](docs/screenshot-glow.png)
+![Files and folders as lit spheres on the tabletop plane](docs/screenshot-glow.png)
 
-* Files and directories are two `InstancedMesh` objects — Gource's lit ball sprite for files, rings
-  for directories — rendered as camera-facing billboards through a perspective orbit camera. The
-  billboard world scale is divided by its view depth (relative to the orbit target), cancelling
-  perspective attenuation: a file keeps the same apparent size on the near and far sides of the
-  tilted tree, while its radius still encodes the real file size. In the flat 2D view the whole tree
-  shares one depth, so the compensation drops out and the original planar framing is reproduced
-  exactly. Layer order: the backdrop gradient, then branches, the camera-following grid, the activity
-  plasma, circles, particles, rays, avatars and labels (front). Every element layer is depth tested,
-  so a nearer circle occludes a branch, a ray, a particle or a plasma blob behind it. Both layers grow
-  by reallocating and copying instance buffers when a repository turns out to be larger than expected.
-* File sprites use the ball from Gource's own `data/file.png` (a highlight above and to the left,
-  darkening towards the rim), tinted by the instance colour, so a file still carries its own colour
-  but reads as a sphere rather than a flat disc. The transparent margin around the ball is discarded
-  by an alpha test, so the ball — not its square quad — is what writes depth and occludes what lies
-  behind it. Directory rings are alpha-tested the same way, so a ring honours `opacity` when it
-  fades and its square footprint can never leave a dark corner in the depth buffer.
+* Files and folders are two `InstancedMesh` objects of real `SphereGeometry`, both shaded by a shared
+  ambient + key light. There is no billboard or flat 2D element path: the spheres keep their true
+  world radius, so near nodes are genuinely larger and the tree gains parallax as the camera moves.
+  The radius still encodes the real file size. Layer order: the backdrop gradient, then branches, the
+  camera-following grid, the activity plasma, spheres, particles, rays, avatars and labels (front).
+  Every element layer is depth tested, so a nearer sphere occludes a branch, a ray, a particle or a
+  plasma blob behind it. Both layers grow by reallocating and copying instance buffers when a
+  repository turns out to be larger than expected.
+* The sphere palette carries the file extension / activity / monochrome colour, while folders keep
+  their directory colour. Change highlights and the audio-reactive claps tint the lit material, so
+  the surface shading and the activity signal remain visible together.
 * Branch edges share one `LineSegments` buffer with two vertices per node. They are opaque and
-  depth tested, so the node circles (drawn slightly in front) **occlude** them — a branch disappears
-  behind a file circle or a directory ring instead of being painted across it — and every segment is
-  trimmed by the radius of both endpoints, so it starts at the parent's edge and stops at the child's
-  edge. A branch whose two circles already touch is dropped rather than drawn as a stub inside one.
+  depth tested, so the node spheres (drawn slightly in front) **occlude** them — a branch disappears
+  behind a file or folder sphere instead of being painted across it — and every segment is trimmed
+  by the radius of both endpoints, so it starts at the parent's edge and stops at the child's edge.
+  A branch whose two spheres already touch is dropped rather than drawn as a stub inside one.
 * Activity effects and author trails come from a single additive `Points` pool with a free-list (no
   allocations per commit); particle sizes are given in screen pixels, so sparks stay the same size
   at any zoom level. The author→file beam quads are also billboarded towards the
   camera, so they keep facing it while it orbits.
 * Author→file beams are one dynamic mesh rebuilt per frame (two quads per beam: glow + core), so a
   commit touching twenty files still costs a single draw call. They are depth tested like the rest of
-  the scene, so a beam that passes behind a file circle or a folder ring is occluded by it instead of
+  the scene, so a beam that passes behind a file or folder sphere is occluded by it instead of
   painting across it. By default the beam is **directional**:
   a bright head leaves the avatar and travels to the file or folder it changed, with a comet tail
   following it and the far end of the soft glow brightening as it arrives — so a change reads as a
@@ -494,13 +498,13 @@ Given the same history and settings, the same sequence of events is produced:
   full-length line, unchanged) plus the travel time (0.15–2 s).
 * Labels are pooled sprites with an LRU canvas-texture cache and screen-space overlap rejection, so
   dense repositories stay readable. Their world size is derived from the view depth of each label,
-  keeping the text at a fixed pixel height anywhere on the tilted plane (and perfectly uniform in the
-  flat 2D view). File labels can include the host-reported size.
+  keeping the text at a fixed pixel height anywhere on the tilted plane. File labels can include the
+  host-reported size.
 * The background is a full-screen gradient shader that is independent of the orbit angle. A
   camera-following grid keeps panning, orbiting and zooming readable. The grid is a transparent
-  overlay, so depth testing (not the draw order) is what keeps it behind the tree: the billboards
+  overlay, so depth testing (not the draw order) is what keeps it behind the tree: the spheres
   write depth first and the grid is rejected wherever they cover it. The depth stack is explicit —
-  grid −0.6, branches 0, billboards +0.25, effects +0.5. The minimap shows the whole tree
+  grid −0.6, branches 0, spheres +0.25, effects +0.5. The minimap shows the whole tree
   with the current view position.
 * The **activity plasma** (`PlasmaField`) is a ray-marched density volume that forms around the
   files with the most recent changes. Every file carries a heat value in 0…1, bumped by each
@@ -509,7 +513,7 @@ Given the same history and settings, the same sequence of events is produced:
   contributes nothing and heat alone drives the blob in and out. The summed field is rasterised into
   a 128² texture each frame and the fragment shader marches the slab covering the sources, which
   keeps the per-pixel cost bounded instead of looping over every file. It is drawn **after** the
-  branch lines and the circles, with the depth test on, so their silhouettes clip the volume instead
+  branch lines and the spheres, with the depth test on, so their silhouettes clip the volume instead
   of the volume washing across them; particles, beams, avatars and labels still draw on top. It is
   tinted by the shared activity tint, and its own `opacity` scales how much of the volume is
   added — the shipped default (intensity 0.50, full opacity) draws a dim, defined surface. Settings → Visual
@@ -604,7 +608,7 @@ Every commit is visible while it happens:
   out after about 1.6 simulated seconds. Its **width and brightness follow the size of that
   change** (line churn, with the file's size as a secondary factor, normalised against the largest
   change in the window), so a 1200-line commit draws a much stronger ray than a one-line tweak;
-* authors are drawn **above** everything else — branches, circles, particles and rays — so the
+* authors are drawn **above** everything else — branches, spheres, particles and rays — so the
   avatars are never hidden while they work;
 * avatars travel between files with a critically damped spring and a speed limit instead of
   jumping, so you can follow a contributor across the tree; new contributors fly in from outside
@@ -616,19 +620,19 @@ Beams can be switched off or restyled (brightness, width) in Settings → Visual
 
 ### File sizes on screen
 
-Circle size is a first-class signal, not decoration:
+Sphere size is a first-class signal, not decoration:
 
 * Sizes come from the host's own file listing for the newest commit in the loaded window — one
   extra request (GitHub's recursive tree endpoint), cached, never one request per file.
 * The scale is logarithmic with a mild power curve against the **95th percentile** of the window,
   so small files stay visible and a single generated file cannot flatten everything else. The
-  Settings panel shows a legend with the exact mapping and reports how many circles use a real size.
+  Settings panel shows a legend with the exact mapping and reports how many spheres use a real size.
 * Files the host does not report (or every file, when the listing is unavailable or truncated) fall
   back to accumulated line activity, and the UI says so instead of pretending.
 * Labels of just-changed files show the size (`renderer.ts · 14 KB`), the activity overlay lists the
   size of every changed file, and the Data tab reports the tracked total.
-* The mapping can be switched between file size, line activity and uniform circles; a global
-  multiplier scales all circles.
+* The mapping can be switched between file size, line activity and uniform spheres; a global
+  multiplier scales all spheres.
 
 ### Video export
 
@@ -666,7 +670,7 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
 * activity: avatar motion is continuous and bounded by the speed limit, tethers are created per
   changed file, refreshed, expired and capped, beams fade, follow both endpoints, scale with zoom
   and respect their capacity;
-* branch lines: endpoints stay outside both circles, a branch between touching circles is dropped,
+* branch lines: endpoints stay outside both spheres, a branch between touching spheres is dropped,
   the material stays opaque so the node pass occludes it, and the dimming is baked into the vertex
   colours;
 * activity beams: brightness and width scale with the size of the change, endpoints follow both
@@ -695,19 +699,18 @@ Export uses `MediaRecorder` with `HTMLCanvasElement.captureStream()` — everyth
   band analysis matching the batch bands, the recording mix, teardown, and permission failures;
 * the plasma field: heat bumping and exponential decay, heat-gated source selection (hottest first,
   capped), volume bounds and rasterised density, the audio hue/brightness match with the shared
-  activity tint, setting clamps (opacity included), and its render order after the circles and before every
+  activity tint, setting clamps (opacity included), and its render order after the spheres and before every
   later transparent layer;
 * the exported overlay: the panel layout at 720p, 1080p and portrait (no overlaps), the overview
   heading, legend and map drawing inside the panel, and `overview: false` skipping it;
 * VR and spheres: WebXR support detection and error paths, session enter/exit and the end-event
-  restore (against fakes, since there is no headset in CI), and the instanced sphere mode (geometry
-  and material swap, world-scaled non-billboarded transforms, colours, hidden nodes, capacity);
+  restore (against fakes, since there is no headset in CI), and the sphere-only node field (lit
+  sphere geometry for files and folders, world-scaled transforms, colours, hidden nodes, capacity);
 * rendering bookkeeping: instance allocation, capacity growth, hidden nodes collapsing on both dirty
   *and* full syncs (a seek or restart must not leave the previous frame on screen), every layer
   dropping its instances when the history is rebuilt (node ids are per simulation, so a filter change
   must not keep rendering the old tree), edge buffers, particle
-  pool limits and decay, tabletop orbit (plane-normal up vector)/pan/zoom, the flat 2D view
-  preserving the orbit, and billboard orientation and fixed-size compensation;
+  pool limits and decay, and tabletop orbit (plane-normal up vector)/pan/zoom;
 * controller end-to-end flows with a mocked API: loading, filters, SHA/date jumps, cancellation,
   WebGL-unavailable degradation;
 * component smoke tests (jsdom) for the landing view, playback bar, stage, panels and help overlay;
