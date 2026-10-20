@@ -56,7 +56,9 @@ const shortcuts: { keys: string; action: string }[] = [
           <strong>Load N repositories</strong>; the examples fill an empty row or add a new one. The
           projects share one scene but keep separate trees and separate author instances: paths are
           prefixed with <code>owner/name/</code>, so the same file path in two repositories stays
-          distinct, and the same person appears once per project. The Authors panel counts
+          distinct, and the same person appears once per project. Each project forms one compact
+          volume directly under the scene root; volumes move as rigid clusters and repel each other,
+          so repositories sharing an owner never merge. The Authors panel counts
           <em>author instances</em> and badges each with its project.
         </p>
         <p class="muted small">

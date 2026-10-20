@@ -136,6 +136,8 @@ export const GOURCE = {
   fileGap: 0.35,
   /** Free space kept between the clusters of two directories. */
   collisionGap: 0.06,
+  /** Extra clearance between the enclosing circles of two project volumes. */
+  projectGap: 0.6,
   /** Projection sweeps per per-commit relaxation, and per full reflow. */
   relaxSweeps: 12,
   reflowAllSweeps: 48,

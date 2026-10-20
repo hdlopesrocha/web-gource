@@ -68,6 +68,18 @@ export interface SimNode {
   clusterRadius: number
   /** Previous position after a rename, so the renderer can animate the move. */
   movedFrom?: Vec3
+  /**
+   * Project key when this node is the root of one project's volume. The node is
+   * a direct child of the scene root, so separate repositories stay in separate
+   * clusters instead of sharing an owner directory.
+   */
+  projectKey?: string
+  /**
+   * Tight radius that encloses every node in this project volume, measured from
+   * the project root. Only set on project volume roots; project roots move as
+   * rigid bodies and repel each other using this radius.
+   */
+  volumeRadius?: number
 }
 
 /**
@@ -181,6 +193,8 @@ export const DEFAULT_SIMULATION_OPTIONS: SimulationOptions = {
 export class Simulation {
   private nodeList: SimNode[] = []
   private nodeByPath = new Map<string, SimNode>()
+  /** Project keys from the current commits; each becomes a top-level volume. */
+  private projectRoots = new Set<string>()
   private authorList = new Map<string, SimAuthor>()
   private events: SimEvent[] = []
   private options: SimulationOptions
@@ -232,7 +246,17 @@ export class Simulation {
     options: Partial<SimulationOptions> = {},
   ) {
     this.options = { ...DEFAULT_SIMULATION_OPTIONS, ...options }
+    this.refreshProjectRoots()
     this.reset()
+  }
+
+  /** Rebuild the set of project prefixes that start a top-level volume. */
+  private refreshProjectRoots(): void {
+    this.projectRoots.clear()
+    for (const commit of this.commits) {
+      const key = commit.projectKey?.replace(/\/+$/, '')
+      if (key) this.projectRoots.add(key)
+    }
   }
 
   /**
@@ -242,6 +266,7 @@ export class Simulation {
   setCommits(commits: readonly TimelineCommit[], authorById: Map<string, TimelineAuthor>): void {
     this.commits = commits
     this.authorById = authorById
+    this.refreshProjectRoots()
   }
 
   get nodes(): readonly SimNode[] {
@@ -400,6 +425,47 @@ export class Simulation {
     }
   }
 
+  /**
+   * Measure each project's tight enclosing radius from its volume root.
+   *
+   * The radius follows the actual placed nodes, not the area estimate, so the
+   * volume is as small as the current tree allows. Project roots use it as their
+   * collision body: whole volumes repel each other without reserving space for
+   * an imaginary circle.
+   */
+  private updateProjectVolumeRadii(): void {
+    if (this.projectRoots.size === 0) return
+    for (const key of this.projectRoots) {
+      const node = this.nodeByPath.get(key)
+      if (!node || node.kind !== 'dir') continue
+      let radius = node.radius
+      const stack = [...node.children]
+      let guard = 0
+      while (stack.length > 0 && guard < 200_000) {
+        const childId = stack.pop()
+        if (childId === undefined) break
+        const child = this.nodeList[childId]
+        if (!child || !child.visible) continue
+        const distance = Math.hypot(
+          child.targetPosition.x - node.targetPosition.x,
+          child.targetPosition.y - node.targetPosition.y,
+        )
+        radius = Math.max(radius, distance + child.radius)
+        if (child.kind === 'dir') stack.push(...child.children)
+        guard += 1
+      }
+      node.volumeRadius = radius
+    }
+  }
+
+  /** Collision body for a directory, including the extra project-volume gap. */
+  private collisionRadiusFor(node: SimNode): number {
+    return (
+      Math.max(node.clusterRadius, node.contentRadius, node.volumeRadius ?? 0) +
+      (node.projectKey ? GOURCE.projectGap : 0)
+    )
+  }
+
   /** True while a directory still has a subfolder without a starting position. */
   private hasUninitialisedSubdir(dir: SimNode): boolean {
     for (const childId of dir.children) {
@@ -482,7 +548,12 @@ export class Simulation {
         offsetY = -1
         length = 1
       }
-      const distance = dir.clusterRadius + child.clusterRadius
+      // A project volume starts just outside the root's own disc. The root's
+      // cluster radius covers every project, so using it here would fling a new
+      // project far beyond the scene before the forces have settled it.
+      const distance = child.projectKey
+        ? dir.ownDiscRadius + child.clusterRadius
+        : dir.clusterRadius + child.clusterRadius
       const target = {
         x: dir.targetPosition.x + (offsetX / length) * distance,
         y: dir.targetPosition.y + (offsetY / length) * distance,
@@ -512,6 +583,9 @@ export class Simulation {
    */
   relaxLayout(steps?: number, budget = GOURCE.relaxBudget, forces = true, sweeps = GOURCE.relaxSweeps): void {
     if (!this.dynamicLayout) return
+    // Project volumes repel by their tight current envelope, not by the area
+    // estimate. Measure them before the projection uses their collision radii.
+    this.updateProjectVolumeRadii()
     // One entry per directory, reused between reflows: the buffer is rebuilt only
     // when directories are added.
     const nodes = this.forceBuffer
@@ -525,7 +599,7 @@ export class Simulation {
           children: node.children,
           ownRadius: node.ownDiscRadius,
           dirRadius: node.clusterRadius,
-          collisionRadius: Math.max(node.clusterRadius, node.contentRadius),
+          collisionRadius: this.collisionRadiusFor(node),
           ownCollisionRadius: Math.max(node.ownDiscRadius, node.contentRadius),
           x: node.targetPosition.x,
           y: node.targetPosition.y,
@@ -543,8 +617,9 @@ export class Simulation {
         entry.dirRadius = node.clusterRadius
         // Gource sizes collisions by the subtree area; for a tiny folder the
         // actual extent of its own files is bigger, and that is what must not
-        // overlap another folder's content.
-        entry.collisionRadius = Math.max(node.clusterRadius, node.contentRadius)
+        // overlap another folder's content. A project volume uses its tight
+        // enclosing radius instead.
+        entry.collisionRadius = this.collisionRadiusFor(node)
         entry.ownCollisionRadius = Math.max(node.ownDiscRadius, node.contentRadius)
         entry.x = node.targetPosition.x
         entry.y = node.targetPosition.y
@@ -555,6 +630,29 @@ export class Simulation {
     const requested = steps ?? GOURCE.relaxSteps
     const stepCount = forces ? Math.max(1, Math.min(requested, Math.floor(budget / nodes.length))) : 0
     relaxDirectories(nodes, { steps: stepCount, gap: GOURCE.collisionGap, sweeps })
+    this.applyRelaxedEntries(nodes)
+
+    // Moving a project volume rigidly changes the tight envelope of its
+    // contents. Projection is cheap compared with the forces, so measure the
+    // new envelopes and resolve any overlap they introduced.
+    if (this.projectRoots.size > 1) {
+      this.updateProjectVolumeRadii()
+      for (const entry of nodes) {
+        const node = this.nodeList[entry.id]
+        if (!node) continue
+        entry.collisionRadius = this.collisionRadiusFor(node)
+        entry.ownCollisionRadius = Math.max(node.ownDiscRadius, node.contentRadius)
+        entry.x = node.targetPosition.x
+        entry.y = node.targetPosition.y
+      }
+      relaxDirectories(nodes, { steps: 0, gap: GOURCE.collisionGap, sweeps })
+      this.applyRelaxedEntries(nodes)
+    }
+    this.updateProjectVolumeRadii()
+  }
+
+  /** Copy relaxed force entries back onto their nodes. */
+  private applyRelaxedEntries(nodes: ForceNode[]): void {
     for (const entry of nodes) {
       const node = this.nodeList[entry.id]
       if (!node) continue
@@ -563,9 +661,23 @@ export class Simulation {
       if (dx * dx + dy * dy < 1e-6) continue
       node.targetPosition = { x: entry.x, y: entry.y, z: 0 }
       this.movingNodes.add(node.id)
-      // A directory carries its own files: their rings stay rigid as it drifts.
-      // Subfolders relax on their own, so they are not shifted.
-      this.shiftOwnFiles(node, dx, dy)
+      if (node.projectKey) {
+        // A project is one rigid volume: moving its root carries the whole
+        // subtree, including the force entries processed later in this loop.
+        this.offsetSubtree(node, dx, dy)
+        const prefix = `${node.path}/`
+        for (const other of nodes) {
+          if (other.id === node.id) continue
+          const candidate = this.nodeList[other.id]
+          if (!candidate || !candidate.path.startsWith(prefix)) continue
+          other.x += dx
+          other.y += dy
+        }
+      } else {
+        // Ordinary folders carry their own files, while subfolders keep
+        // relaxing independently.
+        this.shiftOwnFiles(node, dx, dy)
+      }
     }
   }
 
@@ -574,7 +686,8 @@ export class Simulation {
     let extent = 0
     for (const node of this.nodeList) {
       if (!node.visible) continue
-      extent = Math.max(extent, Math.hypot(node.targetPosition.x, node.targetPosition.y) + node.clusterRadius)
+      const radius = Math.max(node.clusterRadius, node.volumeRadius ?? 0)
+      extent = Math.max(extent, Math.hypot(node.targetPosition.x, node.targetPosition.y) + radius)
     }
     return extent
   }
@@ -1163,14 +1276,16 @@ export class Simulation {
         if (fresh) this.recordToggle(existing.id, index)
         this.pendingReflow.add(existing.id)
         this.movingNodes.add(existing.id)
-        // The whole chain above may still be hidden, so walk it up.
+        // The whole chain above may still be hidden, so walk it up. A project
+        // volume hangs directly off the root instead of an owner directory.
         const { parent: parentPath } = splitPath(path)
-        this.ensureDirectory(parentPath, index, fresh)
+        this.ensureDirectory(this.projectRoots.has(path) ? '' : parentPath, index, fresh)
       }
       return existing
     }
     const { parent: parentPath, name } = splitPath(path)
-    const parent = this.ensureDirectory(parentPath, index, fresh)
+    const isProjectRoot = this.projectRoots.has(path)
+    const parent = this.ensureDirectory(isProjectRoot ? '' : parentPath, index, fresh)
     const depth = depthOfPath(path)
     const node: SimNode = {
       id: this.nodeList.length,
@@ -1197,6 +1312,7 @@ export class Simulation {
       additions: 0,
       deletions: 0,
       visible: true,
+      ...(isProjectRoot ? { projectKey: path } : {}),
     }
     this.nodeList.push(node)
     this.nodeByPath.set(path, node)
