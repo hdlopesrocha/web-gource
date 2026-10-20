@@ -37,6 +37,8 @@ export interface HudCommitInfo {
   sha: string
   shortSha: string
   subject: string
+  /** `owner/name` of the project, when several are loaded. */
+  project?: string
   author: string
   authorColor: string
   isMerge: boolean
@@ -53,6 +55,8 @@ export interface HudCommitInfo {
 export interface HudAuthor {
   id: string
   name: string
+  /** `owner/name` of the project this instance belongs to, when multi-project. */
+  project?: string
   color: string
   commits: number
   lastActiveAt: number
@@ -824,7 +828,7 @@ export class Engine {
     }
 
     this.sim.update(simDt, this.simTime)
-    if (this.timeline.commits.length > 0) this.sim.pruneAuthors(this.simTime, 72)
+    if (this.timeline.commits.length > 0) this.sim.pruneAuthors(this.simTime, 120)
 
     const focus = this.sim.recentActivityCenter(4) ?? this.sim.authorCentroid()
     const bounds = this.boundsCache(clock)
@@ -905,6 +909,7 @@ export class Engine {
       activeAuthors.push({
         id: author.author.id,
         name: author.author.name,
+        project: this.timeline.projects.length > 1 ? author.author.projectName : undefined,
         color: this.authorColorLookup(author.author.id),
         commits: author.appliedCommits,
         lastActiveAt: author.lastActiveAt,
@@ -949,6 +954,7 @@ export class Engine {
       sha: commit.sha,
       shortSha: commit.shortSha,
       subject: commit.subject,
+      project: this.timeline.projects.length > 1 ? commit.projectName : undefined,
       author: author?.name ?? 'Unknown author',
       authorColor: this.authorColorLookup(commit.authorId),
       isMerge: commit.isMerge,
@@ -998,7 +1004,9 @@ export class Engine {
     }
     if (!this.overlay) {
       this.overlay = new ExportOverlay(this.timeline.commits, this.timeline.authors, {
-        repository: this.timeline.repo.name,
+        repository: this.timeline.projects.length > 1
+          ? `${this.timeline.projects.length} projects`
+          : this.timeline.repo.name,
         ...options,
       })
     } else {
@@ -1087,7 +1095,7 @@ export class Engine {
     if (index > this.sim.currentIndex) this.sim.applyUpTo(index)
 
     this.sim.update(dt, this.simTime)
-    this.sim.pruneAuthors(this.simTime, 72)
+    this.sim.pruneAuthors(this.simTime, 120)
 
     const focus = this.sim.recentActivityCenter(4) ?? this.sim.authorCentroid()
     // Bounds are recomputed on a fixed frame cadence (never on wall-clock time)

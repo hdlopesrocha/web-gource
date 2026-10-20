@@ -32,6 +32,13 @@ const repo: RepoInfo = {
   isPrivate: false,
 }
 
+const secondRepo: RepoInfo = {
+  ...repo,
+  name: 'service',
+  fullName: 'acme/service',
+  htmlUrl: 'https://github.com/acme/service',
+}
+
 function rawCommit(index: number): RawCommit {
   return {
     sha: `sha-${index}`,
@@ -43,14 +50,35 @@ function rawCommit(index: number): RawCommit {
   }
 }
 
+/** A small two-project timeline shared by the Stage, Authors and Settings tests. */
+function multiProjectTimeline() {
+  const bob = { name: 'Bob', email: 'bob@example.com', login: 'bob' }
+  const commits: RawCommit[] = [
+    { ...rawCommit(0), projectKey: 'acme/widget', projectName: 'acme/widget' },
+    { ...rawCommit(1), projectKey: 'acme/widget', projectName: 'acme/widget', author: bob },
+    { ...rawCommit(2), projectKey: 'acme/service', projectName: 'acme/service' },
+    { ...rawCommit(3), projectKey: 'acme/service', projectName: 'acme/service', author: bob },
+  ]
+  return buildTimeline(repo, commits, {
+    projects: [
+      { key: 'acme/widget', repo },
+      { key: 'acme/service', repo: secondRepo },
+    ],
+  })
+}
+
 beforeEach(() => {
   localStorage.clear()
   resetRunState()
   // Module state that localStorage.clear() does not touch.
   store.loadOptions.tokens = {}
   store.loadOptions.draftToken = ''
+  store.loadOptions.urls = []
+  store.loadOptions.lastUrl = ''
+  store.forcedProvider = null
   store.view = 'landing'
   store.repo = null
+  store.repos = []
   store.url = ''
   store.timelineStats = null
 })
@@ -99,10 +127,94 @@ describe('LandingView', () => {
     expect(wrapper.find('.provider-badge').text()).toContain('GitLab')
   })
 
+  it('adds several repositories and loads them into one scene', async () => {
+    const loadMany = vi.spyOn(controller, 'loadMany').mockResolvedValue()
+    const wrapper = mount(LandingView)
+    const add = wrapper.findAll('button').find((button) => button.text().includes('Add repository'))
+    expect(add).toBeDefined()
+    await add!.trigger('click')
+
+    let inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    expect(inputs).toHaveLength(2)
+    await inputs[0].setValue('https://github.com/acme/one')
+    await inputs[1].setValue('https://github.com/acme/two')
+    inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    expect((inputs[1].element as HTMLInputElement).value).toBe('https://github.com/acme/two')
+
+    // The primary action names the project count and submits every row.
+    expect(wrapper.text()).toContain('Load 2 repositories')
+    await wrapper.find('form').trigger('submit')
+    expect(loadMany).toHaveBeenCalledTimes(1)
+    expect(loadMany).toHaveBeenCalledWith(['https://github.com/acme/one', 'https://github.com/acme/two'])
+    loadMany.mockRestore()
+  })
+
+  it('removes a repository row and keeps the remaining projects', async () => {
+    const wrapper = mount(LandingView)
+    await wrapper.findAll('button').find((button) => button.text().includes('Add repository'))!.trigger('click')
+    let inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    await inputs[0].setValue('https://github.com/acme/one')
+    await inputs[1].setValue('https://github.com/acme/two')
+
+    await wrapper.find('button[title="Remove repository 1"]').trigger('click')
+    inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    expect(inputs).toHaveLength(1)
+    expect((inputs[0].element as HTMLInputElement).value).toBe('https://github.com/acme/two')
+    expect(store.url).toBe('https://github.com/acme/two')
+    // Removing the last row leaves an empty input instead of an unusable form.
+    await wrapper.find('button[title="Remove repository 1"]').trigger('click')
+    inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    expect(inputs).toHaveLength(1)
+    expect((inputs[0].element as HTMLInputElement).value).toBe('')
+  })
+
+  it('pre-fills every project saved from the previous run', () => {
+    store.loadOptions.urls = ['https://github.com/acme/one', 'https://gitlab.com/group/two']
+    store.url = 'https://github.com/acme/one'
+    const wrapper = mount(LandingView)
+    const values = wrapper
+      .findAll('input[aria-label="Repository URL"]')
+      .map((input) => (input.element as HTMLInputElement).value)
+    expect(values).toEqual(['https://github.com/acme/one', 'https://gitlab.com/group/two'])
+    expect(wrapper.text()).toContain('Load 2 repositories')
+  })
+
+  it('shows a token host selector when the projects span several providers', async () => {
+    const wrapper = mount(LandingView)
+    await wrapper.findAll('button').find((button) => button.text().includes('Add repository'))!.trigger('click')
+    const inputs = wrapper.findAll('input[aria-label="Repository URL"]')
+    await inputs[0].setValue('https://github.com/acme/one')
+    await inputs[1].setValue('https://gitlab.com/group/two')
+    await wrapper.find('button.btn.ghost').trigger('click') // Advanced
+
+    const selector = wrapper.find('#token-provider')
+    expect(selector.exists()).toBe(true)
+    const options = selector.findAll('option').map((option) => option.text())
+    expect(options).toEqual(['GitHub', 'GitLab (beta)'])
+
+    // A token typed while GitLab is selected belongs to GitLab only.
+    await selector.setValue('gitlab')
+    const tokenInput = wrapper.find('input[aria-label="Personal access token"]')
+    await tokenInput.setValue('glpat-multihost')
+    await tokenInput.trigger('blur')
+    expect(tokenFor('gitlab')).toBe('glpat-multihost')
+    expect(tokenFor('github')).toBe('')
+  })
+
   it('explains an unsupported host instead of failing silently', async () => {
     const wrapper = mount(LandingView)
     await wrapper.find('input[aria-label="Repository URL"]').setValue('https://bitbucket.org/a/b')
     expect(wrapper.text()).toContain('No provider matches')
+  })
+
+  it('clears the demo provider when a real URL is typed afterwards', async () => {
+    // Returning from the demo leaves the demo provider forced. Editing a row
+    // must release it, or the new GitHub URL would be resolved as a demo repo.
+    store.forcedProvider = 'demo'
+    const wrapper = mount(LandingView)
+    await wrapper.find('input[aria-label="Repository URL"]').setValue('https://github.com/acme/widget')
+    expect(store.forcedProvider).toBeNull()
+    expect(wrapper.find('.provider-badge').text()).toContain('GitHub')
   })
 
   it('surfaces errors from the store', async () => {
@@ -313,6 +425,22 @@ describe('LandingView', () => {
     await target?.trigger('click')
     expect(store.url).toBe('https://github.com/hdlopesrocha/opencode-talk')
   })
+
+  it('uses examples to add a second project instead of replacing the first', async () => {
+    const wrapper = mount(LandingView)
+    const examples = wrapper.findAll('.examples button')
+    await examples.find((button) => button.text().includes('vulkan-engine'))!.trigger('click')
+    await examples.find((button) => button.text().includes('opencode-talk'))!.trigger('click')
+
+    const values = wrapper
+      .findAll('input[aria-label="Repository URL"]')
+      .map((input) => (input.element as HTMLInputElement).value)
+    expect(values).toEqual([
+      'https://github.com/hdlopesrocha/vulkan-engine',
+      'https://github.com/hdlopesrocha/opencode-talk',
+    ])
+    expect(store.url).toBe('https://github.com/hdlopesrocha/vulkan-engine')
+  })
 })
 
 describe('PlaybackBar', () => {
@@ -366,6 +494,21 @@ describe('StageView', () => {
     expect(wrapper.text()).toContain('note about this load')
     await wrapper.find('.warn-head').trigger('click')
     expect(wrapper.text()).toContain('Loaded the newest 2')
+  })
+
+  it('summarizes several projects and names them all in the header title', () => {
+    const timeline = multiProjectTimeline()
+    store.repo = timeline.repo
+    store.repos = [repo, secondRepo]
+    store.timelineStats = timeline.stats
+    const wrapper = mount(StageView)
+
+    expect(wrapper.find('.repo-name strong').text()).toBe('2 repositories')
+    expect(wrapper.find('.repo-name').attributes('title')).toBe('acme/widget\nacme/service')
+    expect(wrapper.text()).toContain('2 projects')
+    expect(wrapper.text()).toContain('4 commits')
+    expect(wrapper.text()).toContain('4 author instances')
+    expect(wrapper.text()).toContain('← Repositories')
   })
 
   it('toggles the flat 2D camera and resets to the 3D view from the stage toolbar', async () => {
@@ -434,6 +577,26 @@ describe('panels', () => {
     const wrapper = mount(AuthorsPanel)
     expect(wrapper.text()).toContain('Ada')
     expect(wrapper.findAll('.author-row').length).toBe(1)
+  })
+
+  it('authors panel shows one instance per project with project badges', () => {
+    const timeline = multiProjectTimeline()
+    vi.spyOn(controller, 'timelineAuthors').mockReturnValue(timeline.authors)
+    store.repos = [repo, secondRepo]
+    store.timelineStats = timeline.stats
+    const wrapper = mount(AuthorsPanel)
+
+    expect(wrapper.text()).toContain('4 author instances across 2 projects')
+    expect(wrapper.findAll('.author-row')).toHaveLength(4)
+    const badges = wrapper.findAll('.badge.project').map((badge) => badge.text())
+    expect(badges).toHaveLength(4)
+    expect(badges.filter((name) => name === 'acme/widget')).toHaveLength(2)
+    expect(badges.filter((name) => name === 'acme/service')).toHaveLength(2)
+
+    // Both people appear twice: once for each project they committed to.
+    const names = wrapper.findAll('.author-row .name').map((name) => name.text())
+    expect(names.filter((name) => name === 'Ada')).toHaveLength(2)
+    expect(names.filter((name) => name === 'Bob')).toHaveLength(2)
   })
 
   it('settings panel adds and removes ignored folders', async () => {
@@ -598,6 +761,21 @@ describe('panels', () => {
     expect(wrapper.text()).toContain('Video export')
     await openTab(wrapper, 'Data')
     expect(wrapper.text()).toContain('Loaded data')
+  })
+
+  it('settings panel lists every project with its own counts', async () => {
+    const timeline = multiProjectTimeline()
+    vi.spyOn(controller, 'currentTimeline', 'get').mockReturnValue(timeline)
+    store.repo = timeline.repo
+    store.repos = [repo, secondRepo]
+    store.timelineStats = timeline.stats
+    const wrapper = mount(SettingsPanel)
+    await openTab(wrapper, 'Data')
+
+    expect(wrapper.text()).toContain('Projects')
+    expect(wrapper.text()).toContain('acme/widget')
+    expect(wrapper.text()).toContain('acme/service')
+    expect(wrapper.text()).toContain('2 commits · 2 authors')
   })
 
   it('authors panel keeps to authors and dates', () => {

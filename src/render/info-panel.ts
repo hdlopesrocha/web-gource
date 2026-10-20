@@ -42,6 +42,8 @@ export interface InfoPanelModel {
   fpsLabel: string
   isMerge: boolean
   subject: string
+  /** Project (`owner/name`) of the commit when several are loaded. */
+  project: string | null
   author: { name: string; color: string; shortSha: string; additions: number; deletions: number } | null
   /** Up to {@link MAX_CHANGES} files, the way the panel shows them. */
   changes: InfoPanelChange[]
@@ -51,7 +53,7 @@ export interface InfoPanelModel {
   /** Set when the commit has no file data, explaining why. */
   missing: string | null
   stats: { value: string; label: string }[]
-  workingNow: { id: string; name: string; color: string; commits: number }[]
+  workingNow: { id: string; name: string; project?: string; color: string; commits: number }[]
 }
 
 /** Files listed in the panel before it says "+N more". */
@@ -97,6 +99,7 @@ export function buildInfoPanelModel(input: InfoPanelInput): InfoPanelModel {
     fpsLabel: `${input.fps} fps`,
     isMerge: Boolean(commit?.isMerge),
     subject: commit?.subject ?? '—',
+    project: commit?.project ?? null,
     author: commit
       ? {
           name: commit.author,
@@ -120,6 +123,7 @@ export function buildInfoPanelModel(input: InfoPanelInput): InfoPanelModel {
     workingNow: input.activeAuthors.slice(0, MAX_WORKING_NOW).map((author) => ({
       id: author.id,
       name: author.name,
+      project: author.project,
       color: author.color,
       commits: author.commits,
     })),
@@ -225,8 +229,20 @@ export function drawInfoPanel(
     ctx.font = options.monoFont
     ctx.fillStyle = 'rgba(255,255,255,0.5)'
     ctx.fillText(author.shortSha, authorX, cursor)
+    authorX += ctx.measureText(author.shortSha).width
+    const deltaLabel = `+${author.additions} / −${author.deletions}`
+    if (model.project) {
+      // Project badge after the SHA: the same person can appear once per
+      // project, so the commit card says which tree this commit belongs to.
+      const room = x + width - padding - ctx.measureText(deltaLabel).width - unit - authorX
+      if (room > unit * 4) {
+        ctx.fillStyle = 'rgba(120,190,255,0.8)'
+        ctx.fillText(fitText(ctx, model.project, room), authorX + unit * 0.7, cursor)
+      }
+    }
     ctx.textAlign = 'right'
-    ctx.fillText(`+${author.additions} / −${author.deletions}`, x + width - padding, cursor)
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'
+    ctx.fillText(deltaLabel, x + width - padding, cursor)
     ctx.textAlign = 'left'
     cursor += unit * 1.5
   }
@@ -313,7 +329,8 @@ export function drawInfoPanel(
     let chipX = x + padding
     for (const author of model.workingNow) {
       ctx.font = options.font
-      const label = author.name
+      const project = author.project?.split('/').pop()
+      const label = project ? `${author.name} · ${project}` : author.name
       const chipWidth = ctx.measureText(label).width + unit * 3.4
       if (chipX + chipWidth > x + width - padding) break
       ctx.fillStyle = 'rgba(255,255,255,0.06)'

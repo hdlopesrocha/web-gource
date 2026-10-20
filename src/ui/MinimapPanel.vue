@@ -9,7 +9,11 @@ const size = ref(168)
 let minimap: Minimap | null = null
 let timer: number | null = null
 
-const repoName = computed(() => store.repo?.name ?? 'repository')
+const repoName = computed(() =>
+  store.repos.length > 1
+    ? `${store.repos.length} repositories`
+    : store.repo?.name ?? 'repository',
+)
 
 function render(): void {
   const simulation = controller.simulation

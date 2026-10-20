@@ -18,12 +18,21 @@ const warningsOpen = ref(false)
 const fullscreen = ref(false)
 
 const repo = computed(() => store.repo)
+const repos = computed(() => store.repos)
 const stats = computed(() => store.timelineStats)
 const loading = computed(() => store.loading)
 const warnings = computed(() => store.warnings)
 const exportFps = EXPORT_FPS
 /** The recording follows the playback speed, so show what that is right now. */
 const speedLabel = computed(() => store.hud?.speed ?? 1)
+
+const multiProject = computed(() => repos.value.length > 1)
+const repoLabel = computed(() => {
+  if (multiProject.value) return `${repos.value.length} repositories`
+  return repo.value?.fullName ?? 'Repository'
+})
+const repoTitle = computed(() => repos.value.map((entry) => entry.fullName).join('\n') || 'Repository')
+const providers = computed(() => [...new Set(repos.value.map((entry) => entry.provider))])
 
 /**
  * Why the VR button is (un)available. The button stays visible but disabled when
@@ -37,8 +46,9 @@ const vrTitle = computed(() => {
 const summary = computed(() => {
   if (!stats.value) return ''
   const parts = [
+    ...(multiProject.value ? [`${repos.value.length} projects`] : []),
     `${stats.value.commits.toLocaleString()} commits`,
-    `${stats.value.authors.toLocaleString()} authors`,
+    `${stats.value.authors.toLocaleString()} ${multiProject.value ? 'author instances' : 'authors'}`,
     `${stats.value.files.toLocaleString()} files`,
   ]
   if (stats.value.merges > 0) parts.push(`${stats.value.merges} merges`)
@@ -190,13 +200,13 @@ onBeforeUnmount(() => {
     </div>
 
     <header class="topbar panel">
-      <button class="btn ghost small" type="button" title="Load another repository" @click="controller.backToLanding()">
-        ← Repository
+      <button class="btn ghost small" type="button" title="Load repositories" @click="controller.backToLanding()">
+        ← {{ multiProject ? 'Repositories' : 'Repository' }}
       </button>
       <div class="repo-info">
-        <div class="repo-name">
-          <strong>{{ repo?.fullName ?? 'Repository' }}</strong>
-          <span class="badge">{{ repo?.provider ?? '—' }}</span>
+        <div class="repo-name" :title="repoTitle">
+          <strong>{{ repoLabel }}</strong>
+          <span v-for="provider in providers" :key="provider" class="badge">{{ provider }}</span>
           <span v-if="store.timelineTruncated" class="badge warn" title="Only part of the history is loaded">partial history</span>
         </div>
         <span class="repo-summary muted">{{ summary }}</span>

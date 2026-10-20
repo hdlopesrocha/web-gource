@@ -14,12 +14,19 @@ const authors = computed(() => {
 })
 const hidden = computed(() => new Set(store.hiddenAuthors))
 const totalCommits = computed(() => store.timelineStats?.commits ?? 1)
+const projectCount = computed(() => store.repos.length)
+const multiProject = computed(() => projectCount.value > 1)
 
 const filtered = computed(() => {
   const needle = search.value.trim().toLowerCase()
   const list = authors.value
   if (!needle) return list
-  return list.filter((author) => author.name.toLowerCase().includes(needle) || author.email?.toLowerCase().includes(needle))
+  return list.filter(
+    (author) =>
+      author.name.toLowerCase().includes(needle) ||
+      author.email?.toLowerCase().includes(needle) ||
+      author.projectName?.toLowerCase().includes(needle),
+  )
 })
 
 const dateFrom = computed({
@@ -58,7 +65,9 @@ function showAll(): void {
       <div>
         <h2>Authors & filters</h2>
         <p class="faint">
-          {{ authors.length }} authors · {{ totalCommits.toLocaleString() }} commits in view
+          {{ authors.length }} {{ multiProject ? 'author instances' : 'authors' }}
+          <template v-if="multiProject">across {{ projectCount }} projects</template>
+          · {{ totalCommits.toLocaleString() }} commits in view
         </p>
       </div>
       <button class="btn ghost small" type="button" @click="emit('close')">✕</button>
@@ -96,6 +105,9 @@ function showAll(): void {
           <span v-else-if="author.email" class="mono">{{ author.email }}</span>
           <span v-else class="badge">name only</span>
           <span class="mono">{{ formatDate(author.first) }} → {{ formatDate(author.last) }}</span>
+        </div>
+        <div v-if="multiProject && author.projectName" class="project-line">
+          <span class="badge project">{{ author.projectName }}</span>
         </div>
       </li>
       <li v-if="filtered.length === 0" class="faint empty">No author matches “{{ search }}”.</li>
@@ -218,6 +230,18 @@ function showAll(): void {
   gap: 8px;
   font-size: 10px;
   margin-top: 2px;
+}
+
+.project-line {
+  margin-top: 3px;
+}
+
+.badge.project {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  color: #bfe3ff;
+  background: rgba(47, 125, 224, 0.16);
+  border-color: rgba(94, 200, 255, 0.28);
 }
 
 .empty {

@@ -175,7 +175,7 @@ function createGlowTexture(key: string, data: string): THREE.CanvasTexture {
 }
 
 export const labelTextures = new TextureCache<THREE.CanvasTexture>(420, createLabelTexture)
-export const avatarTextures = new TextureCache<THREE.CanvasTexture>(160, createAvatarTexture)
+export const avatarTextures = new TextureCache<THREE.CanvasTexture>(240, createAvatarTexture)
 export const glowTextures = new TextureCache<THREE.CanvasTexture>(24, createGlowTexture)
 
 /**

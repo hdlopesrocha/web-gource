@@ -11,6 +11,11 @@ const stats = computed(() => store.timelineStats)
  * The same model the video compositor draws, so the panel and the exported
  * frame always show the same content.
  */
+function shortProject(project: string): string {
+  const parts = project.split('/')
+  return parts[parts.length - 1] ?? project
+}
+
 const model = computed(() =>
   buildInfoPanelModel({
     date: hud.value?.date ?? 0,
@@ -46,6 +51,7 @@ const model = computed(() =>
       <div class="commit-meta">
         <span v-if="model.author" class="author-dot" :style="{ background: model.author.color }" />
         <span class="author">{{ model.author?.name ?? '—' }}</span>
+        <span v-if="model.project" class="badge project">{{ model.project }}</span>
         <span v-if="model.author" class="mono faint">{{ model.author.shortSha }}</span>
         <span v-if="model.author" class="faint mono">
           +{{ model.author.additions }} / −{{ model.author.deletions }}
@@ -82,9 +88,10 @@ const model = computed(() =>
     <div v-if="model.workingNow.length > 0" class="authors">
       <span class="section-label">working now</span>
       <div class="author-list">
-        <span v-for="author in model.workingNow" :key="author.id" class="author-chip">
+        <span v-for="author in model.workingNow" :key="author.id" class="author-chip" :title="author.project">
           <span class="author-dot" :style="{ background: author.color }" />
           {{ author.name }}
+          <span v-if="author.project" class="faint project-tag">{{ shortProject(author.project) }}</span>
           <span class="faint">{{ author.commits }}</span>
         </span>
       </div>
@@ -159,6 +166,19 @@ const model = computed(() =>
 
 .author {
   color: #d6e6ff;
+}
+
+.badge.project {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  color: #bfe3ff;
+  background: rgba(47, 125, 224, 0.16);
+  border-color: rgba(94, 200, 255, 0.28);
+}
+
+.project-tag {
+  font-size: 9.5px;
+  opacity: 0.75;
 }
 
 .changes {

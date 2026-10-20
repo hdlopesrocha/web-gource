@@ -115,8 +115,10 @@ export const GRID_Z = -0.6
 export const BACKGROUND_Z = -6
 
 const MAX_PARTICLES = 9000
-const MAX_LABELS = 120
-const MAX_AUTHORS = 72
+const MAX_LABELS = 160
+// The same person appears once per project, so several projects multiply the
+// number of author instances that must stay visible at once.
+const MAX_AUTHORS = 120
 const INITIAL_FILE_CAPACITY = 6000
 const INITIAL_DIR_CAPACITY = 900
 /** Minimum on-screen height of an avatar, in CSS pixels. */

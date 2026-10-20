@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { controller } from '../engine/controller'
 import { loadingPercent, providerDescriptors, store } from '../state/store'
 import TokenField from './TokenField.vue'
@@ -12,42 +12,121 @@ const SNAPSHOT_CHOICES = [
   { value: 4000, label: '4000 commits', hint: 'Very large snapshot. Expect a long load and heavy GPU usage.' },
 ]
 
-const urlInput = ref(store.url)
-const urlFocused = ref(false)
+// Pre-fill the projects from the last run. Profiles saved before multiple
+// projects only have `lastUrl`, which the store already migrated to `urls`.
+const initialUrls = store.loadOptions.urls.length > 0
+  ? [...store.loadOptions.urls]
+  : store.url.trim()
+    ? [store.url]
+    : []
+const rows = ref<string[]>(initialUrls.length > 0 ? initialUrls : [''])
+const focusedRow = ref<number | null>(null)
+const tokenStatus = ref<string | null>(null)
 
-const detection = computed(() => (store.url.trim() ? controller.resolve(store.url) : null))
-const activeProviderId = computed(() => detection.value?.providerId ?? null)
-const activeDescriptor = computed(() =>
-  providerDescriptors.find((descriptor) => descriptor.id === activeProviderId.value) ?? null,
+const filledRows = computed(() => rows.value.map((row) => row.trim()).filter(Boolean))
+const detections = computed(() =>
+  filledRows.value.map((url) => ({ url, resolved: controller.resolve(url) })),
+)
+const invalidRows = computed(() =>
+  detections.value.filter((entry) => !entry.resolved).map((entry) => entry.url),
+)
+const providerIds = computed(() => [
+  ...new Set(
+    detections.value.flatMap((entry) => (entry.resolved ? [entry.resolved.providerId] : [])),
+  ),
+])
+const providerNames = computed(() =>
+  providerIds.value.map((id) => providerDescriptors.find((descriptor) => descriptor.id === id)?.name ?? id),
+)
+
+// The token field edits one host at a time. It follows the first detected host,
+// and mixed lists get a small selector so a token can be stored for each one.
+const tokenProviderId = ref<string | null>(providerIds.value[0] ?? null)
+watch(providerIds, (ids) => {
+  if (!tokenProviderId.value || !ids.includes(tokenProviderId.value)) tokenProviderId.value = ids[0] ?? null
+})
+const tokenDescriptor = computed(
+  () => providerDescriptors.find((descriptor) => descriptor.id === tokenProviderId.value) ?? null,
 )
 
 const tokenSaved = computed(
   () => Boolean(store.loadOptions.draftToken) || Object.keys(store.loadOptions.tokens).length > 0,
 )
-const tokenStatus = ref<string | null>(null)
 // Reopen the token section when a token is already stored.
 const showAdvanced = ref(tokenSaved.value)
 
 const error = computed(() => store.loading.error)
 const busy = computed(() => store.loading.active)
+const loadLabel = computed(() =>
+  busy.value
+    ? 'Cancel'
+    : filledRows.value.length > 1
+      ? `Load ${filledRows.value.length} repositories`
+      : 'Load Repository',
+)
+
+function providerName(id: string): string {
+  return providerDescriptors.find((descriptor) => descriptor.id === id)?.name ?? id
+}
+
+function rowProvider(index: number): { providerId: string; label: string } | null {
+  const value = rows.value[index]?.trim()
+  return value ? controller.resolve(value) : null
+}
+
+/** Keep the single-URL view of the store in sync with the first project. */
+function syncUrl(): void {
+  // `setUrl` also clears a provider forced by a previous run (the demo), so a
+  // real URL typed afterwards is detected from its host, not as the demo.
+  controller.setUrl(filledRows.value[0] ?? '')
+}
 
 function submit(): void {
   if (busy.value) {
     controller.cancelLoad()
     return
   }
-  store.url = urlInput.value
-  void controller.load(urlInput.value)
+  const urls = filledRows.value
+  if (urls.length === 0) {
+    store.loading.error = 'Add at least one repository URL.'
+    return
+  }
+  const invalid = urls.filter((url) => !controller.resolve(url))
+  if (invalid.length > 0) {
+    store.loading.error = `No provider matches ${invalid.join(', ')}. Supported: github.com, GitHub Enterprise, gitlab.com.`
+    return
+  }
+  void controller.loadMany(urls)
 }
 
 function loadDemo(): void {
-  urlInput.value = 'demo/synthetic-repository'
+  rows.value = ['demo/synthetic-repository']
+  store.url = 'demo/synthetic-repository'
   void controller.loadDemo()
 }
 
-function updateUrl(value: string): void {
-  urlInput.value = value
-  controller.setUrl(value)
+function addRow(): void {
+  rows.value.push('')
+  focusedRow.value = rows.value.length - 1
+}
+
+function removeRow(index: number): void {
+  rows.value.splice(index, 1)
+  if (rows.value.length === 0) rows.value.push('')
+  if (focusedRow.value !== null) {
+    if (focusedRow.value === index) focusedRow.value = null
+    else if (focusedRow.value > index) focusedRow.value -= 1
+  }
+  syncUrl()
+}
+
+/** Put an example in the first empty row, or add a new project for it. */
+function applyExample(url: string): void {
+  const empty = rows.value.findIndex((row) => !row.trim())
+  if (empty >= 0) rows.value[empty] = url
+  else rows.value.push(url)
+  store.loading.error = null
+  syncUrl()
 }
 
 const examples = [
@@ -73,42 +152,62 @@ const examples = [
           <h1>Web Gource</h1>
         </div>
         <p class="tagline">
-          Paste a public Git repository and watch its history grow into an animated 3D map — commits, authors,
-          directories and files drawn as camera-facing billboards sized by their real file size, rendered with
-          WebGL in your browser. Orbit the tree with the mouse, or switch to the flat top-down 2D view.
+          Add one or more public Git repositories and watch their histories grow side by side in one animated 3D
+          map — commits, authors, directories and files drawn as camera-facing billboards sized by their real file
+          size, rendered with WebGL in your browser. Each project keeps its own tree and its own people: the same
+          contributor appears once per project. Orbit with the mouse, or switch to the flat top-down 2D view.
         </p>
       </header>
 
       <form class="panel card" @submit.prevent="submit">
-        <div class="url-row">
-          <div class="url-field" :class="{ focused: urlFocused }">
-            <input
-              :value="urlInput"
-              type="text"
-              inputmode="url"
-              spellcheck="false"
-              autocomplete="off"
-              placeholder="https://github.com/owner/repository"
-              aria-label="Repository URL"
-              @focus="urlFocused = true"
-              @blur="urlFocused = false"
-              @input="updateUrl(($event.target as HTMLInputElement).value)"
-            />
-            <span v-if="activeDescriptor" class="provider-badge">{{ activeDescriptor.name }}</span>
+        <div class="repo-list">
+          <div v-for="(row, index) in rows" :key="index" class="repo-row">
+            <div class="url-field" :class="{ focused: focusedRow === index }">
+              <input
+                :value="row"
+                type="text"
+                inputmode="url"
+                spellcheck="false"
+                autocomplete="off"
+                :placeholder="rows.length > 1 ? `Repository ${index + 1} URL` : 'https://github.com/owner/repository'"
+                aria-label="Repository URL"
+                @focus="focusedRow = index"
+                @blur="focusedRow = null"
+                @input="rows[index] = ($event.target as HTMLInputElement).value; syncUrl()"
+              />
+              <span v-if="rowProvider(index)" class="provider-badge">{{ rowProvider(index)?.label }}</span>
+            </div>
+            <button
+              class="icon-btn"
+              type="button"
+              :title="`Remove repository ${index + 1}`"
+              :aria-label="`Remove repository ${index + 1}`"
+              @click="removeRow(index)"
+            >
+              ✕
+            </button>
           </div>
+        </div>
+
+        <div class="repo-actions">
+          <button class="btn small add-repo" type="button" @click="addRow">＋ Add repository</button>
+          <span class="grow" />
           <button class="btn primary load" type="submit">
             <span v-if="busy" class="spinner" />
-            {{ busy ? 'Cancel' : 'Load Repository' }}
+            {{ loadLabel }}
           </button>
           <button class="btn primary demo" type="button" @click="loadDemo">Try the synthetic demo</button>
         </div>
 
         <div class="provider-line">
-          <span v-if="detection" class="muted">
-            Detected provider: <strong>{{ detection.label }}</strong>
+          <span v-if="invalidRows.length > 0" class="muted">
+            No provider matches <strong>{{ invalidRows.join(', ') }}</strong> — supported: github.com, GitHub
+            Enterprise, gitlab.com.
           </span>
-          <span v-else-if="store.url.trim()" class="muted">
-            No provider matches this input yet — supported: github.com, GitHub Enterprise, gitlab.com.
+          <span v-else-if="providerNames.length > 0" class="muted">
+            {{ filledRows.length === 1 ? 'Detected provider' : 'Detected providers' }}:
+            <strong>{{ providerNames.join(', ') }}</strong>
+            <template v-if="filledRows.length > 1"> · {{ filledRows.length }} projects will share one scene</template>
           </span>
           <span v-else class="muted">No cloning, no uploads, no CLI — history is fetched straight from the host API.</span>
         </div>
@@ -173,17 +272,24 @@ const examples = [
         </div>
 
         <div v-if="showAdvanced" class="advanced">
-          <TokenField :provider-id="activeProviderId" @saved="tokenStatus = null" />
+          <div v-if="providerIds.length > 1" class="field token-provider">
+            <label for="token-provider">Token host</label>
+            <select id="token-provider" v-model="tokenProviderId">
+              <option v-for="id in providerIds" :key="id" :value="id">{{ providerName(id) }}</option>
+            </select>
+          </div>
+          <TokenField :provider-id="tokenProviderId" @saved="tokenStatus = null" />
           <p class="hint muted">
             Create a token:
-            <a v-if="activeDescriptor?.tokenUrl" :href="activeDescriptor.tokenUrl" target="_blank" rel="noreferrer noopener">
-              {{ activeDescriptor.name }} token settings
+            <a v-if="tokenDescriptor?.tokenUrl" :href="tokenDescriptor.tokenUrl" target="_blank" rel="noreferrer noopener">
+              {{ tokenDescriptor.name }} token settings
             </a>
             <span v-else>GitHub: Settings → Developer settings → Personal access tokens; GitLab: User settings → Access tokens.</span>
           </p>
           <p class="hint muted">
             GitHub allows 60 requests/hour anonymously. Since file changes cost one request per commit, anonymous
-            loads are limited to roughly 50 commits; a token raises the limit to 5000 requests/hour.
+            loads are limited to roughly 50 commits; a token raises the limit to 5000 requests/hour. The limit is
+            per host, so each host needs its own token.
           </p>
         </div>
       </form>
@@ -195,7 +301,7 @@ const examples = [
           :key="example.url"
           class="btn small"
           type="button"
-          @click="updateUrl(example.url)"
+          @click="applyExample(example.url)"
         >
           {{ example.label }}
         </button>
@@ -316,10 +422,15 @@ const examples = [
   gap: 14px;
 }
 
-.url-row {
+.repo-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.repo-row {
+  display: flex;
+  gap: 8px;
   align-items: stretch;
 }
 
@@ -335,6 +446,42 @@ const examples = [
   padding: 13px 14px;
   font-size: 15px;
   padding-right: 120px;
+}
+
+.icon-btn {
+  width: 36px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.icon-btn:hover {
+  color: #ffd9de;
+  border-color: rgba(255, 93, 108, 0.45);
+  background: rgba(255, 93, 108, 0.1);
+}
+
+.repo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.repo-actions .grow {
+  flex: 1;
+}
+
+.add-repo {
+  align-self: center;
+}
+
+.token-provider {
+  max-width: 260px;
 }
 
 .provider-badge {
@@ -488,8 +635,12 @@ const examples = [
 }
 
 @media (max-width: 720px) {
-  .url-row {
+  .repo-actions {
     flex-direction: column;
+  }
+
+  .repo-actions .grow {
+    display: none;
   }
 
   .content {

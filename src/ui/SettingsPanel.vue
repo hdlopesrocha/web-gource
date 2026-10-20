@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { controller } from '../engine/controller'
-import { PACING_PRESETS, resolvePacing, store } from '../state/store'
+import { PACING_PRESETS, providerDescriptors, resolvePacing, store } from '../state/store'
 import { RESOLUTION_PRESETS } from '../engine/recorder'
 import { formatDuration } from '../timeline/schedule'
 import { formatBytes } from '../util/format'
@@ -99,6 +99,25 @@ const sizeCoverage = computed(() => {
   const total = stats?.files ?? 0
   return { known, total }
 })
+
+/** Loaded projects with counts from the current (filtered) timeline. */
+const projectRows = computed(() => {
+  void store.timelineStats
+  return controller.currentTimeline?.projects ?? []
+})
+const multiProject = computed(() => store.repos.length > 1)
+const tokenProviders = computed(() => [...new Set(store.repos.map((repo) => repo.provider))])
+const tokenProviderId = ref<string | null>(store.repos[0]?.provider ?? null)
+watch(
+  tokenProviders,
+  (ids) => {
+    if (!tokenProviderId.value || !ids.includes(tokenProviderId.value)) tokenProviderId.value = ids[0] ?? null
+  },
+  { immediate: true },
+)
+function providerName(id: string): string {
+  return providerDescriptors.find((descriptor) => descriptor.id === id)?.name ?? id
+}
 
 const sizeSourceLabel = computed(() => {
   switch (store.timelineStats?.sizeSource) {
@@ -858,15 +877,21 @@ onMounted(() => {
       <template v-else>
         <section class="group">
           <h3>Access token</h3>
-          <TokenField :provider-id="store.repo?.provider ?? null" compact @saved="onTokenSaved" />
+          <div v-if="tokenProviders.length > 1" class="field">
+            <label for="settings-token-provider">Token host</label>
+            <select id="settings-token-provider" v-model="tokenProviderId">
+              <option v-for="id in tokenProviders" :key="id" :value="id">{{ providerName(id) }}</option>
+            </select>
+          </div>
+          <TokenField :provider-id="tokenProviderId" compact @saved="onTokenSaved" />
           <div class="row">
             <button class="btn small" type="button" :disabled="!store.url || store.loading.active" @click="controller.reload()">
-              Reload repository with this token
+              Reload {{ multiProject ? 'projects' : 'repository' }} with this token
             </button>
           </div>
           <p class="faint note">
             Reloading re-fetches the same window; already cached commits cost no quota, so it mainly fills in the file
-            changes that were skipped when the limit was reached.
+            changes that were skipped when the limit was reached. Each host needs its own token.
           </p>
           <p v-if="tokenSavedMessage" class="faint note ok">{{ tokenSavedMessage }}</p>
         </section>
@@ -874,8 +899,20 @@ onMounted(() => {
         <section class="group">
           <h3>Loaded data</h3>
           <ul class="facts">
-            <li><span class="faint">Repository</span><span>{{ store.repo?.fullName ?? '—' }}</span></li>
-            <li><span class="faint">Provider</span><span>{{ store.repo?.provider ?? '—' }}</span></li>
+            <template v-if="multiProject">
+              <li><span class="faint">Projects</span><span>{{ store.repos.length }}</span></li>
+              <li v-for="project in projectRows" :key="project.key">
+                <span class="faint">{{ project.repo.fullName }}</span>
+                <span>
+                  {{ project.commits.toLocaleString() }} commits · {{ project.authors }} authors
+                  <template v-if="project.truncated"> · partial</template>
+                </span>
+              </li>
+            </template>
+            <template v-else>
+              <li><span class="faint">Repository</span><span>{{ store.repo?.fullName ?? '—' }}</span></li>
+              <li><span class="faint">Provider</span><span>{{ store.repo?.provider ?? '—' }}</span></li>
+            </template>
             <li><span class="faint">History</span><span>{{ store.timelineTruncated ? 'partial' : 'complete window' }}</span></li>
             <li><span class="faint">Commits</span><span>{{ store.timelineStats?.commits.toLocaleString() ?? 0 }}</span></li>
             <li><span class="faint">Authors</span><span>{{ store.timelineStats?.authors ?? 0 }}</span></li>
