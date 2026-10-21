@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Web-based, WebGL-powered Gource-inspired visualization of Git repository history.",
   "scripts": {
+    "predev": "bash scripts/dev-cert.sh",
     "dev": "vite",
+    "cert:dev": "bash scripts/dev-cert.sh --force",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",

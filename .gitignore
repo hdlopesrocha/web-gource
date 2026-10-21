@@ -7,5 +7,8 @@ dist-ssr
 coverage
 *.log
 
+# Self-signed certificate generated for local HTTPS development
+.cert/
+
 # Local tooling/session data (not part of the project)
 data/

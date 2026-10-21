@@ -24,14 +24,26 @@ from the host API in your browser.
 
 ```bash
 npm install
-npm run dev          # http://127.0.0.1:5173
+npm run dev          # https://localhost:5173
 ```
+
+`npm run dev` generates a self-signed certificate in `.cert/` on the first run and serves Vite over
+HTTPS on every network interface. Open `https://localhost:5173` locally, or the **Network** URL Vite
+prints from a phone, headset or another machine (for example `https://192.168.0.219:5173`). Browsers
+warn that the certificate is self-signed; accept the warning for development, or import
+`.cert/dev.crt` into your trust store. Reaching the server from outside your LAN also requires the
+usual firewall/router port forwarding.
+
+The certificate covers `localhost`, `127.0.0.1`, the machine's hostname and its current LAN IPv4
+addresses. After changing networks, run `npm run cert:dev` and restart the dev server to regenerate
+it.
 
 Other scripts:
 
 ```bash
 npm run build        # type-check + production bundle (dist/)
 npm run preview      # serve the production build
+npm run cert:dev     # regenerate the self-signed development certificate
 npm test             # unit + component tests (mocked APIs, no network)
 npm run test:api     # opt-in integration tests against the real GitHub API
 npm run typecheck    # vue-tsc only
