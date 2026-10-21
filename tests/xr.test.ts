@@ -484,9 +484,6 @@ describe('XrSession', () => {
     // The user turns their head: recenter should make that the new forward.
     camera.quaternion.setFromEuler(new THREE.Euler(-0.4, 2.1, 0.35))
     camera.updateMatrixWorld(true)
-    const upBefore = new THREE.Vector3(0, 1, 0).applyQuaternion(
-      camera.getWorldQuaternion(new THREE.Quaternion()),
-    )
 
     expect(controller.recenter()).toBe(true)
     camera.updateMatrixWorld(true)
@@ -500,17 +497,16 @@ describe('XrSession', () => {
     expect(eye.z).toBeCloseTo(height, 5)
 
     // The current heading now faces the standard direction, i.e. the table
-    // centre, and the world up is the head-up captured at the click.
+    // centre.
     const world = new THREE.Quaternion()
     camera.getWorldQuaternion(world)
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(world)
     const toCentre = new THREE.Vector3(0, horizontal, -height).normalize()
     expect(forward.angleTo(toCentre)).toBeLessThan(1e-6)
-    // No roll relative to the head-up captured at the click.
+    // No roll: the camera's right axis stays horizontal.
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(world)
-    expect(Math.abs(right.dot(controller.up))).toBeLessThan(1e-6)
-    // The stored up is the head-up from the moment of the click.
-    expect(controller.up.angleTo(upBefore)).toBeLessThan(1e-6)
+    expect(right.y).toBeCloseTo(0, 5)
+    expect(right.z).toBeCloseTo(0, 5)
 
     // A second recenter is a no-op: the view is already on the reference pose.
     expect(controller.recenter()).toBe(false)

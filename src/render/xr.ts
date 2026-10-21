@@ -248,14 +248,6 @@ export class XrSession {
   private readonly overviewTarget = new THREE.Vector3()
   private readonly overviewBase = new THREE.Quaternion()
   private readonly overviewMatrix = new THREE.Matrix4()
-  /** World up captured at the last calibration; the view keeps this roll. */
-  private readonly calibratedUp = new THREE.Vector3(0, 0, 1)
-  private readonly horizonForward = new THREE.Vector3()
-  private readonly horizonRight = new THREE.Vector3()
-  private readonly horizonUp = new THREE.Vector3()
-  private readonly horizonBackward = new THREE.Vector3()
-  private readonly horizonMatrix = new THREE.Matrix4()
-  private readonly horizonHeadInverse = new THREE.Quaternion()
   private readonly unitScale = new THREE.Vector3(1, 1, 1)
 
   constructor(options: XrSessionOptions) {
@@ -442,57 +434,14 @@ export class XrSession {
   private captureHeadReference(): void {
     const framing = this.framing
     if (!framing) return
-    framing.camera.updateMatrixWorld(true)
     this.headReference.copy(framing.camera.quaternion)
     this.headReferenceInverse.copy(this.headReference).invert()
-    // Store the head's world up as it is *now*, before the new reference
-    // rotation is applied; the view keeps this roll until the next calibration.
-    this.rawHeadQuaternion.setFromRotationMatrix(framing.camera.matrixWorld)
-    this.calibratedUp.set(0, 1, 0).applyQuaternion(this.rawHeadQuaternion)
-    if (this.calibratedUp.lengthSq() < 1e-9) this.calibratedUp.set(0, 0, 1)
-    else this.calibratedUp.normalize()
     this.hasHeadReference = true
   }
 
   /** The current camera behaviour (free, top-down 2D or fixed centre). */
   get mode(): XrCameraMode {
     return this.cameraMode
-  }
-
-  /**
-   * World up captured at the last calibration.
-   *
-   * The screen is built with this up and the view keeps this roll, so it is the
-   * head's up vector at the moment the screen was last placed.
-   */
-  get up(): THREE.Vector3 {
-    return this.calibratedUp
-  }
-
-  /**
-   * Remove the roll the headset picked up since calibration.
-   *
-   * `rig` is rewritten so that `rig * head` keeps the current view direction but
-   * uses {@link calibratedUp} for its up, so tilting the head no longer rolls
-   * the world.
-   */
-  private lockHorizon(rig: THREE.Quaternion, head: THREE.Quaternion): void {
-    this.rawHeadQuaternion.copy(rig).multiply(head)
-    this.horizonForward.set(0, 0, -1).applyQuaternion(this.rawHeadQuaternion)
-    if (this.horizonForward.lengthSq() < 1e-9) return
-    this.horizonForward.normalize()
-    this.horizonRight.crossVectors(this.horizonForward, this.calibratedUp)
-    if (this.horizonRight.lengthSq() < 1e-9) {
-      this.horizonRight.set(1, 0, 0).applyQuaternion(this.rawHeadQuaternion)
-      if (this.horizonRight.lengthSq() < 1e-9) return
-    }
-    this.horizonRight.normalize()
-    this.horizonUp.crossVectors(this.horizonRight, this.horizonForward).normalize()
-    this.horizonBackward.copy(this.horizonForward).negate()
-    this.horizonMatrix.makeBasis(this.horizonRight, this.horizonUp, this.horizonBackward)
-    this.rawHeadQuaternion.setFromRotationMatrix(this.horizonMatrix)
-    this.horizonHeadInverse.copy(head).invert()
-    rig.copy(this.rawHeadQuaternion).multiply(this.horizonHeadInverse)
   }
 
   /**
@@ -555,7 +504,6 @@ export class XrSession {
 
     if (this.cameraMode === 'center') {
       this.rigQuaternion.copy(this.homeRigQuaternion)
-      this.lockHorizon(this.rigQuaternion, framing.camera.quaternion)
       this.rigPosition.set(0, 0, this.centerHeight())
     } else {
       // Cancel the headset's orientation as well as its translation.
@@ -591,10 +539,8 @@ export class XrSession {
     this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
 
     // `world = base * (reference⁻¹ * headset)`, so the reference orientation
-    // faces the tree and head rotation is relative to it. The horizon lock then
-    // removes any roll the headset picked up since the reference.
+    // faces the tree and head rotation is relative to it.
     this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
-    this.lockHorizon(this.rigQuaternion, framing.camera.quaternion)
     this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
     this.rigPosition.copy(this.overviewEye).sub(this.rotatedPosition)
     return this.applyRigPose(this.rigPosition, this.rigQuaternion)

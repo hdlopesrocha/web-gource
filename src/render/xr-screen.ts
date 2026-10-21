@@ -47,13 +47,9 @@ export const XR_SCREEN_ASPECT = XR_SCREEN_CANVAS_HEIGHT / XR_SCREEN_CANVAS_WIDTH
 export const XR_SCREEN_WIDTH_METRES = 2.2
 export const XR_SCREEN_HEIGHT_METRES = XR_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
 
-/** How far in front of the eyes the screen floats, in metres. */
+/** How far in front of the eyes the screen floats, and how high above them. */
 export const XR_SCREEN_DISTANCE = 0.95
-/** Fraction of the visible frustum the screen covers when it is placed. */
-export const XR_SCREEN_COVERAGE = 0.8
-
-/** Fallback up axis (the tabletop normal) when no calibrated up is supplied. */
-const XR_SCREEN_UP = new THREE.Vector3(0, 0, 1)
+export const XR_SCREEN_RISE = 0.02
 
 /** The flat dashboard shown by the fixed top-down camera. */
 export const XR_2D_SCREEN_WIDTH_METRES = 1.25
@@ -1370,8 +1366,6 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
       lines: [
         'Press the controller trigger, or click the mirrored desktop canvas, to recenter.',
         'Your current heading becomes the standard view forward, without leaving the vantage.',
-        'The screen is re-placed dead centre in your view and fills 80% of it.',
-        'The view keeps the head-up it had at that click, so head rolls no longer tilt the world.',
         'The header and footer also have a Recenter button.',
       ],
     },
@@ -1486,64 +1480,30 @@ export interface XrScreenPose {
 }
 
 /**
- * Place the screen dead-centre in the view, facing the user.
+ * Place the screen ahead of the head, upright and facing the user.
  *
- * The plane's centre sits on the view axis at {@link XR_SCREEN_DISTANCE}, not
- * raised or yaw-locked, and its up is the given head-up reference (so a
- * calibrated roll is honoured). The screen is fixed once placed, which keeps
- * gaze selection stable.
+ * Only the yaw of the head is used, so a momentary glance down cannot tip the
+ * whole interface. The screen is fixed once placed, which keeps gaze selection
+ * stable.
  */
 export function screenPose(
   head: THREE.Matrix4,
-  options: { up?: THREE.Vector3; distance?: number } = {},
+  outPosition = new THREE.Vector3(),
+  outQuaternion = new THREE.Quaternion(),
 ): XrScreenPose {
-  const distance = options.distance ?? XR_SCREEN_DISTANCE
   const forward = new THREE.Vector3(0, 0, -1).transformDirection(head)
+  forward.z = 0
   if (forward.lengthSq() < 1e-9) forward.set(0, 1, 0)
   forward.normalize()
-
-  const upHint = options.up ?? XR_SCREEN_UP
+  const up = new THREE.Vector3(0, 0, 1)
+  const right = new THREE.Vector3().crossVectors(forward, up).normalize()
   const backward = forward.clone().negate()
-  const right = new THREE.Vector3().crossVectors(forward, upHint)
-  if (right.lengthSq() < 1e-9) right.set(1, 0, 0)
-  right.normalize()
-  const up = new THREE.Vector3().crossVectors(right, forward).normalize()
-  const quaternion = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().makeBasis(right, up, backward),
-  )
-  const position = new THREE.Vector3().setFromMatrixPosition(head).addScaledVector(forward, distance)
-  return { position, quaternion }
-}
-
-/**
- * Physical size that covers `coverage` of the visible frustum at `distance`.
- *
- * The XR camera projects with the headset's own FOV, which is much wider than
- * the desktop camera's, so the panel size is derived from its projection matrix
- * instead of a fixed metre size. The 16:10 panel is fit into the frustum: its
- * height takes the coverage unless that would overflow the width.
- */
-export function screenSizeForView(options: {
-  distance: number
-  projection?: THREE.Matrix4 | null
-  coverage?: number
-}): { width: number; height: number } {
-  const coverage = options.coverage ?? XR_SCREEN_COVERAGE
-  const p = options.projection?.elements
-  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[5]) || p[0] === 0 || p[5] === 0) {
-    return { width: XR_SCREEN_WIDTH_METRES, height: XR_SCREEN_HEIGHT_METRES }
-  }
-  const viewHeight = (2 * options.distance) / Math.abs(p[5])
-  const viewWidth = (2 * options.distance) / Math.abs(p[0])
-  const panelAspect = XR_SCREEN_CANVAS_WIDTH / XR_SCREEN_CANVAS_HEIGHT
-  let height = coverage * viewHeight
-  let width = height * panelAspect
-  const maxWidth = coverage * viewWidth
-  if (width > maxWidth) {
-    width = maxWidth
-    height = width / panelAspect
-  }
-  return { width, height }
+  outQuaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, backward))
+  outPosition
+    .setFromMatrixPosition(head)
+    .addScaledVector(forward, XR_SCREEN_DISTANCE)
+    .addScaledVector(up, XR_SCREEN_RISE)
+  return { position: outPosition, quaternion: outQuaternion }
 }
 
 /** Physical dimensions of the screen for a camera mode. */

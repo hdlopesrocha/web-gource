@@ -12,13 +12,10 @@ import {
   XR_2D_SCREEN_CENTER,
   XR_SCREEN_CANVAS_HEIGHT,
   XR_SCREEN_CANVAS_WIDTH,
-  XR_SCREEN_COVERAGE,
-  XR_SCREEN_DISTANCE,
   XrScreenPanel,
   hitTestScreen,
   screenLayout,
   screenPose,
-  screenSizeForView,
   screenSizeMetres,
   xrScreenAction,
   xrScreenTargetId,
@@ -725,10 +722,8 @@ export class Engine {
    * makes gaze selection stable.
    */
   private placeXrScreen(): void {
-    const pose = screenPose(this.xrHead(), { up: this.xr?.up, distance: XR_SCREEN_DISTANCE })
-    this.xrPanelPosition.copy(pose.position)
-    this.xrPanelQuaternion.copy(pose.quaternion)
-    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion, this.xrScreenSize())
+    screenPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
+    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
   /**
@@ -741,22 +736,11 @@ export class Engine {
   private placeXrScreen2D(): void {
     this.xrPanelPosition.set(XR_2D_SCREEN_CENTER.x, XR_2D_SCREEN_CENTER.y, XR_2D_SCREEN_CENTER.z)
     this.xrPanelQuaternion.identity()
-    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion, screenSizeMetres('2d'))
-  }
-
-  /**
-   * Physical size that covers {@link XR_SCREEN_COVERAGE} of the XR frustum.
-   *
-   * The headset's projection is much wider than the desktop camera's, so the
-   * panel is sized from the current projection matrix rather than a fixed size.
-   */
-  private xrScreenSize(): { width: number; height: number } {
-    const projection = this.renderer.webgl.xr.getCamera?.().projectionMatrix ?? null
-    return screenSizeForView({ distance: XR_SCREEN_DISTANCE, projection, coverage: XR_SCREEN_COVERAGE })
+    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
   /** Map a scene-space screen pose into the tabletop group and apply it. */
-  private applyXrScreenPose(position: THREE.Vector3, quaternion: THREE.Quaternion, size: { width: number; height: number }): void {
+  private applyXrScreenPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
     const panel = this.xrPanel
     if (!panel) return
     const world = this.renderer.world
@@ -768,6 +752,7 @@ export class Engine {
     world.matrixWorld.decompose(this.xrParentPosition, this.xrParentQuaternion, this.xrParentScale)
     panel.mesh.position.copy(position).applyMatrix4(this.xrRayMatrix)
     panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(quaternion)
+    const size = screenSizeMetres(this.xrPanelMode ?? this.xr?.mode ?? 'free')
     panel.mesh.scale.set(size.width / scale, size.height / scale, 1)
     panel.mesh.updateMatrixWorld(true)
   }
