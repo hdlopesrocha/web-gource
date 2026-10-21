@@ -101,6 +101,7 @@ function screenState(overrides: Partial<XrScreenState> = {}): XrScreenState {
   return {
     view: 'stage',
     settingsTab: 'visual',
+    cameraView: 'gource',
     hovered: null,
     repoLabel: 'acme/web-gource',
     repoTitle: 'acme/web-gource',
@@ -222,11 +223,17 @@ describe('screenLayout', () => {
       'next',
       'speed',
       'recenter-footer',
+      'view-origin',
+      'view-top',
+      'view-gource',
       'jump-start',
       'jump-end',
     ]) {
       expect(ids).toContain(id)
     }
+
+    expect(control(layout, 'view-top').action).toEqual({ kind: 'viewPreset', view: 'top' })
+    expect(control(layout, 'view-gource').active).toBe(true)
 
     for (const entry of layout.controls) {
       expect(entry.rect.x).toBeGreaterThanOrEqual(0)
@@ -347,6 +354,7 @@ describe('xrScreenKey', () => {
     const key = xrScreenKey(base)
     expect(xrScreenKey({ ...base, hovered: 'play' })).not.toBe(key)
     expect(xrScreenKey({ ...base, view: 'help' })).not.toBe(key)
+    expect(xrScreenKey({ ...base, cameraView: 'top' })).not.toBe(key)
     expect(xrScreenKey({ ...base, playback: { ...base.playback, speed: 4 } })).not.toBe(key)
     expect(xrScreenKey({ ...base, minimapVisible: false })).not.toBe(key)
     expect(xrScreenKey({ ...base, settings: { ...base.settings, showLabels: false } })).not.toBe(key)
@@ -463,7 +471,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('How the immersive screen works')
     expect(painted).toContain('Gaze & dwell')
     expect(painted).toContain('Recenter')
-    expect(painted.some((text) => text.includes('watch'))).toBe(true)
+    expect(painted.some((text) => text.startsWith('Origin:'))).toBe(true)
 
     const warnings = recordingContext()
     drawXrScreen(

@@ -90,29 +90,33 @@ export const XR_OPTIONAL_FEATURES = ['local-floor', 'bounded-floor'] as const
 /** The tree is scaled to fit inside this many metres. */
 export const XR_TABLE_SIZE = 1.5
 
-/**
- * The vantage the VR `follow` camera watches the action from.
- *
- * It sits on an orbit of {@link XR_OVERVIEW_RADIUS} around the followed point,
- * tilted by whatever height the `VR view height` setting picks, and always
- * looks at that point. The headset orientation still rotates the view around
- * that base, so the user can look around while the camera tracks the action.
- */
-export const XR_OVERVIEW_RADIUS = XR_TABLE_SIZE * 1.5
 /** Bounds of the `VR view height` setting, in metres above the tabletop. */
-export const XR_OVERVIEW_MIN_HEIGHT = 0.35
-export const XR_OVERVIEW_MAX_HEIGHT = XR_OVERVIEW_RADIUS * 0.98
-/** Default height, matching the desktop default angle of ~53 degrees. */
-export const XR_OVERVIEW_DEFAULT_HEIGHT = 1.8
+export const XR_VIEW_MIN_HEIGHT = 0.5
+export const XR_VIEW_MAX_HEIGHT = 20
+/** Default height of the top and gource views, in metres. */
+export const XR_VIEW_DEFAULT_HEIGHT = 4
 
-/** Clamp a `VR view height` value to the supported orbit range. */
+/** Clamp a `VR view height` value to the supported range. */
 export function clampXrViewHeight(value: number): number {
-  if (!Number.isFinite(value)) return XR_OVERVIEW_DEFAULT_HEIGHT
-  return Math.min(XR_OVERVIEW_MAX_HEIGHT, Math.max(XR_OVERVIEW_MIN_HEIGHT, value))
+  if (!Number.isFinite(value)) return XR_VIEW_DEFAULT_HEIGHT
+  return Math.min(XR_VIEW_MAX_HEIGHT, Math.max(XR_VIEW_MIN_HEIGHT, value))
 }
+
+/** The three camera views the VR menu and the desktop toolbar select. */
+export const XR_CAMERA_VIEWS = ['origin', 'top', 'gource'] as const
+export type XrCameraView = (typeof XR_CAMERA_VIEWS)[number]
+
+/** Close view near the scene origin: how far back and how high the eye sits. */
+export const XR_ORIGIN_BACK = XR_TABLE_SIZE * 0.55
+export const XR_ORIGIN_HEIGHT = XR_TABLE_SIZE * 0.4
+
+/** The gource view stands this far back from the followed point. */
+export const XR_VIEW_BACK = XR_TABLE_SIZE * 1.2
 
 /** The table's up axis, in the tree's own Z-up frame. */
 const XR_UP = new THREE.Vector3(0, 0, 1)
+/** Screen-up axis for the straight-down top view. */
+const XR_TOP_UP = new THREE.Vector3(0, 1, 0)
 
 /**
  * Rotation that makes the tree's own frame read as a room.
@@ -198,6 +202,7 @@ export class XrSession {
   private saved: SavedState | null = null
   private cameraHeightFitted = false
   private disposed = false
+  private cameraView: XrCameraView = 'gource'
   /** Headset orientation treated as the camera's forward reference. */
   private readonly headReference = new THREE.Quaternion()
   private readonly headReferenceInverse = new THREE.Quaternion()
@@ -218,7 +223,7 @@ export class XrSession {
     this.framing = options.framing ?? null
     this.xr = 'xr' in options ? (options.xr ?? null) : navigatorXr()
     this.onSelect = options.onSelect ?? null
-    this.viewHeight = options.viewHeight ?? (() => XR_OVERVIEW_DEFAULT_HEIGHT)
+    this.viewHeight = options.viewHeight ?? (() => XR_VIEW_DEFAULT_HEIGHT)
   }
 
   /** True while an immersive session is running. */
@@ -388,60 +393,75 @@ export class XrSession {
   }
 
   /**
-   * Scene point the camera watches. The engine sets this each frame to the
-   * damped focus of recent activity, so the camera tracks the users.
+   * Scene point the gource view watches, in scene coordinates. The engine sets
+   * this each frame to the damped focus of recent activity.
    */
   setFollowTarget(target: THREE.Vector3): void {
     this.followTarget.copy(target)
     this.hasFollowTarget = true
   }
 
+  /** The selected camera view. */
+  get view(): XrCameraView {
+    return this.cameraView
+  }
+
+  /** Select one of the three camera views. */
+  setView(view: XrCameraView): void {
+    if (view === this.cameraView) return
+    this.cameraView = view
+    this.hasHeadReference = false
+  }
+
   /**
-   * Apply the camera behaviour to the rig.
+   * Apply the selected camera view to the rig.
    *
    * The headset pose itself is never changed: instead the rig is moved and
-   * rotated so that `rig * headsetPose` is the view we want. The camera flies
-   * to a vantage over the followed point and looks at it, with the headset
-   * orientation rotating the view around that base. Returns true when the rig
-   * changed, so the caller can re-pose the XR camera before drawing the panel
-   * and gaze.
+   * rotated so that `rig * headsetPose` is the view we want, with the headset
+   * orientation adding look-around on top. Returns true when the rig changed, so
+   * the caller can re-pose the XR camera before drawing the panel and gaze.
    */
   applyCameraPose(): boolean {
     const framing = this.framing
     if (!this.session || !framing) return false
-    return this.applyFollow()
-  }
-
-  /**
-   * The follow camera: watch the action from an elevated vantage.
-   *
-   * The eye sits on an orbit around the followed point, at the `VR view height`
-   * setting, and always faces it. The headset rotation is applied on top of that
-   * base and its translation is cancelled, so the user looks around while the
-   * camera tracks the users.
-   */
-  private applyFollow(): boolean {
-    const framing = this.framing
-    if (!framing) return false
     if (!this.hasHeadReference) this.captureHeadReference()
 
-    const height = clampXrViewHeight(this.viewHeight())
-    const horizontal = Math.sqrt(Math.max(0, XR_OVERVIEW_RADIUS * XR_OVERVIEW_RADIUS - height * height))
-    if (this.hasFollowTarget) this.overviewTarget.copy(this.followTarget)
-    else this.overviewTarget.set(0, 0, 0)
-    const target = this.overviewTarget
-    // Standard direction: from -Y (the desktop default yaw), looking at the
-    // followed point.
-    this.overviewEye.set(target.x, target.y - horizontal, target.z + height)
-    this.overviewMatrix.lookAt(this.overviewEye, target, XR_UP)
-    this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
+    if (this.cameraView === 'origin') this.setOriginView()
+    else if (this.cameraView === 'top') this.setTopView()
+    else this.setGourceView()
 
-    // `world = base * (reference⁻¹ * headset)`, so the reference orientation
-    // faces the action and head rotation is relative to it.
     this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
     this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
     this.rigPosition.copy(this.overviewEye).sub(this.rotatedPosition)
     return this.applyRigPose(this.rigPosition, this.rigQuaternion)
+  }
+
+  /** Close view near the scene origin, looking at the scene. */
+  private setOriginView(): void {
+    this.overviewEye.set(0, -XR_ORIGIN_BACK, XR_ORIGIN_HEIGHT)
+    this.overviewTarget.set(0, 0, 0)
+    this.overviewMatrix.lookAt(this.overviewEye, this.overviewTarget, XR_UP)
+    this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
+  }
+
+  /** Straight down over the whole scene, from the `VR view height`. */
+  private setTopView(): void {
+    const height = clampXrViewHeight(this.viewHeight())
+    this.overviewEye.set(0, 0, height)
+    this.overviewTarget.set(0, 0, 0)
+    this.overviewMatrix.lookAt(this.overviewEye, this.overviewTarget, XR_TOP_UP)
+    this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
+  }
+
+  /** The desktop Gource view, raised to the `VR view height` and watching the action. */
+  private setGourceView(): void {
+    const height = clampXrViewHeight(this.viewHeight())
+    if (this.hasFollowTarget) this.overviewTarget.copy(this.followTarget)
+    else this.overviewTarget.set(0, 0, 0)
+    const target = this.overviewTarget
+    this.overviewEye.set(target.x, target.y - XR_VIEW_BACK, target.z + height)
+    this.overviewMatrix.lookAt(this.overviewEye, target, XR_UP)
+    this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
   }
 
   private applyRigPose(position: THREE.Vector3, quaternion: THREE.Quaternion): boolean {

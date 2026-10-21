@@ -107,9 +107,11 @@ const shortcuts: { keys: string; action: string }[] = [
           transparent, so the tree stays visible through the middle of the screen.
         </p>
         <p class="muted small">
-          The camera watches the most recent activity: it flies to a vantage over the action and looks at it, with your
-          head adding look-around. <strong>Settings → Camera → VR view height</strong> sets how high that vantage sits
-          above the table.
+          Three camera views are available from the menu and the desktop toolbar: <strong>Origin</strong> (close to
+          the scene origin, looking at the scene), <strong>Top</strong> (straight down over the whole scene) and
+          <strong>Gource</strong> (the Gource view raised, watching the recent activity). Your head adds look-around
+          in all three, and <strong>Settings → Camera → View height</strong> (default 4 m) sets how high Top and
+          Gource sit. The menu translates with the camera whenever it moves, but is never rotated.
         </p>
         <p class="muted small">
           It is driven by <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever

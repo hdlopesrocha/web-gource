@@ -6,7 +6,7 @@ import { OrbitCamera, type CameraOptions } from '../render/camera'
 import { CameraControls } from './controls'
 import { nextPlaybackSpeed } from './speeds'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
-import { XrSession } from '../render/xr'
+import { XrSession, type XrCameraView } from '../render/xr'
 import { createDwellState, dwell, dwellProgress, XrReticle } from '../render/xr-ui'
 import {
   XR_SCREEN_CANVAS_HEIGHT,
@@ -218,6 +218,13 @@ export class Engine {
   /** Panel pose in scene coordinates, before mapping into the tabletop group. */
   private readonly xrPanelPosition = new THREE.Vector3()
   private readonly xrPanelQuaternion = new THREE.Quaternion()
+  /** Menu anchor: the pose it was placed at, plus the head position then. */
+  private readonly xrMenuOrigin = new THREE.Vector3()
+  private readonly xrMenuQuaternion = new THREE.Quaternion()
+  private readonly xrMenuAnchor = new THREE.Vector3()
+  private readonly xrCurrentHead = new THREE.Vector3()
+  /** Damped activity focus, mapped into scene coordinates. */
+  private readonly xrFocus = new THREE.Vector3()
   private readonly xrParentPosition = new THREE.Vector3()
   private readonly xrParentQuaternion = new THREE.Quaternion()
   private readonly xrParentScale = new THREE.Vector3()
@@ -607,6 +614,17 @@ export class Engine {
    * Complete in-scene UI and gaze
    * ------------------------------------------------------------------ */
 
+  /** Select one of the three VR camera views (also used by the desktop toolbar). */
+  setVrView(view: XrCameraView): void {
+    store.ui.xrCameraView = view
+    this.xr?.setView(view)
+  }
+
+  /** The selected VR camera view, for the toolbar's active state. */
+  get vrView(): XrCameraView {
+    return this.xr?.view ?? store.ui.xrCameraView
+  }
+
   /**
    * Put the menu back in front of the user.
    *
@@ -652,6 +670,7 @@ export class Engine {
     this.xrDwell.elapsed = 0
     this.xrDwell.fired = false
     this.xrLayout = screenLayout(this.xrScreenState())
+    this.xr?.setView(store.ui.xrCameraView)
     this.placeXrScreen()
   }
 
@@ -709,6 +728,11 @@ export class Engine {
    */
   private placeXrScreen(): void {
     screenPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
+    // Remember the placement so the menu can translate with the camera later
+    // without changing its orientation.
+    this.xrMenuOrigin.copy(this.xrPanelPosition)
+    this.xrMenuQuaternion.copy(this.xrPanelQuaternion)
+    this.xrMenuAnchor.setFromMatrixPosition(this.xrHead())
     this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
@@ -811,6 +835,9 @@ export class Engine {
         break
       case 'recenter':
         this.recenterVr()
+        break
+      case 'viewPreset':
+        this.setVrView(action.view)
         break
       case 'exitVr':
         void this.toggleVr()
@@ -1000,6 +1027,7 @@ export class Engine {
     return {
       view: this.xrView,
       settingsTab: this.xrSettingsTab,
+      cameraView: this.xr?.view ?? store.ui.xrCameraView,
       hovered: this.xrHovered,
       repoLabel: multi ? `${projects.length} repositories` : timeline.repo.fullName,
       repoTitle: timeline.repo.fullName,
@@ -1085,6 +1113,13 @@ export class Engine {
     const panel = this.xrPanel
     const reticle = this.xrReticle
     if (!panel || !reticle) return
+
+    // The menu translates with the camera but keeps the orientation it was
+    // placed with, so moving between views never rolls or tilts it.
+    const head = this.xrHead()
+    this.xrCurrentHead.setFromMatrixPosition(head)
+    this.xrPanelPosition.copy(this.xrMenuOrigin).add(this.xrCurrentHead).sub(this.xrMenuAnchor)
+    this.applyXrScreenPose(this.xrPanelPosition, this.xrMenuQuaternion)
 
     const state = this.xrScreenState()
     this.xrLayout = screenLayout(state)
@@ -1179,8 +1214,11 @@ export class Engine {
     // update gives this frame's camera-facing layers, gaze and panel the current
     // headset pose instead of the previous frame's.
     if (this.renderer.webgl.xr.isPresenting) {
-      // The camera watches the damped focus of recent activity.
-      this.xr?.setFollowTarget(this.rig.focusPoint)
+      // The gource view watches the damped focus of recent activity, mapped
+      // from the tree's own frame into scene coordinates.
+      this.renderer.world.updateMatrixWorld(true)
+      this.xrFocus.copy(this.rig.focusPoint).applyMatrix4(this.renderer.world.matrixWorld)
+      this.xr?.setFollowTarget(this.xrFocus)
       this.renderer.webgl.xr.updateCamera(this.rig.camera)
       // The first pose anchors the head reference. Then apply the camera pose;
       // it can move the rig, so re-pose the XR camera before the panel and

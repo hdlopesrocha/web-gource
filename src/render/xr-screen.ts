@@ -22,6 +22,7 @@ import * as THREE from 'three'
 import type { ActivityBucket } from '../timeline/types'
 import type { ContributionCalendar, WeekdayHourGrid } from '../timeline/activity'
 import type { SizeMode } from '../sim/simulation'
+import { XR_CAMERA_VIEWS, type XrCameraView } from './xr'
 import { formatBytes } from '../util/format'
 import { drawInfoPanel, fitText, wrapText, type InfoPanelModel } from './info-panel'
 import {
@@ -51,6 +52,13 @@ export const XR_SCREEN_DISTANCE = 0.95
 
 export const XR_SCREEN_VIEWS = ['stage', 'activity', 'authors', 'settings', 'help', 'warnings'] as const
 export type XrScreenView = (typeof XR_SCREEN_VIEWS)[number]
+
+/** Human-readable labels for the three camera-view buttons. */
+export const XR_CAMERA_VIEW_LABELS: Record<XrCameraView, string> = {
+  origin: 'Origin',
+  top: 'Top',
+  gource: 'Gource',
+}
 
 export const XR_SETTINGS_TABS = ['visual', 'camera', 'filters', 'music', 'data'] as const
 export type XrSettingsTab = (typeof XR_SETTINGS_TABS)[number]
@@ -103,6 +111,7 @@ export type XrScreenAction =
   | { kind: 'seek'; ratio: number }
   | { kind: 'cycleSpeed' }
   | { kind: 'recenter' }
+  | { kind: 'viewPreset'; view: XrCameraView }
   | { kind: 'exitVr' }
   | { kind: 'toggleMinimap' }
   | { kind: 'authorPage'; delta: number }
@@ -189,6 +198,8 @@ export interface XrRecordingState {
 export interface XrScreenState {
   view: XrScreenView
   settingsTab: XrSettingsTab
+  /** Active camera view, so the matching footer button is highlighted. */
+  cameraView: XrCameraView
   hovered: string | null
   repoLabel: string
   repoTitle: string
@@ -322,25 +333,34 @@ export function screenLayout(
   const transportHeight = footer.y + footer.height - 16 - transportY
 
   const transport: { id: string; label: string; width: number; action: XrScreenAction; active?: boolean }[] = [
-    { id: 'restart', label: 'Restart', width: 100, action: { kind: 'restart' } },
-    { id: 'prev', label: 'Prev', width: 92, action: { kind: 'step', delta: -1 } },
+    { id: 'restart', label: 'Restart', width: 92, action: { kind: 'restart' } },
+    { id: 'prev', label: 'Prev', width: 84, action: { kind: 'step', delta: -1 } },
     {
       id: 'play',
       label: state.playback.playing ? 'Pause' : 'Play',
-      width: 132,
+      width: 120,
       action: { kind: 'togglePlay' },
       active: state.playback.playing,
     },
-    { id: 'next', label: 'Next', width: 92, action: { kind: 'step', delta: 1 } },
-    { id: 'speed', label: `Speed ${state.playback.speed}×`, width: 172, action: { kind: 'cycleSpeed' } },
-    { id: 'recenter-footer', label: 'Recenter', width: 154, action: { kind: 'recenter' } },
+    { id: 'next', label: 'Next', width: 84, action: { kind: 'step', delta: 1 } },
+    { id: 'speed', label: `Speed ${state.playback.speed}×`, width: 146, action: { kind: 'cycleSpeed' } },
+    { id: 'recenter-footer', label: 'Recenter', width: 136, action: { kind: 'recenter' } },
+    ...XR_CAMERA_VIEWS.map(
+      (view): { id: string; label: string; width: number; action: XrScreenAction; active?: boolean } => ({
+        id: `view-${view}`,
+        label: XR_CAMERA_VIEW_LABELS[view],
+        width: 104,
+        action: { kind: 'viewPreset', view },
+        active: state.cameraView === view,
+      }),
+    ),
   ]
   let x = footer.x + 16
   for (const entry of transport) {
     addControl(controls, entry.id, { x, y: transportY, width: entry.width, height: transportHeight }, entry.action, entry.label, {
       active: entry.active,
     })
-    x += entry.width + 10
+    x += entry.width + 8
   }
 
   const jumps: { id: string; label: string; ratio: number }[] = [
@@ -622,6 +642,7 @@ export function xrScreenKey(state: XrScreenState): string {
   return [
     state.view,
     state.settingsTab,
+    state.cameraView,
     state.hovered ?? '',
     state.repoLabel,
     state.summary,
@@ -1350,14 +1371,16 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
       lines: [
         'The bottom strip is the complete history. The bright bars have played.',
         'Rest the reticle anywhere on the strip to seek there.',
-        'Restart, Prev, Play/Pause, Next, Speed and View work exactly like their desktop counterparts.',
+        'Restart, Prev, Play/Pause, Next and Speed work exactly like their desktop counterparts.',
       ],
     },
     {
       title: 'Camera views',
       lines: [
-        'The camera watches the most recent activity and you look around it.',
-        'Settings → Camera sets how high it sits above the table.',
+        'Origin: close to the scene origin, looking at the scene.',
+        'Top: straight down over the whole scene.',
+        'Gource: the Gource view raised by Settings → Camera → VR view height.',
+        'The menu translates with the camera; it is never rotated.',
       ],
     },
     {

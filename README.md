@@ -380,9 +380,12 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   nothing fires by accident. Repeatable controls (stepping, seeking, page turns, volume, view
   height) re-arm after they fire, while toggles wait for you to look away. The gaze ray is cast from
   between the eyes through the plane;
-* the camera watches the damped focus of recent activity: it flies to a vantage over the action and
-  looks at it while your head adds look-around. **Settings → Camera → VR view height** sets how high
-  it sits above the table;
+* three camera views are available from the in-scene menu and the desktop toolbar: **Origin** (close to
+  the scene origin, looking at the scene), **Top** (straight down over the whole scene) and
+  **Gource** (the Gource view raised, watching the damped focus of recent activity). The headset adds
+  look-around in all three. **Settings → Camera → View height** (default 4 m) sets how high Top and
+  Gource sit;
+* the menu translates with the camera whenever it moves, but its orientation is never changed;
 * **recenter** only moves the menu: it is re-placed centred in front of you and the camera is left
   untouched, so it keeps watching the action. Pulling the XR trigger, a tap on the mirrored desktop
   canvas, and the in-screen **Recenter** button all do the same thing;

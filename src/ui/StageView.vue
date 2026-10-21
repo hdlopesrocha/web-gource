@@ -261,6 +261,33 @@ onBeforeUnmount(() => {
           </button>
           <button
             class="btn ghost small"
+            :class="{ active: store.ui.xrCameraView === 'origin' }"
+            type="button"
+            title="VR view: close to the scene origin"
+            @click="controller.setVrView('origin')"
+          >
+            Origin
+          </button>
+          <button
+            class="btn ghost small"
+            :class="{ active: store.ui.xrCameraView === 'top' }"
+            type="button"
+            title="VR view: top-down over the whole scene"
+            @click="controller.setVrView('top')"
+          >
+            Top
+          </button>
+          <button
+            class="btn ghost small"
+            :class="{ active: store.ui.xrCameraView === 'gource' }"
+            type="button"
+            title="VR view: the Gource view, raised"
+            @click="controller.setVrView('gource')"
+          >
+            Gource
+          </button>
+          <button
+            class="btn ghost small"
             type="button"
             title="Reset the 3D camera view (C)"
             @click="controller.resetCamera()"

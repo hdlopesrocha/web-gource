@@ -180,6 +180,8 @@ export interface UiState {
   xrActive: boolean
   /** Last WebXR failure, shown next to the VR button. */
   xrError: string | null
+  /** Selected VR camera view, shared by the headset menu and the desktop toolbar. */
+  xrCameraView: 'origin' | 'top' | 'gource'
   /** True while a gamepad the browser reports is connected. */
   gamepadConnected: boolean
   /** True while the gyroscope is enabled and reporting. */
@@ -361,7 +363,7 @@ const defaultSettings: AppState['settings'] = {
   gamepad: false,
   gamepadSensitivity: 1,
   gyro: false,
-  xrViewHeight: 1.8,
+  xrViewHeight: 4,
 }
 
 const defaultLoadOptions: LoadOptions = {
@@ -482,6 +484,7 @@ export const store = reactive<AppState>({
     xrSupported: false,
     xrActive: false,
     xrError: null,
+    xrCameraView: 'gource',
     gamepadConnected: false,
     gyroActive: false,
     gyroError: null,

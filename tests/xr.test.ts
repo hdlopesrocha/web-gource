@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import {
   XR_OPTIONAL_FEATURES,
-  XR_OVERVIEW_DEFAULT_HEIGHT,
-  XR_OVERVIEW_RADIUS,
+  XR_ORIGIN_BACK,
+  XR_ORIGIN_HEIGHT,
+  XR_VIEW_DEFAULT_HEIGHT,
+  XR_VIEW_BACK,
   XrSession,
   isXrSupported,
   type XrSessionLike,
@@ -263,7 +265,7 @@ describe('XrSession', () => {
     await controller.exit()
   })
 
-  it('flies the camera to a vantage over the followed point', async () => {
+  it('moves the camera between the origin, top and gource views', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -280,6 +282,7 @@ describe('XrSession', () => {
     const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
 
     await controller.enter()
+    expect(controller.view).toBe('gource')
 
     // A realistic headset pose: walking offset and a non-identity orientation.
     const rawPosition = new THREE.Vector3(0.5, 1.6, -0.25)
@@ -289,23 +292,31 @@ describe('XrSession', () => {
     camera.updateMatrixWorld(true)
     expect(controller.fitCameraHeight()).toBe(true)
 
-    // The camera flies to a vantage over the target and looks at it, while the
-    // headset orientation is applied on top.
+    const height = XR_VIEW_DEFAULT_HEIGHT
     const target = new THREE.Vector3(2, -1, 0.4)
     controller.setFollowTarget(target)
+
+    // Gource: an elevated vantage over the followed point.
     expect(controller.applyCameraPose()).toBe(true)
     camera.updateMatrixWorld(true)
-    const height = XR_OVERVIEW_DEFAULT_HEIGHT
-    const horizontal = Math.sqrt(XR_OVERVIEW_RADIUS ** 2 - height ** 2)
-    const vantage = new THREE.Vector3(target.x, target.y - horizontal, target.z + height)
-    const follow = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(follow.distanceTo(vantage)).toBeLessThan(1e-6)
-    const followForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
-      camera.getWorldQuaternion(new THREE.Quaternion()),
-    )
-    expect(followForward.angleTo(vantage.clone().sub(target).negate().normalize())).toBeLessThan(1e-6)
+    const gourceEye = new THREE.Vector3(target.x, target.y - XR_VIEW_BACK, target.z + height)
+    expect(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld).distanceTo(gourceEye)).toBeLessThan(1e-6)
 
-    // Changing the target moves the camera with it.
+    // Top: straight down over the whole scene.
+    controller.setView('top')
+    expect(controller.applyCameraPose()).toBe(true)
+    camera.updateMatrixWorld(true)
+    expect(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld).distanceTo(new THREE.Vector3(0, 0, height))).toBeLessThan(1e-6)
+
+    // Origin: close to the scene origin, looking at the scene.
+    controller.setView('origin')
+    expect(controller.applyCameraPose()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const originEye = new THREE.Vector3(0, -XR_ORIGIN_BACK, XR_ORIGIN_HEIGHT)
+    expect(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld).distanceTo(originEye)).toBeLessThan(1e-6)
+
+    // Changing the gource target moves the camera with it.
+    controller.setView('gource')
     controller.setFollowTarget(new THREE.Vector3(-3, 2, 0.2))
     expect(controller.applyCameraPose()).toBe(true)
 

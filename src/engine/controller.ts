@@ -15,7 +15,7 @@ import {
   type Timeline,
 } from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
-import { clampXrViewHeight } from '../render/xr'
+import { clampXrViewHeight, type XrCameraView } from '../render/xr'
 import { buildSchedule, type ScheduleOptions } from '../timeline/schedule'
 import { Engine, type EngineOptions, type HudState, type XrEngineCommand } from './engine'
 import {
@@ -888,6 +888,15 @@ export class VisualizerController {
    */
   recenterVr(): void {
     this.engine?.recenterVr()
+  }
+
+  /**
+   * Select one of the three VR camera views. Shared by the desktop toolbar and
+   * the in-scene menu; if VR is not running it is remembered for the session.
+   */
+  setVrView(view: XrCameraView): void {
+    this.engine?.setVrView(view)
+    store.ui.xrCameraView = view
   }
 
   /** Settings, filters and music actions initiated from the VR screen. */
