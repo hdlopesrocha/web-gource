@@ -47,9 +47,8 @@ export const XR_SCREEN_ASPECT = XR_SCREEN_CANVAS_HEIGHT / XR_SCREEN_CANVAS_WIDTH
 export const XR_SCREEN_WIDTH_METRES = 2.2
 export const XR_SCREEN_HEIGHT_METRES = XR_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
 
-/** How far in front of the eyes the screen floats, and how high above them. */
+/** How far in front of the eyes the screen floats, in metres. */
 export const XR_SCREEN_DISTANCE = 0.95
-export const XR_SCREEN_RISE = 0.02
 
 /** The flat dashboard shown by the fixed top-down camera. */
 export const XR_2D_SCREEN_WIDTH_METRES = 1.25
@@ -1480,11 +1479,12 @@ export interface XrScreenPose {
 }
 
 /**
- * Place the screen ahead of the head, upright and facing the user.
+ * Place the screen centred in front of the head, oriented like the head.
  *
- * Only the yaw of the head is used, so a momentary glance down cannot tip the
- * whole interface. The screen is fixed once placed, which keeps gaze selection
- * stable.
+ * The plane sits dead on the view axis at {@link XR_SCREEN_DISTANCE} and takes
+ * the headset's orientation, so it is centred and square to the user at the
+ * moment it is placed. It is then fixed in the room, which keeps gaze selection
+ * stable while the head looks around.
  */
 export function screenPose(
   head: THREE.Matrix4,
@@ -1492,17 +1492,10 @@ export function screenPose(
   outQuaternion = new THREE.Quaternion(),
 ): XrScreenPose {
   const forward = new THREE.Vector3(0, 0, -1).transformDirection(head)
-  forward.z = 0
   if (forward.lengthSq() < 1e-9) forward.set(0, 1, 0)
   forward.normalize()
-  const up = new THREE.Vector3(0, 0, 1)
-  const right = new THREE.Vector3().crossVectors(forward, up).normalize()
-  const backward = forward.clone().negate()
-  outQuaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, backward))
-  outPosition
-    .setFromMatrixPosition(head)
-    .addScaledVector(forward, XR_SCREEN_DISTANCE)
-    .addScaledVector(up, XR_SCREEN_RISE)
+  outQuaternion.setFromRotationMatrix(head)
+  outPosition.setFromMatrixPosition(head).addScaledVector(forward, XR_SCREEN_DISTANCE)
   return { position: outPosition, quaternion: outQuaternion }
 }
 

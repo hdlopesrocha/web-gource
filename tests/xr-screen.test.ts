@@ -5,7 +5,6 @@ import {
   XR_SCREEN_CANVAS_HEIGHT,
   XR_SCREEN_CANVAS_WIDTH,
   XR_SCREEN_DISTANCE,
-  XR_SCREEN_RISE,
   XrScreenPanel,
   drawXrScreen,
   hitTestScreen,
@@ -490,28 +489,37 @@ describe('screenPose', () => {
     return new THREE.Matrix4().compose(new THREE.Vector3(...position), rotation, new THREE.Vector3(1, 1, 1))
   }
 
-  it('floats ahead and faces the viewer', () => {
+  it('centres the screen in front of the head and matches its orientation', () => {
     const eye: [number, number, number] = [0.4, -0.2, 1.6]
     const { position, quaternion } = screenPose(head(eye))
     expect(position.x).toBeCloseTo(eye[0])
     expect(position.y).toBeCloseTo(eye[1] + XR_SCREEN_DISTANCE)
-    expect(position.z).toBeCloseTo(eye[2] + XR_SCREEN_RISE)
+    expect(position.z).toBeCloseTo(eye[2])
     const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion)
     expect(normal.y).toBeCloseTo(-1)
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
     expect(up.z).toBeCloseTo(1)
   })
 
-  it('ignores pitch and follows yaw', () => {
-    const level = screenPose(head([0, 0, 1.6]))
+  it('takes the head orientation in full, including pitch, yaw and roll', () => {
+    // Pitch moves the plane onto the tilted view axis, so it stays centred.
     const pitched = screenPose(head([0, 0, 1.6], 0, -0.7))
-    expect(pitched.position.distanceTo(level.position)).toBeLessThan(1e-9)
-    expect(pitched.quaternion.angleTo(level.quaternion)).toBeLessThan(1e-9)
+    const toEye = new THREE.Vector3(0, 0, 1.6).sub(pitched.position).normalize()
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(pitched.quaternion)
+    expect(normal.angleTo(toEye)).toBeLessThan(1e-9)
+    expect(Math.abs(toEye.y)).toBeGreaterThan(0.1)
 
     const turned = screenPose(head([0, 0, 1.6], Math.PI / 2))
     expect(turned.position.x).toBeCloseTo(-XR_SCREEN_DISTANCE)
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(turned.quaternion)
-    expect(normal.x).toBeCloseTo(1)
+
+    // A rolled headset keeps its roll on the plane.
+    const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.3, 0.4, 0.5))
+    const matrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(0, 0, 1.6),
+      rotation,
+      new THREE.Vector3(1, 1, 1),
+    )
+    expect(screenPose(matrix).quaternion.angleTo(rotation)).toBeLessThan(1e-6)
   })
 })
 
