@@ -323,6 +323,37 @@ describe('XrSession', () => {
     await controller.exit()
   })
 
+  it('dollies the camera along its view direction', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session), viewZoom: () => 1 })
+
+    await controller.enter()
+    camera.position.set(0, 1.6, 0)
+    camera.updateMatrixWorld(true)
+    expect(controller.fitCameraHeight()).toBe(true)
+
+    // Top looks straight down, so a +1 dolly moves the eye 1 m closer.
+    controller.setView('top')
+    expect(controller.applyCameraPose()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(eye.distanceTo(new THREE.Vector3(0, 0, XR_VIEW_DEFAULT_HEIGHT - 1))).toBeLessThan(1e-6)
+
+    await controller.exit()
+  })
+
   it('records an error and stays out of VR when requestSession rejects', async () => {
     const renderer = fakeRenderer()
     const denied = Object.assign(new Error('denied'), { name: 'NotAllowedError' })

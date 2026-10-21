@@ -124,6 +124,7 @@ export type XrScreenAction =
   | { kind: 'audioSource'; source: 'file' | 'microphone' }
   | { kind: 'adjustVolume'; delta: number }
   | { kind: 'adjustViewHeight'; delta: number }
+  | { kind: 'adjustZoom'; delta: number }
   | { kind: 'clearMusic' }
   | { kind: 'jump'; ratio: number }
   | { kind: 'cancelLoad' }
@@ -158,6 +159,8 @@ export interface XrScreenSettings {
   fileColorMode: 'extension' | 'activity' | 'flat'
   /** Height of the VR follow camera above the tabletop, in metres. */
   xrViewHeight: number
+  /** Camera dolly along the view direction, in metres. */
+  xrViewZoom: number
 }
 
 export interface XrPlaybackState {
@@ -577,8 +580,8 @@ function addSettingsControls(state: XrScreenState, content: Rect, controls: XrSc
     settingsRow(controls, content, 4, 'cycle:sizeMode', 'File size source', settings.sizeMode, { kind: 'cycleSetting', key: 'sizeMode' })
     settingsRow(controls, content, 5, 'cycle:fileColorMode', 'File colour', settings.fileColorMode, { kind: 'cycleSetting', key: 'fileColorMode' })
     settingsRow(controls, content, 6, 'recenter-settings', 'Recenter view', 'Now', { kind: 'recenter' })
-    settingsRow(controls, content, 7, 'camera-height-down', 'VR height −', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: -0.1 })
-    settingsRow(controls, content, 8, 'camera-height-up', 'VR height +', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: 0.1 })
+    settingsRow(controls, content, 7, 'camera-zoom-out', 'Zoom −', `${settings.xrViewZoom.toFixed(1)} m`, { kind: 'adjustZoom', delta: -0.5 })
+    settingsRow(controls, content, 8, 'camera-zoom-in', 'Zoom +', `${settings.xrViewZoom.toFixed(1)} m`, { kind: 'adjustZoom', delta: 0.5 })
     return
   }
 
@@ -1379,7 +1382,8 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
       lines: [
         'Origin: close to the scene origin, looking at the scene.',
         'Top: straight down over the whole scene.',
-        'Gource: the Gource view raised by Settings → Camera → VR view height.',
+        'Gource: the Gource view raised by the View height setting.',
+        'Zoom + / − dolly the camera along its view direction.',
         'The menu translates with the camera; it is never rotated.',
       ],
     },

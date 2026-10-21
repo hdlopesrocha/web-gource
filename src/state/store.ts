@@ -256,10 +256,12 @@ export interface AppState {
     /** Follow the device's gyroscope (head tracking). */
     gyro: boolean
     /**
-     * Eye height of the VR standard overview above the tabletop, in metres.
-     * Keep in sync with `XR_OVERVIEW_DEFAULT_HEIGHT` in `render/xr.ts`.
+     * Height of the VR Top and Gource views above the tabletop, in metres.
+     * Keep in sync with `XR_VIEW_DEFAULT_HEIGHT` in `render/xr.ts`.
      */
     xrViewHeight: number
+    /** Camera dolly along the view direction in VR, in metres. */
+    xrViewZoom: number
   }
   export: ExportSettings & {
     active: boolean
@@ -364,6 +366,7 @@ const defaultSettings: AppState['settings'] = {
   gamepadSensitivity: 1,
   gyro: false,
   xrViewHeight: 4,
+  xrViewZoom: 0,
 }
 
 const defaultLoadOptions: LoadOptions = {

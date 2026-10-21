@@ -81,6 +81,8 @@ export interface XrSessionOptions {
    * frame so the Settings slider takes effect immediately.
    */
   viewHeight?: () => number
+  /** Camera dolly along the view direction, in metres. Read every frame. */
+  viewZoom?: () => number
 }
 
 /** Reference space type: the floor is the origin, so the user has a real height. */
@@ -100,6 +102,17 @@ export const XR_VIEW_DEFAULT_HEIGHT = 4
 export function clampXrViewHeight(value: number): number {
   if (!Number.isFinite(value)) return XR_VIEW_DEFAULT_HEIGHT
   return Math.min(XR_VIEW_MAX_HEIGHT, Math.max(XR_VIEW_MIN_HEIGHT, value))
+}
+
+/** Bounds and step of the camera dolly (zoom along the view direction), in metres. */
+export const XR_ZOOM_MIN = -8
+export const XR_ZOOM_MAX = 8
+export const XR_ZOOM_STEP = 0.5
+
+/** Clamp a camera dolly value. */
+export function clampXrViewZoom(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(XR_ZOOM_MAX, Math.max(XR_ZOOM_MIN, value))
 }
 
 /** The three camera views the VR menu and the desktop toolbar select. */
@@ -198,6 +211,7 @@ export class XrSession {
   private readonly xr: XrSystemLike | null
   private readonly onSelect: (() => void) | null
   private readonly viewHeight: () => number
+  private readonly viewZoom: () => number
   private session: XrSessionLike | null = null
   private saved: SavedState | null = null
   private cameraHeightFitted = false
@@ -217,6 +231,7 @@ export class XrSession {
   private readonly overviewTarget = new THREE.Vector3()
   private readonly overviewBase = new THREE.Quaternion()
   private readonly overviewMatrix = new THREE.Matrix4()
+  private readonly viewForward = new THREE.Vector3()
 
   constructor(options: XrSessionOptions) {
     this.renderer = options.renderer
@@ -224,6 +239,7 @@ export class XrSession {
     this.xr = 'xr' in options ? (options.xr ?? null) : navigatorXr()
     this.onSelect = options.onSelect ?? null
     this.viewHeight = options.viewHeight ?? (() => XR_VIEW_DEFAULT_HEIGHT)
+    this.viewZoom = options.viewZoom ?? (() => 0)
   }
 
   /** True while an immersive session is running. */
@@ -429,6 +445,17 @@ export class XrSession {
     if (this.cameraView === 'origin') this.setOriginView()
     else if (this.cameraView === 'top') this.setTopView()
     else this.setGourceView()
+
+    // Dolly along the view direction: moving the eye straight at the target
+    // keeps the target centred, so only the position changes.
+    const zoom = clampXrViewZoom(this.viewZoom())
+    if (zoom !== 0) {
+      this.viewForward.copy(this.overviewTarget).sub(this.overviewEye)
+      if (this.viewForward.lengthSq() > 1e-9) {
+        this.viewForward.normalize()
+        this.overviewEye.addScaledVector(this.viewForward, zoom)
+      }
+    }
 
     this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
     this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)

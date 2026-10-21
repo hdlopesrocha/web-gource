@@ -111,7 +111,8 @@ const shortcuts: { keys: string; action: string }[] = [
           the scene origin, looking at the scene), <strong>Top</strong> (straight down over the whole scene) and
           <strong>Gource</strong> (the Gource view raised, watching the recent activity). Your head adds look-around
           in all three, and <strong>Settings → Camera → View height</strong> (default 4 m) sets how high Top and
-          Gource sit. The menu translates with the camera whenever it moves, but is never rotated.
+          Gource sit. The <strong>Zoom + / −</strong> rows dolly the camera along its own view direction. The menu
+          translates with the camera whenever it moves, but is never rotated.
         </p>
         <p class="muted small">
           It is driven by <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever

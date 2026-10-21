@@ -118,6 +118,7 @@ export type XrEngineCommand =
   | { kind: 'audioSource'; source: 'file' | 'microphone' }
   | { kind: 'adjustVolume'; delta: number }
   | { kind: 'adjustViewHeight'; delta: number }
+  | { kind: 'adjustZoom'; delta: number }
   | { kind: 'clearMusic' }
   | { kind: 'cancelLoad' }
 
@@ -605,6 +606,7 @@ export class Engine {
         },
         onSelect: () => this.recenterVr(),
         viewHeight: () => store.settings.xrViewHeight,
+        viewZoom: () => store.settings.xrViewZoom,
       })
     }
     return this.xr
@@ -879,6 +881,10 @@ export class Engine {
         this.onXrScreenCommand?.({ kind: 'adjustViewHeight', delta: action.delta })
         this.resetXrDwell()
         break
+      case 'adjustZoom':
+        this.onXrScreenCommand?.({ kind: 'adjustZoom', delta: action.delta })
+        this.resetXrDwell()
+        break
       case 'clearMusic':
         this.onXrScreenCommand?.({ kind: 'clearMusic' })
         break
@@ -914,6 +920,7 @@ export class Engine {
       sizeMode: this.sizeMode,
       fileColorMode: settings.fileColorMode,
       xrViewHeight: settings.xrViewHeight,
+      xrViewZoom: settings.xrViewZoom,
     }
   }
 

@@ -384,12 +384,13 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   the scene origin, looking at the scene), **Top** (straight down over the whole scene) and
   **Gource** (the Gource view raised, watching the damped focus of recent activity). The headset adds
   look-around in all three. **Settings → Camera → View height** (default 4 m) sets how high Top and
-  Gource sit;
+  Gource sit. The in-scene **Zoom + / −** rows dolly the camera along its own view direction;
 * the menu translates with the camera whenever it moves, but its orientation is never changed;
 * **recenter** only moves the menu: it is re-placed centred in front of you and the camera is left
   untouched, so it keeps watching the action. Pulling the XR trigger, a tap on the mirrored desktop
   canvas, and the in-screen **Recenter** button all do the same thing;
-* the transport controls cover restart, previous commit, play/pause, next commit, speed and view.
+* the transport controls cover restart, previous commit, play/pause, next commit, speed and the three
+  camera-view buttons.
   The speed button cycles the same 0.25×–32× presets as the on-screen selector. **Exit VR** leaves the
   session from inside the headset;
 * nothing here is required for the normal view: without a headset the app behaves exactly as before,

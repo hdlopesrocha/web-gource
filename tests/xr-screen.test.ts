@@ -182,6 +182,7 @@ function screenState(overrides: Partial<XrScreenState> = {}): XrScreenState {
       sizeMode: 'bytes',
       fileColorMode: 'extension',
       xrViewHeight: 1.8,
+      xrViewZoom: 0,
     },
     projects: [{ name: 'acme/web-gource', commits: 120, authors: 3 }],
     minimapVisible: true,
@@ -289,7 +290,7 @@ describe('screenLayout', () => {
 
     const camera = screenLayout(screenState({ view: 'settings', settingsTab: 'camera' }))
     expect(camera.controls.map((entry) => entry.id)).toContain('cycle:sizeMode')
-    expect(camera.controls.map((entry) => entry.id)).toContain('camera-height-up')
+    expect(camera.controls.map((entry) => entry.id)).toContain('camera-zoom-in')
 
     const filters = screenLayout(screenState({ view: 'settings', settingsTab: 'filters' }))
     expect(filters.controls.map((entry) => entry.id)).toContain('setting:hideHiddenFolders')
@@ -459,9 +460,9 @@ describe('drawXrScreen', () => {
     const camera = recordingContext()
     drawXrScreen(camera.ctx, screenState({ view: 'settings', settingsTab: 'camera' }))
     painted = texts(camera.calls)
-    expect(painted).toContain('VR height −')
-    expect(painted).toContain('VR height +')
-    expect(painted).toContain('1.8 m')
+    expect(painted).toContain('Zoom −')
+    expect(painted).toContain('Zoom +')
+    expect(painted).toContain('0.0 m')
   })
 
   it('paints the help and warnings pages', () => {
