@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { XR_OPTIONAL_FEATURES, XrSession, isXrSupported, type XrSessionLike, type XrSystemLike } from '../src/render/xr'
+import {
+  XR_EYE_HEIGHT_SCALE,
+  XR_OPTIONAL_FEATURES,
+  XrSession,
+  isXrSupported,
+  type XrSessionLike,
+  type XrSystemLike,
+} from '../src/render/xr'
 import { store } from '../src/state/store'
 
 /**
@@ -215,6 +222,44 @@ describe('XrSession', () => {
     await controller.exit()
     expect(rig.position.length()).toBe(0)
     expect(rig.quaternion.equals(new THREE.Quaternion())).toBe(true)
+  })
+
+  it('lowers the eyes to a quarter of the measured headset height', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    camera.position.set(7, -3, 9)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
+
+    await controller.enter()
+
+    // three has posed the camera relative to the rig: its local Y is the
+    // headset's real local-floor eye height (about 1.6 m for a standing user).
+    const eyeHeight = 1.6
+    camera.position.set(0, eyeHeight, 0)
+    camera.updateMatrixWorld(true)
+
+    expect(controller.fitCameraHeight()).toBe(true)
+    // The rig moves down so the eyes finish at eyeHeight / 4 above the tree.
+    expect(rig.position.z).toBeCloseTo(-eyeHeight * (1 - XR_EYE_HEIGHT_SCALE), 6)
+    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(eye.z).toBeCloseTo(eyeHeight * XR_EYE_HEIGHT_SCALE, 6)
+    // The pose is only fitted once; later frames leave the user's movement alone.
+    expect(controller.fitCameraHeight()).toBe(false)
+    expect(rig.position.z).toBeCloseTo(-eyeHeight * (1 - XR_EYE_HEIGHT_SCALE), 6)
+
+    await controller.exit()
+    expect(rig.position.z).toBe(0)
   })
 
   it('records an error and stays out of VR when requestSession rejects', async () => {

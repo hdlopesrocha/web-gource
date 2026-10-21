@@ -533,9 +533,10 @@ export class Engine {
    * Enter or leave an immersive VR session.
    *
    * The session owns the framing: the tree is scaled and centred on the scene
-   * origin and the user stands there on the local floor, while their real
-   * headset height places the eyes. The files and folders are already real
-   * spheres, so they keep their parallax in stereo.
+   * origin and the user stands there on the local floor, with the eyes lowered
+   * to a quarter of the headset's measured height so the scene is four times
+   * closer. The files and folders are already real spheres, so they keep their
+   * parallax in stereo.
    */
   async toggleVr(): Promise<void> {
     const xr = this.ensureXr()
@@ -818,7 +819,13 @@ export class Engine {
     // three refreshes the XR camera inside render(); doing it before the scene
     // update gives this frame's camera-facing layers, gaze and panel the current
     // headset pose instead of the previous frame's.
-    if (this.renderer.webgl.xr.isPresenting) this.renderer.webgl.xr.updateCamera(this.rig.camera)
+    if (this.renderer.webgl.xr.isPresenting) {
+      this.renderer.webgl.xr.updateCamera(this.rig.camera)
+      // The first pose reveals the real eye height. Lower the rig so the eyes
+      // sit a quarter of that height above the tabletop, then re-pose the XR
+      // camera once so the panel and reticle use the new head position now.
+      if (this.xr?.fitCameraHeight()) this.renderer.webgl.xr.updateCamera(this.rig.camera)
+    }
     const audio = this.audioLevels?.('live', this.simTime) ?? null
 
     this.renderer.consumeEvents(this.sim, clock)

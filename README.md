@@ -349,9 +349,10 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   has no XR device (or no `navigator.xr` at all) the button is disabled and says so, instead of
   failing when it is pressed;
 * entering a session enables `renderer.xr`, requests the `local-floor` reference space and stands you
-  at the **scene origin** with the real headset eye height (the tree keeps its tabletop scale,
-  centred on the origin); leaving the session (or the headset ending it) restores the exact previous
-  camera and scene transform;
+  at the **scene origin** over the centred tree (the tree keeps its tabletop scale). Once the first
+  headset pose arrives the eyes are lowered to a **quarter of the measured eye height**, so the scene
+  is four times closer than standing at full height; leaving the session (or the headset ending it)
+  restores the exact previous camera and scene transform;
 * while a session is running the frames come from the XR animation loop;
 * **files and folders are always real spheres** — instanced `SphereGeometry` with a light,
   world-scaled and depth-tested. The same representation is used on screen and in VR, where

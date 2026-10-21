@@ -79,6 +79,14 @@ export const XR_REFERENCE_SPACE = 'local-floor'
 export const XR_OPTIONAL_FEATURES = ['local-floor', 'bounded-floor'] as const
 /** The tree is scaled to fit inside this many metres. */
 export const XR_TABLE_SIZE = 1.5
+/**
+ * How much of the headset's real eye height to keep above the tabletop.
+ *
+ * A local-floor pose reports the eyes around 1.6 m above the floor, which
+ * leaves the tabletop far below the view. Placing them at a quarter of that
+ * height brings the scene four times closer while still using the real pose.
+ */
+export const XR_EYE_HEIGHT_SCALE = 1 / 4
 
 /**
  * Rotation that makes the tree's own frame read as a room.
@@ -149,8 +157,10 @@ interface SavedState {
  * `store.ui.xrError` and leaves the app exactly as it was. While a session is
  * running the camera is parented to an XR rig group and the rig is tipped and
  * placed at the local-floor origin (see {@link frameTabletop}), so three can
- * pose the camera from the headset at the user's real eye height; `end` (or
- * `exit()`) restores the previous scene, rig and camera transforms.
+ * pose the camera from the headset; once the first pose arrives the rig is
+ * lowered so the eyes sit at {@link XR_EYE_HEIGHT_SCALE} of their measured
+ * height above the tabletop. `end` (or `exit()`) restores the previous scene,
+ * rig and camera transforms.
  */
 export class XrSession {
   private readonly renderer: XrRendererLike
@@ -158,6 +168,7 @@ export class XrSession {
   private readonly xr: XrSystemLike | null
   private session: XrSessionLike | null = null
   private saved: SavedState | null = null
+  private cameraHeightFitted = false
   private disposed = false
 
   constructor(options: XrSessionOptions) {
@@ -184,6 +195,7 @@ export class XrSession {
   async enter(): Promise<void> {
     if (this.session || this.disposed) return
     store.ui.xrError = null
+    this.cameraHeightFitted = false
 
     const xr = this.xr
     if (!xr) {
@@ -270,9 +282,9 @@ export class XrSession {
    * scaled and centred on the origin, so walking around it in the room orbits
    * the real thing rather than a moved copy.
    *
-   * The rig itself stays on the floor: a `local-floor` headset pose already
-   * carries the user's real eye height, so no on-screen camera height is
-   * involved. The tree is automatically in front of and below the eyes.
+   * The rig starts on the floor; the `local-floor` headset pose carries the
+   * real eye height. {@link fitCameraHeight} then moves the rig down once that
+   * height is known, so the tabletop is not left far below the eyes.
    */
   private frameTabletop(): void {
     const framing = this.framing
@@ -295,12 +307,35 @@ export class XrSession {
     framing.rig.updateMatrixWorld(true)
   }
 
+  /**
+   * Put the eyes at a quarter of their measured height above the tabletop.
+   *
+   * The first XR frame poses the camera relative to the rig; at that point
+   * `camera.position.y` is the real local-floor eye height. Moving the rig down
+   * along the tree normal leaves the headset pose intact while bringing the
+   * whole tabletop four times closer. Call after three has updated the XR
+   * camera. Returns true when the rig moved, so the caller can update the XR
+   * camera again before drawing (otherwise the panel and reticle would use the
+   * old head pose for one frame).
+   */
+  fitCameraHeight(): boolean {
+    if (!this.session || !this.framing || this.cameraHeightFitted) return false
+    const eyeHeight = this.framing.camera.position.y
+    // Ignore the first pose before tracking starts (or an origin-only pose).
+    if (!Number.isFinite(eyeHeight) || eyeHeight < 0.25) return false
+    this.framing.rig.position.z = eyeHeight * (XR_EYE_HEIGHT_SCALE - 1)
+    this.framing.rig.updateMatrixWorld(true)
+    this.cameraHeightFitted = true
+    return true
+  }
+
   /** Restore the flags, the scene transform and the camera parent. */
   private restore(): void {
     const saved = this.saved
     const session = this.session
     this.saved = null
     this.session = null
+    this.cameraHeightFitted = false
     if (session) session.removeEventListener('end', this.onEnd)
     store.ui.xrActive = false
     if (!saved) return

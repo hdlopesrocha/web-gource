@@ -95,12 +95,13 @@ const shortcuts: { keys: string; action: string }[] = [
         <h3>VR & spheres</h3>
         <p class="muted small">
           The <strong>VR</strong> button opens the scene in an immersive WebXR session when the browser has a headset;
-          otherwise the button is disabled and says why. Entering VR puts the camera on a rig so the tree sits in front
-          of you at table height; files and folders are already real 3D spheres, so they keep their depth in stereo.
+          otherwise the button is disabled and says why. Entering VR puts the camera on a rig over the tree and brings
+          the scene close; files and folders are already real 3D spheres, so they keep their depth in stereo.
           Leaving the session (or taking the headset off) restores the exact view you had.
         </p>
         <p class="muted small">
-          Inside the session you stand at the scene origin with the real headset eye height, and the
+          Inside the session you stand at the scene origin with the eyes a quarter of the headset's
+          measured height above the tree, and the
           <strong>timeline travels with you</strong>: a panel placed ahead of the headset and raised into the upper part
           of the view draws the commit histogram, the playhead, the date and the progress with four controls — restart,
           previous, play/pause and next — plus the strip itself, where dwelling seeks to that point. It is driven by
