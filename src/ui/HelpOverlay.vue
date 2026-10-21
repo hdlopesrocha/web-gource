@@ -100,18 +100,27 @@ const shortcuts: { keys: string; action: string }[] = [
           Leaving the session (or taking the headset off) restores the exact view you had.
         </p>
         <p class="muted small">
-          Inside the session you stand at the scene origin with the eyes a quarter of the headset's
-          measured height above the tree, and the
-          <strong>timeline travels with you</strong>: a panel placed ahead of the headset and raised into the upper part
-          of the view draws the commit histogram, the playhead, the date and the progress with six controls — restart,
-          previous, play/pause, next, speed and view — plus the strip itself, where dwelling seeks to that point. The
-          speed button cycles the 0.25×–32× presets. The view button cycles <strong>Free</strong> (head-tracked),
-          <strong>2D</strong> (a fixed top-down overview with the panel laid flat) and <strong>Center</strong> (pinned
-          over the table centre at the current eye height, with head look-around). It is driven by
-          <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever it rests on for
-          <strong>two seconds</strong>, the ring filling as it waits and the hovered control lighting up; looking away
-          resets it, so nothing fires by accident. In the 2D overview the raw headset orientation drives the gaze
-          across the flat panel while the view stays still.
+          Inside the session you stand at the scene origin with the eyes a quarter of the headset's measured height
+          above the tree. The <strong>whole interface travels with you</strong>: one WebGL-rendered plane placed ahead
+          of the headset carries the header, the stage cards (commit, stats and overview minimap), the footer timeline
+          and transport, and the <strong>Activity</strong>, <strong>Authors</strong>, <strong>Settings</strong>,
+          <strong>Help</strong> and <strong>Warnings</strong> pages. Its centre is transparent, so the tree stays
+          visible through the middle of the screen.
+        </p>
+        <p class="muted small">
+          It is driven by <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever
+          it rests on for <strong>two seconds</strong>, the ring filling as it waits and the hovered control lighting
+          up; looking away resets it, so nothing fires by accident. The strip seeks, the buttons step, toggle and
+          cycle, and the Settings tabs expose visual, camera, filter, music and data controls. The view button cycles
+          <strong>Free</strong> (head-tracked), <strong>2D</strong> (a fixed top-down overview with the screen laid
+          flat as a dashboard) and <strong>Center</strong> (pinned over the table centre at the current eye height,
+          with head look-around).
+        </p>
+        <p class="muted small">
+          <strong>Recenter</strong> resets the headset reference: your current heading becomes forward and your eyes
+          settle over the table centre, then the screen is re-placed in front of you. Pulling the XR trigger, tapping
+          the mirrored screen on the desktop, or gazing at a <strong>Recenter</strong> button all do the same thing.
+          <strong>Exit VR</strong> (or taking the headset off) restores the exact view you had.
         </p>
       </section>
 

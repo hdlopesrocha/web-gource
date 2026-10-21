@@ -369,22 +369,30 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
 * **files and folders are always real spheres** — instanced `SphereGeometry` with a light,
   world-scaled and depth-tested. The same representation is used on screen and in VR, where
   camera-facing billboards would read as discs;
-* **the timeline comes with you**: a 3D panel is placed ahead of the headset and raised into the
-  upper part of the view, drawing the commit histogram, the playhead, the date and the progress,
-  plus six controls — restart, previous commit, play/pause, next commit, speed and view — and the
-  strip itself, where dwelling seeks to that point in the history. The speed button cycles the same
-  0.25×–32× presets as the on-screen selector. The view button cycles **Free** (head-tracked),
-  **2D** (a fixed top-down overview, with the panel laid flat as a dashboard) and **Center** (the
-  viewpoint pinned over the table centre at the current eye height, while the head can still look
-  around). The panel is placed from the headset pose itself, so it is in front of you whatever
-  direction the runtime picked at start-up, then stays fixed in the room;
-* it is driven by **gaze**: a circular crosshair sits at the centre of your view and an element is
-  activated once the crosshair rests on it for **2 seconds**, with the ring filling over that time
-  and the hovered control highlighted. Looking away or moving to another control resets the dwell,
-  so nothing fires by accident. The gaze ray is cast from between the eyes through the panel, so it
-  works with the room-scale rig rather than the mouse. In the fixed 2D view the raw headset
-  orientation still drives the gaze, so turning your head sweeps the crosshair across the flat
-  dashboard while the overview itself stays still;
+* **the whole interface comes with you**: one WebGL-rendered plane is placed ahead of the headset and
+  raised into view. It carries the header (repository summary and page buttons), the stage cards
+  (commit details, stats, overview minimap, load notices), the footer timeline with the commit
+  histogram, playhead, date and progress, and dedicated **Activity**, **Authors**, **Settings**,
+  **Help** and **Warnings** pages. Its centre is left transparent, so the tree stays visible through
+  the middle of the screen. The plane is placed from the headset pose itself, so it is in front of
+  you whatever direction the runtime picked at start-up, then stays fixed in the room. In **2D** the
+  same screen is laid flat as a dashboard above the tree;
+* **the screen is driven by gaze**: a circular crosshair sits at the centre of your view and an
+  element activates once it rests on it for **2 seconds**, the ring filling over that time and the
+  hovered control highlighted. Looking away or moving to another control resets the dwell, so
+  nothing fires by accident. Repeatable controls (stepping, seeking, page turns, volume) re-arm
+  after they fire, while toggles wait for you to look away. The gaze ray is cast from between the
+  eyes through the plane, so it works with the room-scale rig rather than the mouse. In the fixed
+  2D view the raw headset orientation still drives the gaze, so turning your head sweeps the
+  crosshair across the flat dashboard while the overview itself stays still;
+* **recenter** resets the headset reference: the current heading becomes forward and the eyes settle
+  over the table centre, then the screen is re-placed in front of you. Pulling the XR trigger, a tap
+  on the mirrored desktop canvas, and the in-screen **Recenter** button all do the same thing;
+* the transport controls cover restart, previous commit, play/pause, next commit, speed and view.
+  The speed button cycles the same 0.25×–32× presets as the on-screen selector. The view button
+  cycles **Free** (head-tracked), **2D** (a fixed top-down overview, with the screen laid flat as a
+  dashboard) and **Center** (the viewpoint pinned over the table centre at the current eye height,
+  while the head can still look around). **Exit VR** leaves the session from inside the headset;
 * nothing here is required for the normal view: without a headset the app behaves exactly as before,
   and the deterministic export ignores the XR state.
 
