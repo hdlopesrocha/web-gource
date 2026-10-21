@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import {
-  XR_EYE_HEIGHT_SCALE,
   XR_OPTIONAL_FEATURES,
   XR_OVERVIEW_DEFAULT_HEIGHT,
   XR_OVERVIEW_RADIUS,
@@ -233,7 +232,7 @@ describe('XrSession', () => {
     expect(rig.quaternion.equals(new THREE.Quaternion())).toBe(true)
   })
 
-  it('lowers the eyes to a quarter of the measured headset height', async () => {
+  it('anchors the camera to the first real headset pose exactly once', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -252,26 +251,20 @@ describe('XrSession', () => {
 
     await controller.enter()
 
-    // three has posed the camera relative to the rig: its local Y is the
-    // headset's real local-floor eye height (about 1.6 m for a standing user).
+    // three poses the camera relative to the rig: its local Y is the headset's
+    // real local-floor eye height (about 1.6 m for a standing user).
     const eyeHeight = 1.6
     camera.position.set(0, eyeHeight, 0)
     camera.updateMatrixWorld(true)
 
     expect(controller.fitCameraHeight()).toBe(true)
-    // The rig moves down so the eyes finish at eyeHeight / 4 above the tree.
-    expect(rig.position.z).toBeCloseTo(-eyeHeight * (1 - XR_EYE_HEIGHT_SCALE), 6)
-    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(eye.z).toBeCloseTo(eyeHeight * XR_EYE_HEIGHT_SCALE, 6)
-    // The pose is only fitted once; later frames leave the user's movement alone.
+    // The pose is only anchored once; later frames leave the user's movement.
     expect(controller.fitCameraHeight()).toBe(false)
-    expect(rig.position.z).toBeCloseTo(-eyeHeight * (1 - XR_EYE_HEIGHT_SCALE), 6)
 
     await controller.exit()
-    expect(rig.position.z).toBe(0)
   })
 
-  it('keeps free room-scale and follows the users from an elevated vantage', async () => {
+  it('mirrors the desktop camera in free and follows the users in follow', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -298,18 +291,18 @@ describe('XrSession', () => {
     camera.updateMatrixWorld(true)
     expect(controller.fitCameraHeight()).toBe(true)
 
-    // Free: the measured-height rig is left in place, so the headset movement
-    // drives the view (room scale).
-    const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0))
-    const home = new THREE.Vector3(0, 0, rawPosition.y * (XR_EYE_HEIGHT_SCALE - 1))
-    const wanted = rawPosition.clone().applyQuaternion(tilt).add(home)
-    expect(controller.applyCameraMode()).toBe(false)
+    // Free: the VR view matches the desktop Gource camera pose, with the
+    // headset orientation applied on top and its translation cancelled.
+    const desktopPosition = new THREE.Vector3(4, -6, 7)
+    const desktopQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, -0.9, 0.1))
+    controller.setMirrorPose(desktopPosition, desktopQuaternion)
+    expect(controller.applyCameraMode()).toBe(true)
     camera.updateMatrixWorld(true)
     const free = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(free.distanceTo(wanted)).toBeLessThan(1e-6)
+    expect(free.distanceTo(desktopPosition)).toBeLessThan(1e-6)
     const freeOrientation = new THREE.Quaternion()
     camera.getWorldQuaternion(freeOrientation)
-    expect(freeOrientation.angleTo(tilt.clone().multiply(rawQuaternion))).toBeLessThan(1e-6)
+    expect(freeOrientation.angleTo(desktopQuaternion)).toBeLessThan(1e-6)
 
     // Follow: the camera flies to a vantage over the target and looks at it,
     // while the headset orientation is applied on top.
@@ -332,12 +325,13 @@ describe('XrSession', () => {
     controller.setFollowTarget(new THREE.Vector3(-3, 2, 0.2))
     expect(controller.applyCameraMode()).toBe(true)
 
-    // Back to free restores the room-scale rig.
+    // Back to free mirrors the desktop camera again.
+    controller.setMirrorPose(desktopPosition, desktopQuaternion)
     controller.setCameraMode('free')
     expect(controller.applyCameraMode()).toBe(true)
     camera.updateMatrixWorld(true)
     const freeAgain = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(freeAgain.distanceTo(wanted)).toBeLessThan(1e-6)
+    expect(freeAgain.distanceTo(desktopPosition)).toBeLessThan(1e-6)
 
     expect(nextXrCameraMode('free')).toBe('follow')
     expect(nextXrCameraMode('follow')).toBe('free')

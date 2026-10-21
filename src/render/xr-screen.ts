@@ -1373,7 +1373,7 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
     {
       title: 'Camera views',
       lines: [
-        'Free: your headset drives the view; move and look around in the room.',
+        'Free: mirrors the desktop Gource camera, with your head looking around it.',
         'Follow: the camera flies with the most recent activity and you look around it.',
         'Settings → Camera sets how high the follow camera sits above the table.',
       ],

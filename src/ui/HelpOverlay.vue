@@ -107,9 +107,10 @@ const shortcuts: { keys: string; action: string }[] = [
           transparent, so the tree stays visible through the middle of the screen.
         </p>
         <p class="muted small">
-          The view button cycles two camera modes. <strong>Free</strong> is room scale: your own headset movement and
-          orientation drive the view. <strong>Follow</strong> flies the camera with the most recent activity and looks
-          at it while you look around; <strong>Settings → Camera</strong> sets how high it sits above the table.
+          The view button cycles two camera modes. <strong>Free</strong> mirrors the desktop Gource camera, so the
+          headset sees the same orbit view (auto-fit and activity follow included) and your head looks around it.
+          <strong>Follow</strong> flies the camera with the most recent activity and looks at it while you look
+          around; <strong>Settings → Camera</strong> sets how high it sits above the table.
         </p>
         <p class="muted small">
           It is driven by <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever

@@ -218,6 +218,9 @@ export class Engine {
   /** Panel pose in scene coordinates, before mapping into the tabletop group. */
   private readonly xrPanelPosition = new THREE.Vector3()
   private readonly xrPanelQuaternion = new THREE.Quaternion()
+  /** Desktop camera pose the `free` VR view mirrors, in scene coordinates. */
+  private readonly xrMirrorPosition = new THREE.Vector3()
+  private readonly xrMirrorQuaternion = new THREE.Quaternion()
   private readonly xrParentPosition = new THREE.Vector3()
   private readonly xrParentQuaternion = new THREE.Quaternion()
   private readonly xrParentScale = new THREE.Vector3()
@@ -1187,13 +1190,25 @@ export class Engine {
     // update gives this frame's camera-facing layers, gaze and panel the current
     // headset pose instead of the previous frame's.
     if (this.renderer.webgl.xr.isPresenting) {
-      // The follow camera watches the damped focus of recent activity.
-      if (this.xr?.mode === 'follow') this.xr.setFollowTarget(this.rig.focusPoint)
+      const xr = this.xr
+      if (xr) {
+        if (xr.mode === 'follow') {
+          // The follow camera watches the damped focus of recent activity.
+          xr.setFollowTarget(this.rig.focusPoint)
+        } else {
+          // Free mirrors the desktop Gource camera. The orbit camera works in
+          // the tree's own frame; the tabletop root only scales and centres, so
+          // mapping its pose by the root's matrix puts it in scene coordinates.
+          this.renderer.world.updateMatrixWorld(true)
+          this.xrMirrorPosition.copy(this.rig.camera.position).applyMatrix4(this.renderer.world.matrixWorld)
+          this.xrMirrorQuaternion.copy(this.rig.camera.quaternion)
+          xr.setMirrorPose(this.xrMirrorPosition, this.xrMirrorQuaternion)
+        }
+      }
       this.renderer.webgl.xr.updateCamera(this.rig.camera)
-      // The first pose reveals the real eye height. Lower the rig so the eyes
-      // sit a quarter of that height above the tabletop. Then apply the chosen
-      // camera behaviour (free room scale or follow); either can move the rig,
-      // so re-pose the XR camera before the panel and reticle update.
+      // The first pose anchors the head reference. Then apply the chosen camera
+      // behaviour (free mirror or follow); either can move the rig, so re-pose
+      // the XR camera before the panel and reticle update.
       const fitted = this.xr?.fitCameraHeight() ?? false
       const posed = this.xr?.applyCameraMode() ?? false
       if (fitted || posed) this.renderer.webgl.xr.updateCamera(this.rig.camera)
