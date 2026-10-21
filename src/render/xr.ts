@@ -99,23 +99,12 @@ export const XR_TABLE_SIZE = 1.5
 export const XR_EYE_HEIGHT_SCALE = 1 / 4
 
 /**
- * Eye height of the fixed top-down overview, in metres above the tabletop.
+ * The vantage the VR `follow` camera watches the action from.
  *
- * A top-down camera at the close-up eye height would only show the middle of
- * the tree, so the overview rises until the whole tabletop fits comfortably in
- * a headset's vertical field of view.
- */
-export const XR_2D_CAMERA_HEIGHT = XR_TABLE_SIZE * 0.75
-
-/**
- * The standard Gource overview used by the `free` camera in VR.
- *
- * The desktop default frames the tree from an orbit at ~53 degrees. WebXR has
- * no mouse, so the equivalent is a fixed vantage on that orbit: the eye sits at
- * {@link XR_OVERVIEW_RADIUS} from the table centre, tilted by whatever height
- * the `VR view height` setting picks, and always looks at the tree. The headset
- * orientation still rotates the view around that base, so the user can look
- * around without leaving the standard view.
+ * It sits on an orbit of {@link XR_OVERVIEW_RADIUS} around the followed point,
+ * tilted by whatever height the `VR view height` setting picks, and always
+ * looks at that point. The headset orientation still rotates the view around
+ * that base, so the user can look around while the camera tracks the action.
  */
 export const XR_OVERVIEW_RADIUS = XR_TABLE_SIZE * 1.5
 /** Bounds of the `VR view height` setting, in metres above the tabletop. */
@@ -134,7 +123,7 @@ export function clampXrViewHeight(value: number): number {
 const XR_UP = new THREE.Vector3(0, 0, 1)
 
 /** The camera behaviours the in-scene View button cycles through. */
-export const XR_CAMERA_MODES = ['free', '2d', 'center'] as const
+export const XR_CAMERA_MODES = ['free', 'follow'] as const
 export type XrCameraMode = (typeof XR_CAMERA_MODES)[number]
 
 /** The next camera behaviour after `mode`, wrapping back to free. */
@@ -229,26 +218,23 @@ export class XrSession {
   private cameraHeightFitted = false
   private disposed = false
   private cameraMode: XrCameraMode = 'free'
-  /** Measured eye height above the tabletop after {@link fitCameraHeight}. */
-  private cameraHeight = 0
-  /** Eye height captured when leaving free mode, for the fixed views. */
-  private centerHeightMetres: number | null = null
   /** The rig transform that leaves the headset pose untouched (free mode). */
+  private readonly homeRigPosition = new THREE.Vector3()
   private readonly homeRigQuaternion = new THREE.Quaternion()
-  /** Headset orientation treated as "looking forward" by the standard view. */
+  /** Headset orientation treated as "looking forward" by the follow camera. */
   private readonly headReference = new THREE.Quaternion()
   private readonly headReferenceInverse = new THREE.Quaternion()
   private hasHeadReference = false
+  /** Scene point the follow camera watches; set by the engine each frame. */
+  private readonly followTarget = new THREE.Vector3()
+  private hasFollowTarget = false
   private readonly rigPosition = new THREE.Vector3()
   private readonly rigQuaternion = new THREE.Quaternion()
   private readonly rotatedPosition = new THREE.Vector3()
-  private readonly rawHeadQuaternion = new THREE.Quaternion()
-  private readonly gazePosition = new THREE.Vector3()
   private readonly overviewEye = new THREE.Vector3()
   private readonly overviewTarget = new THREE.Vector3()
   private readonly overviewBase = new THREE.Quaternion()
   private readonly overviewMatrix = new THREE.Matrix4()
-  private readonly unitScale = new THREE.Vector3(1, 1, 1)
 
   constructor(options: XrSessionOptions) {
     this.renderer = options.renderer
@@ -282,8 +268,7 @@ export class XrSession {
     store.ui.xrError = null
     this.cameraHeightFitted = false
     this.cameraMode = 'free'
-    this.cameraHeight = 0
-    this.centerHeightMetres = null
+    this.hasFollowTarget = false
 
     const xr = this.xr
     if (!xr) {
@@ -397,10 +382,10 @@ export class XrSession {
     framing.rig.quaternion.setFromEuler(XR_RIG_TILT)
     framing.rig.position.set(0, 0, 0)
     framing.rig.updateMatrixWorld(true)
+    this.homeRigPosition.copy(framing.rig.position)
     this.homeRigQuaternion.copy(framing.rig.quaternion)
     this.hasHeadReference = false
-    this.cameraHeight = 0
-    this.centerHeightMetres = null
+    this.hasFollowTarget = false
   }
 
   /**
@@ -409,12 +394,10 @@ export class XrSession {
    * The first XR frame poses the camera relative to the rig; at that point
    * `camera.position.y` is the real local-floor eye height. Moving the rig down
    * along the tree normal leaves the headset pose intact while bringing the
-   * whole tabletop four times closer, which is the height the fixed `center`
-   * view uses. The standard `free` overview overrides this pose afterwards with
-   * its own elevated vantage. Call after three has updated the XR camera.
-   * Returns true when the rig moved, so the caller can update the XR camera
-   * again before drawing (otherwise the panel and reticle would use the old
-   * head pose for one frame).
+   * whole tabletop four times closer. Call after three has updated the XR
+   * camera. Returns true when the rig moved, so the caller can update the XR
+   * camera again before drawing (otherwise the panel and reticle would use the
+   * old head pose for one frame).
    */
   fitCameraHeight(): boolean {
     if (!this.session || !this.framing || this.cameraHeightFitted) return false
@@ -423,14 +406,14 @@ export class XrSession {
     if (!Number.isFinite(eyeHeight) || eyeHeight < 0.25) return false
     this.framing.rig.position.z = eyeHeight * (XR_EYE_HEIGHT_SCALE - 1)
     this.framing.rig.updateMatrixWorld(true)
-    this.cameraHeight = eyeHeight * XR_EYE_HEIGHT_SCALE
-    // The first real pose also anchors the standard overview's forward.
+    this.homeRigPosition.copy(this.framing.rig.position)
+    // The first real pose also anchors the follow camera's forward.
     this.captureHeadReference()
     this.cameraHeightFitted = true
     return true
   }
 
-  /** Remember the headset orientation the standard view should treat as forward. */
+  /** Remember the headset orientation the follow camera treats as forward. */
   private captureHeadReference(): void {
     const framing = this.framing
     if (!framing) return
@@ -439,42 +422,25 @@ export class XrSession {
     this.hasHeadReference = true
   }
 
-  /** The current camera behaviour (free, top-down 2D or fixed centre). */
+  /** The current camera behaviour (free room-scale or follow the users). */
   get mode(): XrCameraMode {
     return this.cameraMode
   }
 
   /**
-   * Treat the current headset pose as the new forward reference.
-   *
-   * WebXR deliberately gives the page no way to reset the headset's own
-   * gyroscope. What we *can* do is re-anchor the standard overview: whatever
-   * direction the user is facing right now becomes the view's forward, while
-   * the eyes stay on the fixed vantage. The runtime's tracking is untouched and
-   * the view jumps exactly like a platform recenter. Returns true when the rig
-   * moved.
+   * Scene point the `follow` camera watches. The engine sets this each frame to
+   * the damped focus of recent activity, so the camera tracks the users.
    */
-  recenter(): boolean {
-    const framing = this.framing
-    if (!this.session || !framing) return false
-    framing.camera.updateMatrixWorld(true)
-    this.captureHeadReference()
-    return this.applyCameraMode()
+  setFollowTarget(target: THREE.Vector3): void {
+    this.followTarget.copy(target)
+    this.hasFollowTarget = true
   }
 
   /** Switch behaviour. The next frame applies the new rig pose. */
   setCameraMode(mode: XrCameraMode): void {
     if (mode === this.cameraMode) return
-    // Leaving the free overview is the moment to remember its vantage height,
-    // so "fixed centre" starts where the user was looking from.
-    if (this.cameraMode === 'free' && this.framing) {
-      this.gazePosition.setFromMatrixPosition(this.framing.camera.matrixWorld)
-      if (Number.isFinite(this.gazePosition.z) && this.gazePosition.z > 0.05) {
-        this.centerHeightMetres = this.gazePosition.z
-      }
-    }
-    // Entering free re-anchors the standard view to where the user is looking.
-    if (mode === 'free') this.hasHeadReference = false
+    // Entering follow re-anchors the base view to where the user is looking.
+    if (mode === 'follow') this.hasHeadReference = false
     this.cameraMode = mode
   }
 
@@ -486,13 +452,10 @@ export class XrSession {
    * the camera's parent, three's XR manager can keep owning the raw pose and
    * still re-pose the camera every render.
    *
-   * - `free` is the standard Gource overview: the eyes are pinned to an
-   *   elevated vantage that looks at the tree, and the headset orientation
-   *   rotates the view around that base.
-   * - `center` keeps the head's orientation but cancels its horizontal
-   *   translation, pinning the eyes over the table centre at the measured
-   *   height.
-   * - `2d` also cancels orientation, leaving a fixed top-down view.
+   * - `free` leaves the measured-height rig in place, so the user's own headset
+   *   movement drives the view (room scale).
+   * - `follow` flies the camera to a vantage over the followed point and looks
+   *   at it, with the headset orientation rotating the view around that base.
    *
    * Returns true when the rig changed, so the caller can re-pose the XR camera
    * before drawing the panel and gaze.
@@ -500,79 +463,42 @@ export class XrSession {
   applyCameraMode(): boolean {
     const framing = this.framing
     if (!this.session || !framing) return false
-    if (this.cameraMode === 'free') return this.applyOverview()
-
-    if (this.cameraMode === 'center') {
-      this.rigQuaternion.copy(this.homeRigQuaternion)
-      this.rigPosition.set(0, 0, this.centerHeight())
-    } else {
-      // Cancel the headset's orientation as well as its translation.
-      this.rigQuaternion.copy(framing.camera.quaternion).invert()
-      this.rigPosition.set(0, 0, this.overviewHeight())
+    if (this.cameraMode === 'free') {
+      return this.applyRigPose(this.homeRigPosition, this.homeRigQuaternion)
     }
-    this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
-    this.rigPosition.sub(this.rotatedPosition)
-    return this.applyRigPose(this.rigPosition, this.rigQuaternion)
+    return this.applyFollow()
   }
 
   /**
-   * The standard Gource overview used by `free` mode.
+   * The follow camera: watch the action from an elevated vantage.
    *
-   * The desktop default looks at the tree from an orbit; in VR the equivalent
-   * is a fixed point on that orbit, tilted by the `VR view height` setting and
-   * always facing the table centre. The headset's rotation is applied on top of
-   * that base, and its translation is cancelled, so the user can look around
-   * from the standard vantage without walking out of the frame.
+   * The eye sits on an orbit around the followed point, at the `VR view height`
+   * setting, and always faces it. The headset rotation is applied on top of that
+   * base and its translation is cancelled, so the user looks around while the
+   * camera tracks the users.
    */
-  private applyOverview(): boolean {
+  private applyFollow(): boolean {
     const framing = this.framing
     if (!framing) return false
     if (!this.hasHeadReference) this.captureHeadReference()
 
     const height = clampXrViewHeight(this.viewHeight())
     const horizontal = Math.sqrt(Math.max(0, XR_OVERVIEW_RADIUS * XR_OVERVIEW_RADIUS - height * height))
+    if (this.hasFollowTarget) this.overviewTarget.copy(this.followTarget)
+    else this.overviewTarget.set(0, 0, 0)
+    const target = this.overviewTarget
     // Standard direction: from -Y (the desktop default yaw), looking at the
-    // table centre.
-    this.overviewEye.set(0, -horizontal, height)
-    this.overviewTarget.set(0, 0, 0)
-    this.overviewMatrix.lookAt(this.overviewEye, this.overviewTarget, XR_UP)
+    // followed point.
+    this.overviewEye.set(target.x, target.y - horizontal, target.z + height)
+    this.overviewMatrix.lookAt(this.overviewEye, target, XR_UP)
     this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
 
     // `world = base * (reference⁻¹ * headset)`, so the reference orientation
-    // faces the tree and head rotation is relative to it.
+    // faces the action and head rotation is relative to it.
     this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
     this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
     this.rigPosition.copy(this.overviewEye).sub(this.rotatedPosition)
     return this.applyRigPose(this.rigPosition, this.rigQuaternion)
-  }
-
-  /**
-   * The pose that should drive gaze in 2D mode.
-   *
-   * The rendered view is locked top-down, so using the rendered camera for the
-   * reticle would leave it frozen at the centre of the screen. Instead the
-   * headset's *raw* orientation is used from the fixed camera position: turning
-   * the head sweeps the reticle across the flat panel like a pointer, while the
-   * overview itself stays still.
-   *
-   * Returns false outside 2D mode, so the caller uses the normal XR head pose.
-   */
-  headForGaze(out: THREE.Matrix4): boolean {
-    const framing = this.framing
-    if (this.cameraMode !== '2d' || !framing) return false
-    this.gazePosition.setFromMatrixPosition(framing.camera.matrixWorld)
-    this.rawHeadQuaternion.copy(this.homeRigQuaternion).multiply(framing.camera.quaternion)
-    out.compose(this.gazePosition, this.rawHeadQuaternion, this.unitScale)
-    return true
-  }
-
-  private centerHeight(): number {
-    const height = this.centerHeightMetres ?? this.cameraHeight
-    return Math.max(0.05, height || XR_TABLE_SIZE * XR_EYE_HEIGHT_SCALE)
-  }
-
-  private overviewHeight(): number {
-    return Math.max(this.centerHeight(), XR_2D_CAMERA_HEIGHT)
   }
 
   private applyRigPose(position: THREE.Vector3, quaternion: THREE.Quaternion): boolean {
@@ -595,9 +521,8 @@ export class XrSession {
     this.session = null
     this.cameraHeightFitted = false
     this.cameraMode = 'free'
-    this.cameraHeight = 0
-    this.centerHeightMetres = null
     this.hasHeadReference = false
+    this.hasFollowTarget = false
     if (session) {
       session.removeEventListener('end', this.onEnd)
       session.removeEventListener('select', this.onSelectEvent)

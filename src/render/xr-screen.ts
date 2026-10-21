@@ -50,16 +50,10 @@ export const XR_SCREEN_HEIGHT_METRES = XR_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
 /** How far in front of the eyes the screen floats, in metres. */
 export const XR_SCREEN_DISTANCE = 0.95
 
-/** The flat dashboard shown by the fixed top-down camera. */
-export const XR_2D_SCREEN_WIDTH_METRES = 1.25
-export const XR_2D_SCREEN_HEIGHT_METRES = XR_2D_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
-export const XR_2D_SCREEN_CENTER = { x: 0, y: 0.45, z: 0.12 } as const
-
 /** Human-readable camera-mode labels used by the footer button. */
 export const XR_SCREEN_CAMERA_LABELS: Record<XrCameraMode, string> = {
-  free: 'Standard',
-  '2d': '2D',
-  center: 'Center',
+  free: 'Free',
+  follow: 'Follow',
 }
 
 export const XR_SCREEN_VIEWS = ['stage', 'activity', 'authors', 'settings', 'help', 'warnings'] as const
@@ -1364,7 +1358,7 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
       title: 'Recenter',
       lines: [
         'Press the controller trigger, or click the mirrored desktop canvas, to recenter.',
-        'Your current heading becomes the standard view forward, without leaving the vantage.',
+        'The menu comes back centred in front of you; the camera is not moved.',
         'The header and footer also have a Recenter button.',
       ],
     },
@@ -1379,10 +1373,9 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
     {
       title: 'Camera views',
       lines: [
-        'Standard: the Gource overview, looking at the tree from a fixed elevated vantage.',
-        'The headset still looks around; Settings → Camera sets how high that vantage sits.',
-        '2D: fixed top-down overview with this screen laid flat as a dashboard.',
-        'Center: pinned over the table centre at your current eye height while you look around.',
+        'Free: your headset drives the view; move and look around in the room.',
+        'Follow: the camera flies with the most recent activity and you look around it.',
+        'Settings → Camera sets how high the follow camera sits above the table.',
       ],
     },
     {
@@ -1497,13 +1490,6 @@ export function screenPose(
   outQuaternion.setFromRotationMatrix(head)
   outPosition.setFromMatrixPosition(head).addScaledVector(forward, XR_SCREEN_DISTANCE)
   return { position: outPosition, quaternion: outQuaternion }
-}
-
-/** Physical dimensions of the screen for a camera mode. */
-export function screenSizeMetres(mode: XrCameraMode): { width: number; height: number } {
-  return mode === '2d'
-    ? { width: XR_2D_SCREEN_WIDTH_METRES, height: XR_2D_SCREEN_HEIGHT_METRES }
-    : { width: XR_SCREEN_WIDTH_METRES, height: XR_SCREEN_HEIGHT_METRES }
 }
 
 /* -------------------------------------------------------------------------- *

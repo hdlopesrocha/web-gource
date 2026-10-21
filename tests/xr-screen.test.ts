@@ -364,7 +364,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('Add the VR dashboard')
     expect(painted).toContain('Pause')
     expect(painted).toContain('Speed 2×')
-    expect(painted).toContain('View Standard')
+    expect(painted).toContain('View Free')
     expect(painted).toContain('Restart')
     expect(painted.some((text) => text.includes('Gaze for 2 s'))).toBe(true)
     expect(painted.some((text) => text.includes('WEB GOURCE'))).toBe(true)
@@ -454,7 +454,7 @@ describe('drawXrScreen', () => {
     drawXrScreen(camera.ctx, screenState({ view: 'settings', settingsTab: 'camera' }))
     painted = texts(camera.calls)
     expect(painted).toContain('Camera view')
-    expect(painted).toContain('Standard')
+    expect(painted).toContain('Free')
     expect(painted).toContain('VR height −')
     expect(painted).toContain('VR height +')
     expect(painted).toContain('1.8 m')
@@ -467,7 +467,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('How the immersive screen works')
     expect(painted).toContain('Gaze & dwell')
     expect(painted).toContain('Recenter')
-    expect(painted.some((text) => text.startsWith('Standard:'))).toBe(true)
+    expect(painted.some((text) => text.startsWith('Free:'))).toBe(true)
 
     const warnings = recordingContext()
     drawXrScreen(

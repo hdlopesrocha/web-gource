@@ -266,7 +266,7 @@ describe('xrCommand', () => {
     expect(controlLabel('restart', false)).toBe('Restart')
     expect(controlLabel('speed', false, 2)).toBe('Speed 2×')
     expect(controlLabel('speed', false, 0.25)).toBe('Speed 0.25×')
-    for (const mode of ['free', '2d', 'center'] as const) {
+    for (const mode of ['free', 'follow'] as const) {
       expect(controlLabel('camera', false, 1, mode)).toBe(`View ${XR_CAMERA_MODE_LABELS[mode]}`)
     }
   })
@@ -276,7 +276,7 @@ describe('xrPanelKey', () => {
   it('changes when the speed or camera mode changes', () => {
     const base = xrPanelKey(panelState())
     expect(xrPanelKey(panelState({ speed: 2 }))).not.toBe(base)
-    expect(xrPanelKey(panelState({ cameraMode: '2d' }))).not.toBe(base)
+    expect(xrPanelKey(panelState({ cameraMode: 'follow' }))).not.toBe(base)
     expect(xrPanelKey(panelState({ speed: 1, cameraMode: 'free' }))).toBe(base)
   })
 })
@@ -332,7 +332,7 @@ describe('XrTimelinePanel', () => {
     expect(panel.redraw(panelState({ playing: true }))).toBe(true)
     expect(calls.length).toBeGreaterThan(afterFirst)
     expect(panel.redraw(panelState({ speed: 2 }))).toBe(true)
-    expect(panel.redraw(panelState({ cameraMode: '2d' }))).toBe(true)
+    expect(panel.redraw(panelState({ cameraMode: 'follow' }))).toBe(true)
     panel.dispose()
   })
 

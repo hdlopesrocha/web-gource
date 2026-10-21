@@ -435,7 +435,7 @@ onMounted(() => {
               :value="settings.xrViewHeight"
               @input="update({ xrViewHeight: Number(($event.target as HTMLInputElement).value) })"
             />
-            <span class="faint hint">How high the headset's standard overview sits above the table.</span>
+            <span class="faint hint">How high the headset's follow camera sits above the table.</span>
           </div>
         </section>
         <section class="group">

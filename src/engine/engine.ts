@@ -6,17 +6,17 @@ import { OrbitCamera, type CameraOptions } from '../render/camera'
 import { CameraControls } from './controls'
 import { nextPlaybackSpeed } from './speeds'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
-import { XrSession, nextXrCameraMode, type XrCameraMode } from '../render/xr'
+import { XrSession, nextXrCameraMode } from '../render/xr'
 import { createDwellState, dwell, dwellProgress, XrReticle } from '../render/xr-ui'
 import {
-  XR_2D_SCREEN_CENTER,
   XR_SCREEN_CANVAS_HEIGHT,
   XR_SCREEN_CANVAS_WIDTH,
+  XR_SCREEN_HEIGHT_METRES,
+  XR_SCREEN_WIDTH_METRES,
   XrScreenPanel,
   hitTestScreen,
   screenLayout,
   screenPose,
-  screenSizeMetres,
   xrScreenAction,
   xrScreenTargetId,
   type XrCycleSetting,
@@ -190,8 +190,6 @@ export class Engine {
   private readonly xrDwell = createDwellState()
   /** Current screen hit rectangles, regenerated from the screen state. */
   private xrLayout: XrScreenLayout | null = null
-  /** The camera mode the panel was last posed for. */
-  private xrPanelMode: XrCameraMode | null = null
   /** The element the gaze is resting on, for the panel highlight. */
   private xrHovered: string | null = null
   /** Active page on the immersive dashboard. */
@@ -610,22 +608,16 @@ export class Engine {
    * ------------------------------------------------------------------ */
 
   /**
-   * Recenter the immersive view on the current headset heading.
+   * Put the menu back in front of the user.
    *
-   * WebXR has no API to reset the physical gyroscope, so this re-anchors the
-   * standard overview: the current heading becomes forward and the screen is
-   * re-placed in front of it. Trigger, mirrored canvas clicks and the Recenter
-   * controls all land here.
+   * This never touches the camera: the view stays free or following the users.
+   * Only the screen is re-placed, centred on the current head orientation, and
+   * then fixed. Trigger, mirrored canvas clicks and the Recenter buttons all
+   * land here.
    */
   recenterVr(): void {
     const xr = this.xr
     if (!xr?.active) return
-    if (xr.mode !== 'free') xr.setCameraMode('free')
-    xr.recenter()
-    // The rig moved under the camera; refresh the XR camera before placing the
-    // screen so it appears in front of the *new* forward direction.
-    this.renderer.webgl.xr.updateCamera(this.rig.camera)
-    this.xrPanelMode = xr.mode
     if (this.xrPanel) this.placeXrScreen()
     this.xrHovered = null
     this.resetXrDwell()
@@ -659,10 +651,8 @@ export class Engine {
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
     this.xrDwell.fired = false
-    this.xrPanelMode = this.xr?.mode ?? 'free'
     this.xrLayout = screenLayout(this.xrScreenState())
-    if (this.xrPanelMode === '2d') this.placeXrScreen2D()
-    else this.placeXrScreen()
+    this.placeXrScreen()
   }
 
   /** Remove the screen and crosshair (a no-op when there is none). */
@@ -677,7 +667,6 @@ export class Engine {
       this.xrReticle.dispose()
       this.xrReticle = null
     }
-    this.xrPanelMode = null
     this.xrLayout = null
     this.xrMinimap = null
     this.xrActivityCursor = null
@@ -696,9 +685,6 @@ export class Engine {
    * the midpoint of the eye cameras while the orientation stays theirs.
    */
   private xrHead(): THREE.Matrix4 {
-    // In the fixed 2D view the rendered camera is top-down, so the reticle uses
-    // the raw headset orientation instead (see XrSession.headForGaze).
-    if (this.xr?.headForGaze(this.xrHeadMatrix)) return this.xrHeadMatrix
     const camera = this.renderer.webgl.xr.getCamera()
     this.xrHeadMatrix.copy(camera.matrixWorld)
     const eyes = camera.cameras
@@ -726,19 +712,6 @@ export class Engine {
     this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
-  /**
-   * Lay the screen flat on the tabletop for the 2D overview.
-   *
-   * A top-down camera would see an upright screen edge-on, so the entire UI
-   * becomes a horizontal dashboard. Gaze still uses the raw headset
-   * orientation, which sweeps the reticle over this plane.
-   */
-  private placeXrScreen2D(): void {
-    this.xrPanelPosition.set(XR_2D_SCREEN_CENTER.x, XR_2D_SCREEN_CENTER.y, XR_2D_SCREEN_CENTER.z)
-    this.xrPanelQuaternion.identity()
-    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
-  }
-
   /** Map a scene-space screen pose into the tabletop group and apply it. */
   private applyXrScreenPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
     const panel = this.xrPanel
@@ -752,8 +725,7 @@ export class Engine {
     world.matrixWorld.decompose(this.xrParentPosition, this.xrParentQuaternion, this.xrParentScale)
     panel.mesh.position.copy(position).applyMatrix4(this.xrRayMatrix)
     panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(quaternion)
-    const size = screenSizeMetres(this.xrPanelMode ?? this.xr?.mode ?? 'free')
-    panel.mesh.scale.set(size.width / scale, size.height / scale, 1)
+    panel.mesh.scale.set(XR_SCREEN_WIDTH_METRES / scale, XR_SCREEN_HEIGHT_METRES / scale, 1)
     panel.mesh.updateMatrixWorld(true)
   }
 
@@ -1122,20 +1094,6 @@ export class Engine {
     const reticle = this.xrReticle
     if (!panel || !reticle) return
 
-    // Entering or leaving the top-down overview moves the screen between the
-    // upright dashboard and a flat tabletop panel. Repose it before the gaze is
-    // cast.
-    const mode = this.xr?.mode ?? 'free'
-    if (mode !== this.xrPanelMode) {
-      this.xrPanelMode = mode
-      this.xrHovered = null
-      this.xrDwell.target = null
-      this.xrDwell.elapsed = 0
-      this.xrDwell.fired = false
-      if (mode === '2d') this.placeXrScreen2D()
-      else this.placeXrScreen()
-    }
-
     const state = this.xrScreenState()
     this.xrLayout = screenLayout(state)
     const hit = this.gazeHit()
@@ -1229,11 +1187,13 @@ export class Engine {
     // update gives this frame's camera-facing layers, gaze and panel the current
     // headset pose instead of the previous frame's.
     if (this.renderer.webgl.xr.isPresenting) {
+      // The follow camera watches the damped focus of recent activity.
+      if (this.xr?.mode === 'follow') this.xr.setFollowTarget(this.rig.focusPoint)
       this.renderer.webgl.xr.updateCamera(this.rig.camera)
       // The first pose reveals the real eye height. Lower the rig so the eyes
       // sit a quarter of that height above the tabletop. Then apply the chosen
-      // camera behaviour (free, 2D overview or fixed centre); either can move
-      // the rig, so re-pose the XR camera before the panel and reticle update.
+      // camera behaviour (free room scale or follow); either can move the rig,
+      // so re-pose the XR camera before the panel and reticle update.
       const fitted = this.xr?.fitCameraHeight() ?? false
       const posed = this.xr?.applyCameraMode() ?? false
       if (fitted || posed) this.renderer.webgl.xr.updateCamera(this.rig.camera)

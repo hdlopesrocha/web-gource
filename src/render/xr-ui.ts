@@ -56,8 +56,7 @@ export const XR_2D_PANEL_CENTER = { x: 0, y: 0.55, z: 0.05 } as const
 /** Human-readable names for the camera-mode button. */
 export const XR_CAMERA_MODE_LABELS: Record<XrCameraMode, string> = {
   free: 'Free',
-  '2d': '2D',
-  center: 'Center',
+  follow: 'Follow',
 }
 
 /** The controls, in the order they are laid out left to right. */
