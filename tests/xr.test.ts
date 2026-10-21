@@ -2,10 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import {
+  XR_2D_CAMERA_HEIGHT,
   XR_EYE_HEIGHT_SCALE,
   XR_OPTIONAL_FEATURES,
   XrSession,
   isXrSupported,
+  nextXrCameraMode,
   type XrSessionLike,
   type XrSystemLike,
 } from '../src/render/xr'
@@ -260,6 +262,83 @@ describe('XrSession', () => {
 
     await controller.exit()
     expect(rig.position.z).toBe(0)
+  })
+
+  it('cycles free, fixed-centre and top-down camera modes with the headset pose intact', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
+
+    await controller.enter()
+    expect(controller.mode).toBe('free')
+
+    // A realistic headset pose: walking offset and a non-identity orientation.
+    const rawPosition = new THREE.Vector3(0.5, 1.6, -0.25)
+    const rawQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0.3, 0.1))
+    camera.position.copy(rawPosition)
+    camera.quaternion.copy(rawQuaternion)
+    camera.updateMatrixWorld(true)
+    expect(controller.fitCameraHeight()).toBe(true)
+    expect(controller.applyCameraMode()).toBe(false)
+
+    // Fixed centre: horizontal translation is cancelled, orientation is kept.
+    controller.setCameraMode('center')
+    expect(controller.applyCameraMode()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const centre = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(centre.x).toBeCloseTo(0, 6)
+    expect(centre.y).toBeCloseTo(0, 6)
+    expect(centre.z).toBeCloseTo(rawPosition.y * XR_EYE_HEIGHT_SCALE, 6)
+    const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0))
+    const expectedOrientation = tilt.clone().multiply(rawQuaternion)
+    const centreOrientation = new THREE.Quaternion()
+    camera.getWorldQuaternion(centreOrientation)
+    expect(centreOrientation.angleTo(expectedOrientation)).toBeLessThan(1e-6)
+    expect(controller.headForGaze(new THREE.Matrix4())).toBe(false)
+
+    // 2D: the view is locked top-down at the overview height, while gaze uses
+    // the raw headset orientation from the same position.
+    controller.setCameraMode('2d')
+    expect(controller.applyCameraMode()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const overview = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(overview.x).toBeCloseTo(0, 6)
+    expect(overview.y).toBeCloseTo(0, 6)
+    expect(overview.z).toBeCloseTo(XR_2D_CAMERA_HEIGHT, 6)
+    expect(camera.getWorldQuaternion(new THREE.Quaternion()).angleTo(new THREE.Quaternion())).toBeLessThan(1e-6)
+
+    const gaze = new THREE.Matrix4()
+    expect(controller.headForGaze(gaze)).toBe(true)
+    const gazePosition = new THREE.Vector3().setFromMatrixPosition(gaze)
+    expect(gazePosition.distanceTo(overview)).toBeLessThan(1e-6)
+    const gazeOrientation = new THREE.Quaternion().setFromRotationMatrix(gaze)
+    expect(gazeOrientation.angleTo(expectedOrientation)).toBeLessThan(1e-6)
+
+    // Back to free: the measured-height rig and raw head pose return.
+    controller.setCameraMode('free')
+    expect(controller.applyCameraMode()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const free = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    const wanted = rawPosition.clone().applyQuaternion(tilt)
+    wanted.z += rawPosition.y * (XR_EYE_HEIGHT_SCALE - 1)
+    expect(free.distanceTo(wanted)).toBeLessThan(1e-6)
+    expect(controller.headForGaze(new THREE.Matrix4())).toBe(false)
+
+    expect(nextXrCameraMode('free')).toBe('2d')
+    expect(nextXrCameraMode('2d')).toBe('center')
+    expect(nextXrCameraMode('center')).toBe('free')
+    await controller.exit()
   })
 
   it('records an error and stays out of VR when requestSession rejects', async () => {

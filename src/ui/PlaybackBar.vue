@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { controller } from '../engine/controller'
+import { PLAYBACK_SPEEDS } from '../engine/speeds'
 import { store } from '../state/store'
 import { formatDateTime, formatDuration } from '../timeline/schedule'
 import TimelineScrubber from './TimelineScrubber.vue'
 
-const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
+const SPEEDS = PLAYBACK_SPEEDS
 const scrubbing = ref(false)
 const scrubTime = ref(0)
 const jumpDate = ref('')

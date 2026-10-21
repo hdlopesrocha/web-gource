@@ -103,11 +103,15 @@ const shortcuts: { keys: string; action: string }[] = [
           Inside the session you stand at the scene origin with the eyes a quarter of the headset's
           measured height above the tree, and the
           <strong>timeline travels with you</strong>: a panel placed ahead of the headset and raised into the upper part
-          of the view draws the commit histogram, the playhead, the date and the progress with four controls — restart,
-          previous, play/pause and next — plus the strip itself, where dwelling seeks to that point. It is driven by
+          of the view draws the commit histogram, the playhead, the date and the progress with six controls — restart,
+          previous, play/pause, next, speed and view — plus the strip itself, where dwelling seeks to that point. The
+          speed button cycles the 0.25×–32× presets. The view button cycles <strong>Free</strong> (head-tracked),
+          <strong>2D</strong> (a fixed top-down overview with the panel laid flat) and <strong>Center</strong> (pinned
+          over the table centre at the current eye height, with head look-around). It is driven by
           <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever it rests on for
           <strong>two seconds</strong>, the ring filling as it waits and the hovered control lighting up; looking away
-          resets it, so nothing fires by accident.
+          resets it, so nothing fires by accident. In the 2D overview the raw headset orientation drives the gaze
+          across the flat panel while the view stays still.
         </p>
       </section>
 

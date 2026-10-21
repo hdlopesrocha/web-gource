@@ -4,9 +4,11 @@ import { buildSchedule, type Schedule, type ScheduleOptions } from '../timeline/
 import { Simulation, type SizeMode } from '../sim/simulation'
 import { OrbitCamera, type CameraOptions } from '../render/camera'
 import { CameraControls } from './controls'
+import { nextPlaybackSpeed } from './speeds'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
-import { XrSession } from '../render/xr'
+import { XrSession, nextXrCameraMode, type XrCameraMode } from '../render/xr'
 import {
+  XR_2D_PANEL_CENTER,
   XR_PANEL_CANVAS_HEIGHT,
   XR_PANEL_CANVAS_WIDTH,
   XR_PANEL_HEIGHT_METRES,
@@ -166,6 +168,8 @@ export class Engine {
   private readonly xrDwell = createDwellState()
   /** Panel hit rectangles, matching the panel's canvas. */
   private xrLayout: XrPanelLayout = panelLayout()
+  /** The camera mode the panel was last posed for. */
+  private xrPanelMode: XrCameraMode | null = null
   /** The element the gaze is resting on, for the panel highlight. */
   private xrHovered: string | null = null
   /** Cached activity histogram for the panel (invalidated by timeline changes). */
@@ -591,7 +595,9 @@ export class Engine {
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
     this.xrDwell.fired = false
-    this.placeXrPanel()
+    this.xrPanelMode = this.xr?.mode ?? 'free'
+    if (this.xrPanelMode === '2d') this.placeXrPanel2D()
+    else this.placeXrPanel()
   }
 
   /** Remove the panel and crosshair (a no-op when there is none). */
@@ -606,6 +612,7 @@ export class Engine {
       this.xrReticle.dispose()
       this.xrReticle = null
     }
+    this.xrPanelMode = null
     this.xrHovered = null
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
@@ -620,6 +627,9 @@ export class Engine {
    * the midpoint of the eye cameras while the orientation stays theirs.
    */
   private xrHead(): THREE.Matrix4 {
+    // In the fixed 2D view the rendered camera is top-down, so the reticle uses
+    // the raw headset orientation instead (see XrSession.headForGaze).
+    if (this.xr?.headForGaze(this.xrHeadMatrix)) return this.xrHeadMatrix
     const camera = this.renderer.webgl.xr.getCamera()
     this.xrHeadMatrix.copy(camera.matrixWorld)
     const eyes = camera.cameras
@@ -643,18 +653,36 @@ export class Engine {
    * fixed in the room, which is what makes gaze selection stable.
    */
   private placeXrPanel(): void {
+    panelPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
+    this.applyXrPanelPose(this.xrPanelPosition, this.xrPanelQuaternion)
+  }
+
+  /**
+   * Lay the panel flat near the far edge of the tabletop for the 2D overview.
+   *
+   * A top-down camera would see an upright panel edge-on, so the panel becomes
+   * a horizontal dashboard. Gaze still uses the raw headset orientation, which
+   * sweeps the reticle over this plane.
+   */
+  private placeXrPanel2D(): void {
+    this.xrPanelPosition.set(XR_2D_PANEL_CENTER.x, XR_2D_PANEL_CENTER.y, XR_2D_PANEL_CENTER.z)
+    this.xrPanelQuaternion.identity()
+    this.applyXrPanelPose(this.xrPanelPosition, this.xrPanelQuaternion)
+  }
+
+  /** Map a scene-space panel pose into the tabletop group and apply it. */
+  private applyXrPanelPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
     const panel = this.xrPanel
     if (!panel) return
     const world = this.renderer.world
     world.updateMatrixWorld(true)
     const scale = Math.max(1e-6, world.matrixWorld.getMaxScaleOnAxis())
-    panelPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
     // Scene pose -> the tabletop group's local frame. The group is only scaled
     // and translated today, but decomposing keeps this right if it ever rotates.
     this.xrRayMatrix.copy(world.matrixWorld).invert()
     world.matrixWorld.decompose(this.xrParentPosition, this.xrParentQuaternion, this.xrParentScale)
-    panel.mesh.position.copy(this.xrPanelPosition).applyMatrix4(this.xrRayMatrix)
-    panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(this.xrPanelQuaternion)
+    panel.mesh.position.copy(position).applyMatrix4(this.xrRayMatrix)
+    panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(quaternion)
     panel.mesh.scale.set(XR_PANEL_WIDTH_METRES / scale, XR_PANEL_HEIGHT_METRES / scale, 1)
     panel.mesh.updateMatrixWorld(true)
   }
@@ -706,6 +734,12 @@ export class Engine {
       case 'seek':
         this.seek(command.ratio * this.schedule.duration)
         break
+      case 'cycleSpeed':
+        this.setSpeed(nextPlaybackSpeed(this.speed))
+        break
+      case 'cycleCamera':
+        if (this.xr) this.xr.setCameraMode(nextXrCameraMode(this.xr.mode))
+        break
     }
   }
 
@@ -722,6 +756,19 @@ export class Engine {
     const reticle = this.xrReticle
     if (!panel || !reticle) return
 
+    // Entering or leaving the top-down overview moves the panel between the
+    // upright HUD and a flat dashboard. Repose it before the gaze is cast.
+    const mode = this.xr?.mode ?? 'free'
+    if (mode !== this.xrPanelMode) {
+      this.xrPanelMode = mode
+      this.xrHovered = null
+      this.xrDwell.target = null
+      this.xrDwell.elapsed = 0
+      this.xrDwell.fired = false
+      if (mode === '2d') this.placeXrPanel2D()
+      else this.placeXrPanel()
+    }
+
     const hit = this.gazeHit()
     this.xrHovered = hitTargetId(hit)
 
@@ -732,6 +779,8 @@ export class Engine {
       date: formatDateTime(this.computeDate()),
       progress: this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0,
       playing: this.playing,
+      speed: this.speed,
+      cameraMode: mode,
       hovered: this.xrHovered,
     }
     panel.redraw(state)
@@ -822,9 +871,12 @@ export class Engine {
     if (this.renderer.webgl.xr.isPresenting) {
       this.renderer.webgl.xr.updateCamera(this.rig.camera)
       // The first pose reveals the real eye height. Lower the rig so the eyes
-      // sit a quarter of that height above the tabletop, then re-pose the XR
-      // camera once so the panel and reticle use the new head position now.
-      if (this.xr?.fitCameraHeight()) this.renderer.webgl.xr.updateCamera(this.rig.camera)
+      // sit a quarter of that height above the tabletop. Then apply the chosen
+      // camera behaviour (free, 2D overview or fixed centre); either can move
+      // the rig, so re-pose the XR camera before the panel and reticle update.
+      const fitted = this.xr?.fitCameraHeight() ?? false
+      const posed = this.xr?.applyCameraMode() ?? false
+      if (fitted || posed) this.renderer.webgl.xr.updateCamera(this.rig.camera)
     }
     const audio = this.audioLevels?.('live', this.simTime) ?? null
 

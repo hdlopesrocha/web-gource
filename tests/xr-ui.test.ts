@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
+  XR_2D_PANEL_CENTER,
+  XR_CAMERA_MODE_LABELS,
   XR_CONTROL_ORDER,
   XR_PANEL_CANVAS_HEIGHT,
   XR_PANEL_CANVAS_WIDTH,
@@ -21,6 +23,7 @@ import {
   panelLayout,
   panelPose,
   xrCommand,
+  xrPanelKey,
   type XrPanelState,
 } from '../src/render/xr-ui'
 import type { ActivityBucket } from '../src/timeline/types'
@@ -88,16 +91,25 @@ function panelState(overrides: Partial<XrPanelState> = {}): XrPanelState {
     date: '2024-03-06 14:30',
     progress: 0.25,
     playing: false,
+    speed: 1,
+    cameraMode: 'free',
     hovered: null,
     ...overrides,
   }
 }
 
 describe('panelLayout', () => {
-  it('lays the four controls out in order below the timeline strip', () => {
+  it('lays the six controls out in order below the timeline strip', () => {
     const layout = panelLayout(XR_PANEL_CANVAS_WIDTH, XR_PANEL_CANVAS_HEIGHT)
     expect(layout.controls.map((control) => control.id)).toEqual([...XR_CONTROL_ORDER])
-    expect(layout.controls.map((control) => control.id)).toEqual(['restart', 'prev', 'play', 'next'])
+    expect(layout.controls.map((control) => control.id)).toEqual([
+      'restart',
+      'prev',
+      'play',
+      'next',
+      'speed',
+      'camera',
+    ])
 
     const timelineBottom = layout.timeline.y + layout.timeline.height
     for (const control of layout.controls) {
@@ -243,13 +255,29 @@ describe('xrCommand', () => {
     expect(xrCommand({ kind: 'control', id: 'prev' })).toEqual({ kind: 'step', delta: -1 })
     expect(xrCommand({ kind: 'control', id: 'play' })).toEqual({ kind: 'togglePlay' })
     expect(xrCommand({ kind: 'control', id: 'next' })).toEqual({ kind: 'step', delta: 1 })
+    expect(xrCommand({ kind: 'control', id: 'speed' })).toEqual({ kind: 'cycleSpeed' })
+    expect(xrCommand({ kind: 'control', id: 'camera' })).toEqual({ kind: 'cycleCamera' })
     expect(xrCommand({ kind: 'timeline', ratio: 0.25 })).toEqual({ kind: 'seek', ratio: 0.25 })
   })
 
-  it('flips the play label with the playback state', () => {
+  it('flips the play label and shows the current speed and view', () => {
     expect(controlLabel('play', false)).toBe('Play')
     expect(controlLabel('play', true)).toBe('Pause')
     expect(controlLabel('restart', false)).toBe('Restart')
+    expect(controlLabel('speed', false, 2)).toBe('Speed 2×')
+    expect(controlLabel('speed', false, 0.25)).toBe('Speed 0.25×')
+    for (const mode of ['free', '2d', 'center'] as const) {
+      expect(controlLabel('camera', false, 1, mode)).toBe(`View ${XR_CAMERA_MODE_LABELS[mode]}`)
+    }
+  })
+})
+
+describe('xrPanelKey', () => {
+  it('changes when the speed or camera mode changes', () => {
+    const base = xrPanelKey(panelState())
+    expect(xrPanelKey(panelState({ speed: 2 }))).not.toBe(base)
+    expect(xrPanelKey(panelState({ cameraMode: '2d' }))).not.toBe(base)
+    expect(xrPanelKey(panelState({ speed: 1, cameraMode: 'free' }))).toBe(base)
   })
 })
 
@@ -267,8 +295,10 @@ describe('drawXrPanel', () => {
 
     const labels = texts(calls)
     for (const control of XR_CONTROL_ORDER) {
-      expect(labels).toContain(controlLabel(control, false))
+      expect(labels).toContain(controlLabel(control, false, 1, 'free'))
     }
+    expect(labels).toContain('Speed 1×')
+    expect(labels).toContain('View Free')
     expect(labels).toContain('2024-03-06 14:30')
     expect(labels).toContain('25%')
   })
@@ -301,6 +331,8 @@ describe('XrTimelinePanel', () => {
 
     expect(panel.redraw(panelState({ playing: true }))).toBe(true)
     expect(calls.length).toBeGreaterThan(afterFirst)
+    expect(panel.redraw(panelState({ speed: 2 }))).toBe(true)
+    expect(panel.redraw(panelState({ cameraMode: '2d' }))).toBe(true)
     panel.dispose()
   })
 
@@ -332,6 +364,15 @@ describe('drawReticle', () => {
     const { ctx, calls } = recordingContext()
     drawReticle(ctx, { progress: 0, hovered: false }, 128)
     expect(calls.filter((call) => call.method === 'arc').length).toBe(2)
+  })
+})
+
+describe('2D panel placement', () => {
+  it('keeps the flat dashboard near the far edge of the tabletop', () => {
+    expect(XR_2D_PANEL_CENTER.x).toBe(0)
+    expect(XR_2D_PANEL_CENTER.y).toBeGreaterThan(0)
+    expect(XR_2D_PANEL_CENTER.y).toBeLessThan(0.75)
+    expect(XR_2D_PANEL_CENTER.z).toBeGreaterThan(0)
   })
 })
 

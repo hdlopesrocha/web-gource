@@ -371,15 +371,20 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   camera-facing billboards would read as discs;
 * **the timeline comes with you**: a 3D panel is placed ahead of the headset and raised into the
   upper part of the view, drawing the commit histogram, the playhead, the date and the progress,
-  plus four controls — restart, previous commit, play/pause and next commit — and the strip itself,
-  where dwelling seeks to that point in the history. It is placed from the headset pose itself, so
-  it is in front of you whatever direction the runtime picked at start-up, then stays fixed in the
-  room;
+  plus six controls — restart, previous commit, play/pause, next commit, speed and view — and the
+  strip itself, where dwelling seeks to that point in the history. The speed button cycles the same
+  0.25×–32× presets as the on-screen selector. The view button cycles **Free** (head-tracked),
+  **2D** (a fixed top-down overview, with the panel laid flat as a dashboard) and **Center** (the
+  viewpoint pinned over the table centre at the current eye height, while the head can still look
+  around). The panel is placed from the headset pose itself, so it is in front of you whatever
+  direction the runtime picked at start-up, then stays fixed in the room;
 * it is driven by **gaze**: a circular crosshair sits at the centre of your view and an element is
   activated once the crosshair rests on it for **2 seconds**, with the ring filling over that time
   and the hovered control highlighted. Looking away or moving to another control resets the dwell,
   so nothing fires by accident. The gaze ray is cast from between the eyes through the panel, so it
-  works with the room-scale rig rather than the mouse;
+  works with the room-scale rig rather than the mouse. In the fixed 2D view the raw headset
+  orientation still drives the gaze, so turning your head sweeps the crosshair across the flat
+  dashboard while the overview itself stays still;
 * nothing here is required for the normal view: without a headset the app behaves exactly as before,
   and the deterministic export ignores the XR state.
 

@@ -89,6 +89,25 @@ export const XR_TABLE_SIZE = 1.5
 export const XR_EYE_HEIGHT_SCALE = 1 / 4
 
 /**
+ * Eye height of the fixed top-down overview, in metres above the tabletop.
+ *
+ * A top-down camera at the close-up eye height would only show the middle of
+ * the tree, so the overview rises until the whole tabletop fits comfortably in
+ * a headset's vertical field of view.
+ */
+export const XR_2D_CAMERA_HEIGHT = XR_TABLE_SIZE * 0.75
+
+/** The camera behaviours the in-scene View button cycles through. */
+export const XR_CAMERA_MODES = ['free', '2d', 'center'] as const
+export type XrCameraMode = (typeof XR_CAMERA_MODES)[number]
+
+/** The next camera behaviour after `mode`, wrapping back to free. */
+export function nextXrCameraMode(mode: XrCameraMode): XrCameraMode {
+  const index = XR_CAMERA_MODES.indexOf(mode)
+  return XR_CAMERA_MODES[(index + 1) % XR_CAMERA_MODES.length] ?? 'free'
+}
+
+/**
  * Rotation that makes the tree's own frame read as a room.
  *
  * The scene is authored Z-up (the camera's up vector is the plane normal), while
@@ -170,6 +189,20 @@ export class XrSession {
   private saved: SavedState | null = null
   private cameraHeightFitted = false
   private disposed = false
+  private cameraMode: XrCameraMode = 'free'
+  /** Measured eye height above the tabletop after {@link fitCameraHeight}. */
+  private cameraHeight = 0
+  /** Eye height captured when leaving free mode, for the fixed views. */
+  private centerHeightMetres: number | null = null
+  /** The rig transform that leaves the headset pose untouched (free mode). */
+  private readonly homeRigPosition = new THREE.Vector3()
+  private readonly homeRigQuaternion = new THREE.Quaternion()
+  private readonly rigPosition = new THREE.Vector3()
+  private readonly rigQuaternion = new THREE.Quaternion()
+  private readonly rotatedPosition = new THREE.Vector3()
+  private readonly rawHeadQuaternion = new THREE.Quaternion()
+  private readonly gazePosition = new THREE.Vector3()
+  private readonly unitScale = new THREE.Vector3(1, 1, 1)
 
   constructor(options: XrSessionOptions) {
     this.renderer = options.renderer
@@ -196,6 +229,9 @@ export class XrSession {
     if (this.session || this.disposed) return
     store.ui.xrError = null
     this.cameraHeightFitted = false
+    this.cameraMode = 'free'
+    this.cameraHeight = 0
+    this.centerHeightMetres = null
 
     const xr = this.xr
     if (!xr) {
@@ -305,6 +341,10 @@ export class XrSession {
     framing.rig.quaternion.setFromEuler(XR_RIG_TILT)
     framing.rig.position.set(0, 0, 0)
     framing.rig.updateMatrixWorld(true)
+    this.homeRigPosition.copy(framing.rig.position)
+    this.homeRigQuaternion.copy(framing.rig.quaternion)
+    this.cameraHeight = 0
+    this.centerHeightMetres = null
   }
 
   /**
@@ -325,7 +365,106 @@ export class XrSession {
     if (!Number.isFinite(eyeHeight) || eyeHeight < 0.25) return false
     this.framing.rig.position.z = eyeHeight * (XR_EYE_HEIGHT_SCALE - 1)
     this.framing.rig.updateMatrixWorld(true)
+    this.cameraHeight = eyeHeight * XR_EYE_HEIGHT_SCALE
+    this.homeRigPosition.copy(this.framing.rig.position)
     this.cameraHeightFitted = true
+    return true
+  }
+
+  /** The current camera behaviour (free, top-down 2D or fixed centre). */
+  get mode(): XrCameraMode {
+    return this.cameraMode
+  }
+
+  /** Switch behaviour. The next frame applies the new rig pose. */
+  setCameraMode(mode: XrCameraMode): void {
+    if (mode === this.cameraMode) return
+    // Free mode is the only one where the headset's current stance is visible;
+    // capture it so "fixed centre" means the height the user is at right now.
+    if (this.cameraMode === 'free' && this.framing) {
+      this.gazePosition.setFromMatrixPosition(this.framing.camera.matrixWorld)
+      if (Number.isFinite(this.gazePosition.z) && this.gazePosition.z > 0.05) {
+        this.centerHeightMetres = this.gazePosition.z
+      }
+    }
+    this.cameraMode = mode
+  }
+
+  /**
+   * Apply the selected camera behaviour to the rig.
+   *
+   * The headset pose itself is never changed: instead the rig is moved and
+   * rotated so that `rig * headsetPose` is the view we want. Because the rig is
+   * the camera's parent, three's XR manager can keep owning the raw pose and
+   * still re-pose the camera every render.
+   *
+   * - `free` restores the measured-height rig, so head translation is kept.
+   * - `center` keeps the head's orientation but cancels its horizontal
+   *   translation, pinning the eyes over the table centre at the measured
+   *   height.
+   * - `2d` also cancels orientation, leaving a fixed top-down view.
+   *
+   * Returns true when the rig changed, so the caller can re-pose the XR camera
+   * before drawing the panel and gaze.
+   */
+  applyCameraMode(): boolean {
+    const framing = this.framing
+    if (!this.session || !framing) return false
+    if (this.cameraMode === 'free') {
+      return this.applyRigPose(this.homeRigPosition, this.homeRigQuaternion)
+    }
+
+    if (this.cameraMode === 'center') {
+      this.rigQuaternion.copy(this.homeRigQuaternion)
+      this.rigPosition.set(0, 0, this.centerHeight())
+    } else {
+      // Cancel the headset's orientation as well as its translation.
+      this.rigQuaternion.copy(framing.camera.quaternion).invert()
+      this.rigPosition.set(0, 0, this.overviewHeight())
+    }
+    this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
+    this.rigPosition.sub(this.rotatedPosition)
+    return this.applyRigPose(this.rigPosition, this.rigQuaternion)
+  }
+
+  /**
+   * The pose that should drive gaze in 2D mode.
+   *
+   * The rendered view is locked top-down, so using the rendered camera for the
+   * reticle would leave it frozen at the centre of the screen. Instead the
+   * headset's *raw* orientation is used from the fixed camera position: turning
+   * the head sweeps the reticle across the flat panel like a pointer, while the
+   * overview itself stays still.
+   *
+   * Returns false outside 2D mode, so the caller uses the normal XR head pose.
+   */
+  headForGaze(out: THREE.Matrix4): boolean {
+    const framing = this.framing
+    if (this.cameraMode !== '2d' || !framing) return false
+    this.gazePosition.setFromMatrixPosition(framing.camera.matrixWorld)
+    this.rawHeadQuaternion.copy(this.homeRigQuaternion).multiply(framing.camera.quaternion)
+    out.compose(this.gazePosition, this.rawHeadQuaternion, this.unitScale)
+    return true
+  }
+
+  private centerHeight(): number {
+    const height = this.centerHeightMetres ?? this.cameraHeight
+    return Math.max(0.05, height || XR_TABLE_SIZE * XR_EYE_HEIGHT_SCALE)
+  }
+
+  private overviewHeight(): number {
+    return Math.max(this.centerHeight(), XR_2D_CAMERA_HEIGHT)
+  }
+
+  private applyRigPose(position: THREE.Vector3, quaternion: THREE.Quaternion): boolean {
+    const rig = this.framing?.rig
+    if (!rig) return false
+    const unchanged =
+      rig.position.distanceToSquared(position) < 1e-12 && rig.quaternion.angleTo(quaternion) < 1e-7
+    if (unchanged) return false
+    rig.position.copy(position)
+    rig.quaternion.copy(quaternion)
+    rig.updateMatrixWorld(true)
     return true
   }
 
@@ -336,6 +475,9 @@ export class XrSession {
     this.saved = null
     this.session = null
     this.cameraHeightFitted = false
+    this.cameraMode = 'free'
+    this.cameraHeight = 0
+    this.centerHeightMetres = null
     if (session) session.removeEventListener('end', this.onEnd)
     store.ui.xrActive = false
     if (!saved) return

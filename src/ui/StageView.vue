@@ -10,6 +10,7 @@ import AuthorsPanel from './AuthorsPanel.vue'
 import MinimapPanel from './MinimapPanel.vue'
 import { loadingPercent } from '../state/store'
 import { EXPORT_FPS } from '../engine/export/frames'
+import { PLAYBACK_SPEEDS } from '../engine/speeds'
 import { isXrSupported } from '../render/xr'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -74,7 +75,7 @@ function onKeydown(event: KeyboardEvent): void {
   if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
   if (event.metaKey || event.ctrlKey || event.altKey) return
 
-  const speedSteps = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
+  const speedSteps = PLAYBACK_SPEEDS
   const currentSpeed = store.hud?.speed ?? 1
 
   switch (event.key) {

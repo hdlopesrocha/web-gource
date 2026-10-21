@@ -19,6 +19,7 @@
 
 import * as THREE from 'three'
 import type { ActivityBucket } from '../timeline/types'
+import type { XrCameraMode } from './xr'
 import { drawActivityBars, drawPanel, TEXT_COLOR, TEXT_STRONG } from './overlays'
 
 /** Seconds the gaze must rest on an element before it activates. */
@@ -43,8 +44,24 @@ export const XR_PANEL_RISE = 0.28
 /** Distance from the headset the reticle is drawn at, in metres. */
 export const XR_RETICLE_DISTANCE = 0.85
 
+/**
+ * Where the panel sits when the camera is in the fixed top-down overview.
+ *
+ * The coordinates are metres in the tabletop frame: the centre of the table is
+ * the origin, +Y is the top of the overview and +Z is up. Lying flat near the
+ * far edge keeps the controls visible without covering the middle of the tree.
+ */
+export const XR_2D_PANEL_CENTER = { x: 0, y: 0.55, z: 0.05 } as const
+
+/** Human-readable names for the camera-mode button. */
+export const XR_CAMERA_MODE_LABELS: Record<XrCameraMode, string> = {
+  free: 'Free',
+  '2d': '2D',
+  center: 'Center',
+}
+
 /** The controls, in the order they are laid out left to right. */
-export const XR_CONTROL_ORDER = ['restart', 'prev', 'play', 'next'] as const
+export const XR_CONTROL_ORDER = ['restart', 'prev', 'play', 'next', 'speed', 'camera'] as const
 export type XrControlId = (typeof XR_CONTROL_ORDER)[number]
 
 export interface Rect {
@@ -69,7 +86,7 @@ export interface XrPanelLayout {
 /**
  * Hit rectangles for the panel, as plain data.
  *
- * The timeline strip spans the top of the panel and the four controls sit in a
+ * The timeline strip spans the top of the panel and the six controls sit in a
  * row along the bottom, in {@link XR_CONTROL_ORDER}. Kept separate from the
  * drawing so the geometry (and therefore the gaze hit-testing) can be asserted
  * without a canvas.
@@ -166,6 +183,8 @@ export type XrCommand =
   | { kind: 'step'; delta: number }
   | { kind: 'togglePlay' }
   | { kind: 'seek'; ratio: number }
+  | { kind: 'cycleSpeed' }
+  | { kind: 'cycleCamera' }
 
 export function xrCommand(hit: XrHit): XrCommand {
   if (hit.kind === 'timeline') return { kind: 'seek', ratio: hit.ratio }
@@ -178,6 +197,10 @@ export function xrCommand(hit: XrHit): XrCommand {
       return { kind: 'togglePlay' }
     case 'next':
       return { kind: 'step', delta: 1 }
+    case 'speed':
+      return { kind: 'cycleSpeed' }
+    case 'camera':
+      return { kind: 'cycleCamera' }
   }
 }
 
@@ -235,12 +258,26 @@ export interface XrPanelState {
   /** Playback progress, 0…1. */
   progress: number
   playing: boolean
+  /** Current playback speed multiplier. */
+  speed: number
+  /** Current immersive camera behaviour. */
+  cameraMode: XrCameraMode
   /** The element the gaze is resting on (`control:<id>` or `timeline`). */
   hovered: string | null
 }
 
-/** The label of a control, which flips between Play and Pause. */
-export function controlLabel(id: XrControlId, playing: boolean): string {
+/**
+ * The label of a control.
+ *
+ * Play flips between Play and Pause; the speed and view buttons show their
+ * current value so a glance at the panel explains the state.
+ */
+export function controlLabel(
+  id: XrControlId,
+  playing: boolean,
+  speed = 1,
+  cameraMode: XrCameraMode = 'free',
+): string {
   switch (id) {
     case 'restart':
       return 'Restart'
@@ -250,6 +287,10 @@ export function controlLabel(id: XrControlId, playing: boolean): string {
       return playing ? 'Pause' : 'Play'
     case 'next':
       return 'Next'
+    case 'speed':
+      return `Speed ${speed}×`
+    case 'camera':
+      return `View ${XR_CAMERA_MODE_LABELS[cameraMode]}`
   }
 }
 
@@ -264,10 +305,19 @@ export function xrPanelKey(state: XrPanelState): string {
   let commits = 0
   for (const bucket of state.buckets) commits += bucket.commits
   const step = state.duration > 0 ? Math.round((state.position / state.duration) * 512) : 0
-  return [state.buckets.length, commits, state.date, step, state.playing ? 1 : 0, state.hovered ?? ''].join('|')
+  return [
+    state.buckets.length,
+    commits,
+    state.date,
+    step,
+    state.playing ? 1 : 0,
+    state.speed,
+    state.cameraMode,
+    state.hovered ?? '',
+  ].join('|')
 }
 
-/** Draw the panel: histogram, playhead, date/progress and the four controls. */
+/** Draw the panel: histogram, playhead, date/progress and the six controls. */
 export function drawXrPanel(
   ctx: CanvasRenderingContext2D,
   state: XrPanelState,
@@ -278,6 +328,7 @@ export function drawXrPanel(
   const pad = Math.max(8, Math.round(width * 0.018))
   const unit = Math.max(11, Math.round(Math.min(width, height) * 0.1))
   const font = `${unit}px "Inter", system-ui, sans-serif`
+  const controlFont = `${Math.max(10, Math.round(unit * 0.88))}px "Inter", system-ui, sans-serif`
 
   ctx.clearRect(0, 0, width, height)
   ctx.save()
@@ -323,11 +374,11 @@ export function drawXrPanel(
       background: hovered ? 'rgba(94, 200, 255, 0.24)' : 'rgba(255, 255, 255, 0.05)',
       border: hovered ? 'rgba(94, 200, 255, 0.95)' : 'rgba(255, 255, 255, 0.12)',
     })
-    ctx.font = font
+    ctx.font = controlFont
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = hovered ? TEXT_STRONG : TEXT_COLOR
-    ctx.fillText(controlLabel(control.id, state.playing), rect.x + rect.width / 2, rect.y + rect.height / 2)
+    ctx.fillText(controlLabel(control.id, state.playing, state.speed, state.cameraMode), rect.x + rect.width / 2, rect.y + rect.height / 2)
   }
 
   ctx.restore()
