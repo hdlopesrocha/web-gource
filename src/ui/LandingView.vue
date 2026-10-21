@@ -18,6 +18,7 @@ const SAMPLE_REPOSITORIES = [
   'hdlopesrocha/lithos-engine', // 2024-12-09
   'hdlopesrocha/vulkan-engine', // 2025-12-06
   'hdlopesrocha/opencode-talk', // 2026-10-07
+  'hdlopesrocha/web-gource', // 2026-10-11
   'hdlopesrocha/infinity-edge-web', // 2026-10-14
 ]
 const sampleFillLabel = `Fill ${SAMPLE_REPOSITORIES.length} repositories`
