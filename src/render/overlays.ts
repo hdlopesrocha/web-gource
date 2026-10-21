@@ -33,12 +33,14 @@ export interface ActivityBarsOptions {
   /** Optional window (filters highlight a sub-range). */
   window?: { from: number; to: number } | null
   font?: string
+  /** Clear the target first (default true; pass false when drawing over a panel). */
+  clear?: boolean
 }
 
 /** The timeline histogram: one bar per bucket, brighter once played. */
 export function drawActivityBars(ctx: CanvasRenderingContext2D, options: ActivityBarsOptions): void {
   const { width, height, buckets, position, duration } = options
-  ctx.clearRect(0, 0, width, height)
+  if (options.clear !== false) ctx.clearRect(0, 0, width, height)
 
   let max = 0
   for (const bucket of buckets) max = Math.max(max, bucket.commits)
@@ -140,12 +142,14 @@ export interface WeekdayHourOptions {
   height: number
   grid: WeekdayHourGrid
   font?: string
+  /** Clear the target first (default true; pass false when drawing over a card). */
+  clear?: boolean
 }
 
 /** Commits per weekday (rows, Sunday first) and hour (columns). */
 export function drawWeekdayHour(ctx: CanvasRenderingContext2D, options: WeekdayHourOptions): void {
   const { width, height, grid } = options
-  ctx.clearRect(0, 0, width, height)
+  if (options.clear !== false) ctx.clearRect(0, 0, width, height)
 
   const { cellWidth: cell, cellHeight: rowHeight, gap, labelWidth, labelHeight } = weekdayHourLayout(width, height)
 
@@ -176,12 +180,14 @@ export interface CalendarOptions {
   height: number
   calendar: ContributionCalendar
   font?: string
+  /** Clear the target first (default true; pass false when drawing over a card). */
+  clear?: boolean
 }
 
 /** GitHub-style contribution calendar: 53 week columns, Sunday-first rows. */
 export function drawContributionCalendar(ctx: CanvasRenderingContext2D, options: CalendarOptions): void {
   const { width, height, calendar } = options
-  ctx.clearRect(0, 0, width, height)
+  if (options.clear !== false) ctx.clearRect(0, 0, width, height)
 
   const columns = Math.max(1, calendar.weeks.length)
   const { cellWidth: cell, cellHeight: rowHeight, gap, labelWidth, labelHeight } = calendarLayout(width, height, columns)
