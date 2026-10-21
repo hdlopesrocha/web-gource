@@ -553,6 +553,15 @@ describe('XrScreenPanel', () => {
     expect(panel.redraw(state)).toBe(false)
     expect(panel.redraw({ ...state, hovered: 'play' })).toBe(true)
     expect(panel.canvasElement).toBe(canvas)
+
+    // A front-facing twin rotated 180 degrees makes the back read correctly.
+    const material = panel.mesh.material as THREE.MeshBasicMaterial
+    expect(material.side).toBe(THREE.FrontSide)
+    const back = panel.mesh.children[0] as THREE.Mesh
+    expect(back).toBeInstanceOf(THREE.Mesh)
+    expect(back.rotation.y).toBeCloseTo(Math.PI, 6)
+    expect(back.material).toBe(material)
+    expect(back.geometry).toBe(panel.mesh.geometry)
     panel.dispose()
   })
 })

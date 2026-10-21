@@ -1564,9 +1564,11 @@ function makeCanvas(width: number, height: number, injected?: HTMLCanvasElement)
   return { canvas, ctx: canvas.getContext('2d') }
 }
 
-/** A single plane carrying the complete UI canvas. */
+/** A single plane carrying the complete UI canvas, readable from either side. */
 export class XrScreenPanel {
   readonly mesh: THREE.Mesh
+  /** Coplanar twin facing the other way, so the back reads un-mirrored. */
+  private readonly back: THREE.Mesh
   private readonly canvas: HTMLCanvasElement
   private readonly ctx: CanvasRenderingContext2D | null
   private readonly texture: THREE.CanvasTexture
@@ -1585,12 +1587,21 @@ export class XrScreenPanel {
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
       toneMapped: false,
     })
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+    const geometry = new THREE.PlaneGeometry(1, 1)
+    this.mesh = new THREE.Mesh(geometry, material)
     this.mesh.renderOrder = 1000
     this.mesh.frustumCulled = false
+    // A plane is single-sided, so a DoubleSide material would show a mirrored
+    // image from behind. Rotate a twin by 180 degrees instead and front-face
+    // both: only one is ever drawn, and both read left-to-right.
+    this.back = new THREE.Mesh(geometry, material)
+    this.back.rotation.y = Math.PI
+    this.back.renderOrder = 1001
+    this.back.frustumCulled = false
+    this.mesh.add(this.back)
   }
 
   get canvasElement(): HTMLCanvasElement {

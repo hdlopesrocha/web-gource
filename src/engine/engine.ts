@@ -798,8 +798,10 @@ export class Engine {
     if (t < 0) return null
     const x = this.xrRayOrigin.x + this.xrRayDir.x * t
     const y = this.xrRayOrigin.y + this.xrRayDir.y * t
-    // The plane spans [-0.5, 0.5] in its own frame; the canvas' Y grows downwards.
-    const canvasX = (x + 0.5) * XR_SCREEN_CANVAS_WIDTH
+    // The plane spans [-0.5, 0.5] in its own frame; the canvas' Y grows
+    // downwards. From behind, the visible twin mirrors X, so mirror the hit too.
+    const fromBack = this.xrRayOrigin.z < 0
+    const canvasX = (fromBack ? 0.5 - x : x + 0.5) * XR_SCREEN_CANVAS_WIDTH
     const canvasY = (0.5 - y) * XR_SCREEN_CANVAS_HEIGHT
     return hitTestScreen(layout, canvasX, canvasY)
   }
