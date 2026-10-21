@@ -48,7 +48,7 @@ export const XR_SCREEN_WIDTH_METRES = 2.2
 export const XR_SCREEN_HEIGHT_METRES = XR_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
 
 /** How far in front of the eyes the screen floats, and how high above them. */
-export const XR_SCREEN_DISTANCE = 1.9
+export const XR_SCREEN_DISTANCE = 0.95
 export const XR_SCREEN_RISE = 0.02
 
 /** The flat dashboard shown by the fixed top-down camera. */
