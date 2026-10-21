@@ -58,7 +58,7 @@ export const XR_2D_SCREEN_CENTER = { x: 0, y: 0.45, z: 0.12 } as const
 
 /** Human-readable camera-mode labels used by the footer button. */
 export const XR_SCREEN_CAMERA_LABELS: Record<XrCameraMode, string> = {
-  free: 'Free',
+  free: 'Standard',
   '2d': '2D',
   center: 'Center',
 }
@@ -129,6 +129,7 @@ export type XrScreenAction =
   | { kind: 'cycleSetting'; key: XrCycleSetting }
   | { kind: 'audioSource'; source: 'file' | 'microphone' }
   | { kind: 'adjustVolume'; delta: number }
+  | { kind: 'adjustViewHeight'; delta: number }
   | { kind: 'clearMusic' }
   | { kind: 'jump'; ratio: number }
   | { kind: 'cancelLoad' }
@@ -161,6 +162,8 @@ export interface XrScreenSettings {
   hideHiddenFolders: boolean
   sizeMode: SizeMode
   fileColorMode: 'extension' | 'activity' | 'flat'
+  /** Height of the VR standard overview above the tabletop, in metres. */
+  xrViewHeight: number
 }
 
 export interface XrPlaybackState {
@@ -577,6 +580,8 @@ function addSettingsControls(state: XrScreenState, content: Rect, controls: XrSc
     settingsRow(controls, content, 5, 'cycle:fileColorMode', 'File colour', settings.fileColorMode, { kind: 'cycleSetting', key: 'fileColorMode' })
     settingsRow(controls, content, 6, 'cycle:camera', 'Camera view', XR_SCREEN_CAMERA_LABELS[state.playback.cameraMode], { kind: 'cycleCamera' })
     settingsRow(controls, content, 7, 'recenter-settings', 'Recenter view', 'Now', { kind: 'recenter' })
+    settingsRow(controls, content, 8, 'camera-height-down', 'VR height −', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: -0.1 })
+    settingsRow(controls, content, 9, 'camera-height-up', 'VR height +', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: 0.1 })
     return
   }
 
@@ -1360,7 +1365,7 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
       title: 'Recenter',
       lines: [
         'Press the controller trigger, or click the mirrored desktop canvas, to recenter.',
-        'The scene turns so your current heading faces forward and your eyes settle over the table centre.',
+        'Your current heading becomes the standard view forward, without leaving the vantage.',
         'The header and footer also have a Recenter button.',
       ],
     },
@@ -1375,7 +1380,8 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
     {
       title: 'Camera views',
       lines: [
-        'Free: normal head-tracked view.',
+        'Standard: the Gource overview, looking at the tree from a fixed elevated vantage.',
+        'The headset still looks around; Settings → Camera sets how high that vantage sits.',
         '2D: fixed top-down overview with this screen laid flat as a dashboard.',
         'Center: pinned over the table centre at your current eye height while you look around.',
       ],

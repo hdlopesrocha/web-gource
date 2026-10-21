@@ -5,6 +5,8 @@ import {
   XR_2D_CAMERA_HEIGHT,
   XR_EYE_HEIGHT_SCALE,
   XR_OPTIONAL_FEATURES,
+  XR_OVERVIEW_DEFAULT_HEIGHT,
+  XR_OVERVIEW_RADIUS,
   XrSession,
   isXrSupported,
   nextXrCameraMode,
@@ -270,7 +272,7 @@ describe('XrSession', () => {
     expect(rig.position.z).toBe(0)
   })
 
-  it('cycles free, fixed-centre and top-down camera modes with the headset pose intact', async () => {
+  it('cycles the standard overview, fixed-centre and top-down camera modes with the headset pose intact', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -296,16 +298,29 @@ describe('XrSession', () => {
     camera.quaternion.copy(rawQuaternion)
     camera.updateMatrixWorld(true)
     expect(controller.fitCameraHeight()).toBe(true)
-    expect(controller.applyCameraMode()).toBe(false)
 
-    // Fixed centre: horizontal translation is cancelled, orientation is kept.
+    // Standard overview: the eyes are pinned to the elevated vantage, looking
+    // at the table centre, whatever the headset translation was.
+    const height = XR_OVERVIEW_DEFAULT_HEIGHT
+    const horizontal = Math.sqrt(XR_OVERVIEW_RADIUS ** 2 - height ** 2)
+    const vantage = new THREE.Vector3(0, -horizontal, height)
+    expect(controller.applyCameraMode()).toBe(true)
+    camera.updateMatrixWorld(true)
+    const free = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(free.distanceTo(vantage)).toBeLessThan(1e-6)
+    const freeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()))
+    expect(freeForward.angleTo(vantage.clone().negate().normalize())).toBeLessThan(1e-6)
+    expect(controller.headForGaze(new THREE.Matrix4())).toBe(false)
+
+    // Fixed centre: horizontal translation is cancelled, orientation is kept,
+    // and the height is captured from the vantage the user was just at.
     controller.setCameraMode('center')
     expect(controller.applyCameraMode()).toBe(true)
     camera.updateMatrixWorld(true)
     const centre = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
     expect(centre.x).toBeCloseTo(0, 6)
     expect(centre.y).toBeCloseTo(0, 6)
-    expect(centre.z).toBeCloseTo(rawPosition.y * XR_EYE_HEIGHT_SCALE, 6)
+    expect(centre.z).toBeCloseTo(height, 6)
     const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0))
     const expectedOrientation = tilt.clone().multiply(rawQuaternion)
     const centreOrientation = new THREE.Quaternion()
@@ -321,7 +336,7 @@ describe('XrSession', () => {
     const overview = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
     expect(overview.x).toBeCloseTo(0, 6)
     expect(overview.y).toBeCloseTo(0, 6)
-    expect(overview.z).toBeCloseTo(XR_2D_CAMERA_HEIGHT, 6)
+    expect(overview.z).toBeCloseTo(Math.max(height, XR_2D_CAMERA_HEIGHT), 6)
     expect(camera.getWorldQuaternion(new THREE.Quaternion()).angleTo(new THREE.Quaternion())).toBeLessThan(1e-6)
 
     const gaze = new THREE.Matrix4()
@@ -331,14 +346,12 @@ describe('XrSession', () => {
     const gazeOrientation = new THREE.Quaternion().setFromRotationMatrix(gaze)
     expect(gazeOrientation.angleTo(expectedOrientation)).toBeLessThan(1e-6)
 
-    // Back to free: the measured-height rig and raw head pose return.
+    // Back to standard: the fixed vantage returns.
     controller.setCameraMode('free')
     expect(controller.applyCameraMode()).toBe(true)
     camera.updateMatrixWorld(true)
-    const free = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    const wanted = rawPosition.clone().applyQuaternion(tilt)
-    wanted.z += rawPosition.y * (XR_EYE_HEIGHT_SCALE - 1)
-    expect(free.distanceTo(wanted)).toBeLessThan(1e-6)
+    const freeAgain = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(freeAgain.distanceTo(vantage)).toBeLessThan(1e-6)
     expect(controller.headForGaze(new THREE.Matrix4())).toBe(false)
 
     expect(nextXrCameraMode('free')).toBe('2d')
@@ -442,7 +455,7 @@ describe('XrSession', () => {
     expect(renderer.xr.setSession).toHaveBeenCalledTimes(1)
   })
 
-  it('recenters on the current heading, with the eyes over the table centre', async () => {
+  it('recenters the standard overview on the current heading', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -460,8 +473,6 @@ describe('XrSession', () => {
 
     await controller.enter()
 
-    // A forward-and-right stance with a little pitch and roll. The headset
-    // position is in rig-local space; the rig is tipped so local Y is world up.
     const eyeHeight = 1.65
     camera.position.set(0.35, eyeHeight, -0.2)
     camera.quaternion.setFromEuler(new THREE.Euler(0.18, 0.72, -0.08))
@@ -470,28 +481,32 @@ describe('XrSession', () => {
     controller.applyCameraMode()
     camera.updateMatrixWorld(true)
 
+    // The user turns their head: recenter should make that the new forward.
+    camera.quaternion.setFromEuler(new THREE.Euler(-0.4, 2.1, 0.35))
+    camera.updateMatrixWorld(true)
+
     expect(controller.recenter()).toBe(true)
     camera.updateMatrixWorld(true)
 
-    // The left-eye position lands over the table centre, at the lowered eye
-    // height. The few centimetres between the eyes are not worth correcting.
+    // The eyes stay on the elevated vantage, so recenter only re-aims the view.
+    const height = XR_OVERVIEW_DEFAULT_HEIGHT
+    const horizontal = Math.sqrt(XR_OVERVIEW_RADIUS ** 2 - height ** 2)
     const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
     expect(eye.x).toBeCloseTo(0, 5)
-    expect(eye.y).toBeCloseTo(0, 5)
-    expect(eye.z).toBeCloseTo(eyeHeight * XR_EYE_HEIGHT_SCALE, 5)
+    expect(eye.y).toBeCloseTo(-horizontal, 5)
+    expect(eye.z).toBeCloseTo(height, 5)
 
-    // Only yaw changes: the current horizontal heading now points along +Y and
-    // the pitch/roll of the headset pose are preserved.
+    // The current heading now faces the standard direction, i.e. the table
+    // centre.
     const world = new THREE.Quaternion()
     camera.getWorldQuaternion(world)
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(world)
-    expect(forward.x).toBeCloseTo(0, 5)
-    expect(forward.y).toBeGreaterThan(0.99)
-    expect(forward.z).not.toBeCloseTo(0, 2)
-
-    // The room's up is still the tabletop normal after the yaw.
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rig.quaternion)
-    expect(up.z).toBeCloseTo(1, 5)
+    const toCentre = new THREE.Vector3(0, horizontal, -height).normalize()
+    expect(forward.angleTo(toCentre)).toBeLessThan(1e-6)
+    // No roll: the camera's right axis stays horizontal.
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(world)
+    expect(right.y).toBeCloseTo(0, 5)
+    expect(right.z).toBeCloseTo(0, 5)
 
     // A second recenter is a no-op: the view is already on the reference pose.
     expect(controller.recenter()).toBe(false)

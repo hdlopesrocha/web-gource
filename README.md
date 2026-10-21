@@ -361,10 +361,11 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   has no XR device (or no `navigator.xr` at all) the button is disabled and says so, instead of
   failing when it is pressed;
 * entering a session enables `renderer.xr`, requests the `local-floor` reference space and stands you
-  at the **scene origin** over the centred tree (the tree keeps its tabletop scale). Once the first
-  headset pose arrives the eyes are lowered to a **quarter of the measured eye height**, so the scene
-  is four times closer than standing at full height; leaving the session (or the headset ending it)
-  restores the exact previous camera and scene transform;
+  at the **scene origin** over the centred tree (the tree keeps its tabletop scale). The default
+  **standard overview** then pins the eyes to an elevated vantage that looks at the tree, with the
+  headset orientation rotating the view around it and the height coming from
+  **Settings → Camera → Standard view height** (about 53° at the default 1.8 m). Leaving the session
+  (or the headset ending it) restores the exact previous camera and scene transform;
 * while a session is running the frames come from the XR animation loop;
 * **files and folders are always real spheres** — instanced `SphereGeometry` with a light,
   world-scaled and depth-tested. The same representation is used on screen and in VR, where
@@ -380,19 +381,20 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
 * **the screen is driven by gaze**: a circular crosshair sits at the centre of your view and an
   element activates once it rests on it for **2 seconds**, the ring filling over that time and the
   hovered control highlighted. Looking away or moving to another control resets the dwell, so
-  nothing fires by accident. Repeatable controls (stepping, seeking, page turns, volume) re-arm
-  after they fire, while toggles wait for you to look away. The gaze ray is cast from between the
-  eyes through the plane, so it works with the room-scale rig rather than the mouse. In the fixed
-  2D view the raw headset orientation still drives the gaze, so turning your head sweeps the
-  crosshair across the flat dashboard while the overview itself stays still;
-* **recenter** resets the headset reference: the current heading becomes forward and the eyes settle
-  over the table centre, then the screen is re-placed in front of you. Pulling the XR trigger, a tap
-  on the mirrored desktop canvas, and the in-screen **Recenter** button all do the same thing;
+  nothing fires by accident. Repeatable controls (stepping, seeking, page turns, volume, view
+  height) re-arm after they fire, while toggles wait for you to look away. The gaze ray is cast from
+  between the eyes through the plane. In the fixed 2D view the raw headset orientation still drives
+  the gaze, so turning your head sweeps the crosshair across the flat dashboard while the overview
+  itself stays still;
+* **recenter** re-anchors the standard overview: the current heading becomes forward without moving
+  the vantage, then the screen is re-placed in front of you. Pulling the XR trigger, a tap on the
+  mirrored desktop canvas, and the in-screen **Recenter** button all do the same thing;
 * the transport controls cover restart, previous commit, play/pause, next commit, speed and view.
   The speed button cycles the same 0.25×–32× presets as the on-screen selector. The view button
-  cycles **Free** (head-tracked), **2D** (a fixed top-down overview, with the screen laid flat as a
-  dashboard) and **Center** (the viewpoint pinned over the table centre at the current eye height,
-  while the head can still look around). **Exit VR** leaves the session from inside the headset;
+  cycles **Standard** (the Gource overview described above), **2D** (a fixed top-down overview, with
+  the screen laid flat as a dashboard) and **Center** (the viewpoint pinned over the table centre at
+  the current eye height, while the head can still look around). **Exit VR** leaves the session from
+  inside the headset;
 * nothing here is required for the normal view: without a headset the app behaves exactly as before,
   and the deterministic export ignores the XR state.
 

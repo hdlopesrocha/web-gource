@@ -9,6 +9,7 @@ import { fileRadiusForActivity, fileRadiusForBytes } from '../sim/simulation'
 import { EXPORT_FPS, planFrames } from '../engine/export/frames'
 import { COMMON_IGNORED_FOLDERS, HIDDEN_FOLDER_EXAMPLES, addIgnoredFolder, removeIgnoredFolder } from '../timeline/ignore'
 import { formatBytes as formatExportBytes } from '../engine/recorder'
+import { XR_OVERVIEW_MAX_HEIGHT, XR_OVERVIEW_MIN_HEIGHT } from '../render/xr'
 import TokenField from './TokenField.vue'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
@@ -421,6 +422,21 @@ onMounted(() => {
             Drag to orbit, right-drag (or Shift-drag) to pan, and scroll to zoom. Reset returns the camera to the
             default 3D angle.
           </p>
+        </section>
+        <section class="group">
+          <h3>VR view height</h3>
+          <div class="field">
+            <label>Standard view height · {{ settings.xrViewHeight.toFixed(2) }} m</label>
+            <input
+              type="range"
+              :min="XR_OVERVIEW_MIN_HEIGHT"
+              :max="XR_OVERVIEW_MAX_HEIGHT"
+              step="0.05"
+              :value="settings.xrViewHeight"
+              @input="update({ xrViewHeight: Number(($event.target as HTMLInputElement).value) })"
+            />
+            <span class="faint hint">How high the headset's standard overview sits above the table.</span>
+          </div>
         </section>
         <section class="group">
           <h3>Playback pacing</h3>

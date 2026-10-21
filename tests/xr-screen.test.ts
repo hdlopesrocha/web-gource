@@ -182,6 +182,7 @@ function screenState(overrides: Partial<XrScreenState> = {}): XrScreenState {
       hideHiddenFolders: true,
       sizeMode: 'bytes',
       fileColorMode: 'extension',
+      xrViewHeight: 1.8,
     },
     projects: [{ name: 'acme/web-gource', commits: 120, authors: 3 }],
     minimapVisible: true,
@@ -364,7 +365,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('Add the VR dashboard')
     expect(painted).toContain('Pause')
     expect(painted).toContain('Speed 2×')
-    expect(painted).toContain('View Free')
+    expect(painted).toContain('View Standard')
     expect(painted).toContain('Restart')
     expect(painted.some((text) => text.includes('Gaze for 2 s'))).toBe(true)
     expect(painted.some((text) => text.includes('WEB GOURCE'))).toBe(true)
@@ -449,6 +450,15 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('Commits in view')
     expect(painted).toContain('Tracked size')
     expect(painted).toContain('acme/web-gource (120 commits, 3 authors)')
+
+    const camera = recordingContext()
+    drawXrScreen(camera.ctx, screenState({ view: 'settings', settingsTab: 'camera' }))
+    painted = texts(camera.calls)
+    expect(painted).toContain('Camera view')
+    expect(painted).toContain('Standard')
+    expect(painted).toContain('VR height −')
+    expect(painted).toContain('VR height +')
+    expect(painted).toContain('1.8 m')
   })
 
   it('paints the help and warnings pages', () => {
@@ -458,6 +468,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('How the immersive screen works')
     expect(painted).toContain('Gaze & dwell')
     expect(painted).toContain('Recenter')
+    expect(painted.some((text) => text.startsWith('Standard:'))).toBe(true)
 
     const warnings = recordingContext()
     drawXrScreen(

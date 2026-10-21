@@ -117,6 +117,7 @@ export type XrEngineCommand =
   | { kind: 'cycleSetting'; key: XrCycleSetting }
   | { kind: 'audioSource'; source: 'file' | 'microphone' }
   | { kind: 'adjustVolume'; delta: number }
+  | { kind: 'adjustViewHeight'; delta: number }
   | { kind: 'clearMusic' }
   | { kind: 'cancelLoad' }
 
@@ -598,6 +599,7 @@ export class Engine {
           bounds: () => this.sim.bounds(),
         },
         onSelect: () => this.recenterVr(),
+        viewHeight: () => store.settings.xrViewHeight,
       })
     }
     return this.xr
@@ -610,9 +612,10 @@ export class Engine {
   /**
    * Recenter the immersive view on the current headset heading.
    *
-   * WebXR has no API to reset the physical gyroscope, so this moves the rig
-   * under the user and re-places the screen in front of them. Trigger, mirrored
-   * canvas clicks and the Recenter controls all land here.
+   * WebXR has no API to reset the physical gyroscope, so this re-anchors the
+   * standard overview: the current heading becomes forward and the screen is
+   * re-placed in front of it. Trigger, mirrored canvas clicks and the Recenter
+   * controls all land here.
    */
   recenterVr(): void {
     const xr = this.xr
@@ -878,6 +881,10 @@ export class Engine {
         this.onXrScreenCommand?.({ kind: 'adjustVolume', delta: action.delta })
         this.resetXrDwell()
         break
+      case 'adjustViewHeight':
+        this.onXrScreenCommand?.({ kind: 'adjustViewHeight', delta: action.delta })
+        this.resetXrDwell()
+        break
       case 'clearMusic':
         this.onXrScreenCommand?.({ kind: 'clearMusic' })
         break
@@ -912,6 +919,7 @@ export class Engine {
       hideHiddenFolders: store.hideHiddenFolders,
       sizeMode: this.sizeMode,
       fileColorMode: settings.fileColorMode,
+      xrViewHeight: settings.xrViewHeight,
     }
   }
 

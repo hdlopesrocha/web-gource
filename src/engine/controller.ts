@@ -15,6 +15,7 @@ import {
   type Timeline,
 } from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
+import { clampXrViewHeight } from '../render/xr'
 import { buildSchedule, type ScheduleOptions } from '../timeline/schedule'
 import { Engine, type EngineOptions, type HudState, type XrEngineCommand } from './engine'
 import {
@@ -926,6 +927,9 @@ export class VisualizerController {
         break
       case 'adjustVolume':
         this.updateMusic({ volume: store.music.volume + command.delta })
+        break
+      case 'adjustViewHeight':
+        this.updateSettings({ xrViewHeight: clampXrViewHeight(store.settings.xrViewHeight + command.delta) })
         break
       case 'clearMusic':
         this.clearMusic()
