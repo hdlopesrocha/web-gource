@@ -289,6 +289,22 @@ onBeforeUnmount(() => {
           <button
             class="btn ghost small"
             type="button"
+            title="VR zoom: dollies the camera back along its view direction"
+            @click="controller.adjustVrZoom(-0.5)"
+          >
+            Zoom −
+          </button>
+          <button
+            class="btn ghost small"
+            type="button"
+            title="VR zoom: dollies the camera forward along its view direction"
+            @click="controller.adjustVrZoom(0.5)"
+          >
+            Zoom +
+          </button>
+          <button
+            class="btn ghost small"
+            type="button"
             title="Reset the 3D camera view (C)"
             @click="controller.resetCamera()"
           >

@@ -336,27 +336,29 @@ export function screenLayout(
   const transportHeight = footer.y + footer.height - 16 - transportY
 
   const transport: { id: string; label: string; width: number; action: XrScreenAction; active?: boolean }[] = [
-    { id: 'restart', label: 'Restart', width: 92, action: { kind: 'restart' } },
-    { id: 'prev', label: 'Prev', width: 84, action: { kind: 'step', delta: -1 } },
+    { id: 'restart', label: 'Restart', width: 84, action: { kind: 'restart' } },
+    { id: 'prev', label: 'Prev', width: 76, action: { kind: 'step', delta: -1 } },
     {
       id: 'play',
       label: state.playback.playing ? 'Pause' : 'Play',
-      width: 120,
+      width: 108,
       action: { kind: 'togglePlay' },
       active: state.playback.playing,
     },
-    { id: 'next', label: 'Next', width: 84, action: { kind: 'step', delta: 1 } },
-    { id: 'speed', label: `Speed ${state.playback.speed}×`, width: 146, action: { kind: 'cycleSpeed' } },
-    { id: 'recenter-footer', label: 'Recenter', width: 136, action: { kind: 'recenter' } },
+    { id: 'next', label: 'Next', width: 76, action: { kind: 'step', delta: 1 } },
+    { id: 'speed', label: `Speed ${state.playback.speed}×`, width: 128, action: { kind: 'cycleSpeed' } },
+    { id: 'recenter-footer', label: 'Recenter', width: 118, action: { kind: 'recenter' } },
     ...XR_CAMERA_VIEWS.map(
       (view): { id: string; label: string; width: number; action: XrScreenAction; active?: boolean } => ({
         id: `view-${view}`,
         label: XR_CAMERA_VIEW_LABELS[view],
-        width: 104,
+        width: 92,
         action: { kind: 'viewPreset', view },
         active: state.cameraView === view,
       }),
     ),
+    { id: 'zoom-out', label: 'Zoom −', width: 78, action: { kind: 'adjustZoom', delta: -0.5 } },
+    { id: 'zoom-in', label: 'Zoom +', width: 78, action: { kind: 'adjustZoom', delta: 0.5 } },
   ]
   let x = footer.x + 16
   for (const entry of transport) {
@@ -375,8 +377,8 @@ export function screenLayout(
   ]
   x = Math.max(x + 18, footer.x + 1000)
   for (const entry of jumps) {
-    addControl(controls, entry.id, { x, y: transportY, width: 82, height: transportHeight }, { kind: 'jump', ratio: entry.ratio }, entry.label)
-    x += 82 + 8
+    addControl(controls, entry.id, { x, y: transportY, width: 70, height: transportHeight }, { kind: 'jump', ratio: entry.ratio }, entry.label)
+    x += 70 + 6
   }
 
   const body: Rect = {

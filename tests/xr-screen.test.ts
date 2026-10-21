@@ -227,6 +227,8 @@ describe('screenLayout', () => {
       'view-origin',
       'view-top',
       'view-gource',
+      'zoom-out',
+      'zoom-in',
       'jump-start',
       'jump-end',
     ]) {

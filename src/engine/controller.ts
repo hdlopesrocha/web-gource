@@ -899,6 +899,11 @@ export class VisualizerController {
     store.ui.xrCameraView = view
   }
 
+  /** Dolly the VR camera along its view direction. */
+  adjustVrZoom(delta: number): void {
+    this.updateSettings({ xrViewZoom: clampXrViewZoom(store.settings.xrViewZoom + delta) })
+  }
+
   /** Settings, filters and music actions initiated from the VR screen. */
   private handleXrScreenCommand(command: XrEngineCommand): void {
     switch (command.kind) {
