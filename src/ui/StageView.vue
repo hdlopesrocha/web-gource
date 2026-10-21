@@ -163,8 +163,13 @@ function onViewportPointerUp(event: PointerEvent): void {
   const start = tapStart
   tapStart = null
   if (!start || start.pointerId !== event.pointerId) return
-  if (!store.settings.gyro || !store.ui.gyroActive) return
   if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP) return
+  // A tap on the mirrored canvas is the desktop equivalent of an XR trigger.
+  if (store.ui.xrActive) {
+    controller.recenterVr()
+    return
+  }
+  if (!store.settings.gyro || !store.ui.gyroActive) return
   controller.recalibrateOrientation()
 }
 
@@ -194,8 +199,9 @@ onBeforeUnmount(() => {
     <div ref="container" class="viewport" @pointerdown="onViewportPointerDown" @pointerup="onViewportPointerUp">
       <canvas ref="canvas" class="scene" />
       <div class="vignette" aria-hidden="true" />
-      <div v-if="store.ui.gyroActive || store.ui.gamepadConnected" class="controls-hint panel">
-        <template v-if="store.ui.gyroActive">Head tracking · click to recalibrate</template>
+      <div v-if="store.ui.xrActive || store.ui.gyroActive || store.ui.gamepadConnected" class="controls-hint panel">
+        <template v-if="store.ui.xrActive">VR · gaze to select · trigger or click recenters</template>
+        <template v-else-if="store.ui.gyroActive">Head tracking · click to recalibrate</template>
         <template v-else>Gamepad connected</template>
       </div>
     </div>

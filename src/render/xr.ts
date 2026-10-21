@@ -23,8 +23,8 @@ export interface XrSystemLike {
 
 /** Minimal structural view of an `XRSession`: the parts this module uses. */
 export interface XrSessionLike {
-  addEventListener(type: 'end', listener: () => void): void
-  removeEventListener(type: 'end', listener: () => void): void
+  addEventListener(type: 'end' | 'select', listener: () => void): void
+  removeEventListener(type: 'end' | 'select', listener: () => void): void
   end?(): Promise<void>
 }
 
@@ -71,6 +71,11 @@ export interface XrSessionOptions {
   framing?: XrFramingTarget | null
   /** Injectable `navigator.xr`; omit to read the real one, pass `null` for none. */
   xr?: XrSystemLike | null
+  /**
+   * Called when a controller's primary action fires (`select`). The app uses
+   * this to recenter the view, matching a click on the mirrored desktop canvas.
+   */
+  onSelect?: () => void
 }
 
 /** Reference space type: the floor is the origin, so the user has a real height. */
@@ -185,6 +190,7 @@ export class XrSession {
   private readonly renderer: XrRendererLike
   private readonly framing: XrFramingTarget | null
   private readonly xr: XrSystemLike | null
+  private readonly onSelect: (() => void) | null
   private session: XrSessionLike | null = null
   private saved: SavedState | null = null
   private cameraHeightFitted = false
@@ -208,6 +214,7 @@ export class XrSession {
     this.renderer = options.renderer
     this.framing = options.framing ?? null
     this.xr = 'xr' in options ? (options.xr ?? null) : navigatorXr()
+    this.onSelect = options.onSelect ?? null
   }
 
   /** True while an immersive session is running. */
@@ -217,6 +224,10 @@ export class XrSession {
 
   private readonly onEnd = (): void => {
     this.restore()
+  }
+
+  private readonly onSelectEvent = (): void => {
+    this.onSelect?.()
   }
 
   /**
@@ -276,6 +287,10 @@ export class XrSession {
 
     this.session = session
     session.addEventListener('end', this.onEnd)
+    // A controller trigger (or a hand/pointer select) recenters the view. It is
+    // deliberately not an activation for the gaze UI: recentring must remain
+    // available from anywhere, even when the reticle is not on a control.
+    session.addEventListener('select', this.onSelectEvent)
     store.ui.xrActive = true
   }
 
@@ -374,6 +389,56 @@ export class XrSession {
   /** The current camera behaviour (free, top-down 2D or fixed centre). */
   get mode(): XrCameraMode {
     return this.cameraMode
+  }
+
+  /**
+   * Treat the current headset pose as the new forward reference.
+   *
+   * WebXR deliberately gives the page no way to reset the headset's own
+   * gyroscope. What we *can* do is move and yaw the rig under the user so the
+   * current heading becomes forward and the eyes settle over the table centre;
+   * the runtime's tracking is untouched and the view jumps exactly like a
+   * platform recenter.
+   *
+   * The rig is rotated around the table's up axis (so pitch and roll are not
+   * disturbed) and translated so the head lands on `(0, 0, cameraHeight)`.
+   * Returns true when the rig moved.
+   */
+  recenter(): boolean {
+    const framing = this.framing
+    if (!this.session || !framing) return false
+    framing.camera.updateMatrixWorld(true)
+
+    // Current head world pose (the camera is at the left eye in three's XR
+    // camera, but its orientation is the head's; the few centimetres of eye
+    // offset are irrelevant for a recenter).
+    this.rotatedPosition.setFromMatrixPosition(framing.camera.matrixWorld)
+    this.rawHeadQuaternion.setFromRotationMatrix(framing.camera.matrixWorld)
+    this.gazePosition.set(0, 0, -1).applyQuaternion(this.rawHeadQuaternion)
+
+    // Yaw only: the table's up axis is +Z. Adding a tiny threshold keeps a
+    // straight-down glance from spinning the room on noise.
+    const horizontal = Math.hypot(this.gazePosition.x, this.gazePosition.y)
+    // A world yaw of +θ rotates +X towards +Y, so this brings the current
+    // heading (sin θ, cos θ) onto the table's forward axis (+Y).
+    const yaw = horizontal > 1e-4 ? Math.atan2(this.gazePosition.x, this.gazePosition.y) : 0
+    this.rigQuaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), yaw)
+
+    const targetZ = this.cameraHeight > 0 ? this.cameraHeight : Math.max(0.05, this.rotatedPosition.z)
+    // Rotate the rig around the scene origin, then translate the head from its
+    // rotated position back onto the table centre.
+    this.gazePosition.copy(this.rotatedPosition).sub(framing.rig.position).applyQuaternion(this.rigQuaternion)
+    this.rigPosition.set(0, 0, targetZ).sub(this.gazePosition)
+    const nextQuaternion = this.rigQuaternion.clone().multiply(framing.rig.quaternion)
+
+    const changed = this.applyRigPose(this.rigPosition, nextQuaternion)
+    if (changed) {
+      // Free mode must keep the new pose after the next `applyCameraMode`.
+      this.homeRigPosition.copy(this.rigPosition)
+      this.homeRigQuaternion.copy(nextQuaternion)
+      this.centerHeightMetres = targetZ
+    }
+    return changed
   }
 
   /** Switch behaviour. The next frame applies the new rig pose. */
@@ -478,7 +543,10 @@ export class XrSession {
     this.cameraMode = 'free'
     this.cameraHeight = 0
     this.centerHeightMetres = null
-    if (session) session.removeEventListener('end', this.onEnd)
+    if (session) {
+      session.removeEventListener('end', this.onEnd)
+      session.removeEventListener('select', this.onSelectEvent)
+    }
     store.ui.xrActive = false
     if (!saved) return
 

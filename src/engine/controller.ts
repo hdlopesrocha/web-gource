@@ -16,7 +16,7 @@ import {
 } from '../timeline/types'
 import type { Simulation } from '../sim/simulation'
 import { buildSchedule, type ScheduleOptions } from '../timeline/schedule'
-import { Engine, type EngineOptions, type HudState } from './engine'
+import { Engine, type EngineOptions, type HudState, type XrEngineCommand } from './engine'
 import {
   VideoRecorder,
   availableFormats,
@@ -705,6 +705,7 @@ export class VisualizerController {
     engine.setSpeed(store.hud?.speed ?? 1)
     engine.setDynamicLayout(store.settings.dynamicLayout)
     engine.setAudioLevelsProvider(this.audioLevelsFor)
+    engine.onXrScreenCommand = (command) => this.handleXrScreenCommand(command)
     this.engine = engine
     store.view = 'stage'
     engine.start()
@@ -876,6 +877,63 @@ export class VisualizerController {
       return
     }
     void this.engine.toggleVr()
+  }
+
+  /**
+   * Re-center the immersive view from the desktop mirror or a UI button.
+   *
+   * A headset trigger goes straight to the WebXR session; this is the same
+   * operation for a click on the mirrored canvas. Outside VR it is a no-op.
+   */
+  recenterVr(): void {
+    this.engine?.recenterVr()
+  }
+
+  /** Settings, filters and music actions initiated from the VR screen. */
+  private handleXrScreenCommand(command: XrEngineCommand): void {
+    switch (command.kind) {
+      case 'toggleAuthor':
+        this.toggleAuthor(command.id)
+        break
+      case 'showAllAuthors':
+        this.applyFilters({ hiddenAuthors: [] })
+        break
+      case 'clearFilters':
+        this.clearFilters()
+        break
+      case 'toggleSetting': {
+        if (command.key === 'hideHiddenFolders') {
+          this.applyFilters({ hideHiddenFolders: !store.hideHiddenFolders })
+          break
+        }
+        const key = command.key
+        this.updateSettings({ [key]: !store.settings[key] } as Partial<typeof store.settings>)
+        break
+      }
+      case 'cycleSetting':
+        if (command.key === 'sizeMode') {
+          const modes: SizeMode[] = ['bytes', 'activity', 'uniform']
+          const index = modes.indexOf(store.settings.sizeMode)
+          this.updateSettings({ sizeMode: modes[(index + 1) % modes.length] ?? 'bytes' })
+        } else {
+          const modes: RendererSettings['fileColorMode'][] = ['extension', 'activity', 'flat']
+          const index = modes.indexOf(store.settings.fileColorMode)
+          this.updateSettings({ fileColorMode: modes[(index + 1) % modes.length] ?? 'extension' })
+        }
+        break
+      case 'audioSource':
+        void this.setAudioSource(command.source)
+        break
+      case 'adjustVolume':
+        this.updateMusic({ volume: store.music.volume + command.delta })
+        break
+      case 'clearMusic':
+        this.clearMusic()
+        break
+      case 'cancelLoad':
+        this.cancelLoad()
+        break
+    }
   }
 
   /* ------------------------------------------------------------------ *

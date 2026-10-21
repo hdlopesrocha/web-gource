@@ -23,20 +23,26 @@ import { store } from '../src/state/store'
  * the scene cannot be checked without one.
  */
 
-/** A fake `XRSession`: records listeners and fires them when ended. */
+/** A fake `XRSession`: records listeners and fires them when ended or selected. */
 function fakeSession() {
   const listeners = new Set<() => void>()
+  const selectListeners = new Set<() => void>()
   const removeEventListener = vi.fn((type: string, listener: () => void) => {
     if (type === 'end') listeners.delete(listener)
+    if (type === 'select') selectListeners.delete(listener)
   })
   const addEventListener = vi.fn((type: string, listener: () => void) => {
     if (type === 'end') listeners.add(listener)
+    if (type === 'select') selectListeners.add(listener)
   })
   const end = vi.fn(async (): Promise<void> => {
     for (const listener of [...listeners]) listener()
   })
+  const fireSelect = (): void => {
+    for (const listener of [...selectListeners]) listener()
+  }
   const session: XrSessionLike = { addEventListener, removeEventListener, end }
-  return { session, listeners, addEventListener, removeEventListener, end }
+  return { session, listeners, selectListeners, addEventListener, removeEventListener, end, fireSelect }
 }
 
 /** A fake `THREE.WebGLRenderer`: only the `xr` manager is used by the session. */
@@ -434,5 +440,84 @@ describe('XrSession', () => {
 
     await controller.enter()
     expect(renderer.xr.setSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('recenters on the current heading, with the eyes over the table centre', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
+
+    await controller.enter()
+
+    // A forward-and-right stance with a little pitch and roll. The headset
+    // position is in rig-local space; the rig is tipped so local Y is world up.
+    const eyeHeight = 1.65
+    camera.position.set(0.35, eyeHeight, -0.2)
+    camera.quaternion.setFromEuler(new THREE.Euler(0.18, 0.72, -0.08))
+    camera.updateMatrixWorld(true)
+    expect(controller.fitCameraHeight()).toBe(true)
+    controller.applyCameraMode()
+    camera.updateMatrixWorld(true)
+
+    expect(controller.recenter()).toBe(true)
+    camera.updateMatrixWorld(true)
+
+    // The left-eye position lands over the table centre, at the lowered eye
+    // height. The few centimetres between the eyes are not worth correcting.
+    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
+    expect(eye.x).toBeCloseTo(0, 5)
+    expect(eye.y).toBeCloseTo(0, 5)
+    expect(eye.z).toBeCloseTo(eyeHeight * XR_EYE_HEIGHT_SCALE, 5)
+
+    // Only yaw changes: the current horizontal heading now points along +Y and
+    // the pitch/roll of the headset pose are preserved.
+    const world = new THREE.Quaternion()
+    camera.getWorldQuaternion(world)
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(world)
+    expect(forward.x).toBeCloseTo(0, 5)
+    expect(forward.y).toBeGreaterThan(0.99)
+    expect(forward.z).not.toBeCloseTo(0, 2)
+
+    // The room's up is still the tabletop normal after the yaw.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rig.quaternion)
+    expect(up.z).toBeCloseTo(1, 5)
+
+    // A second recenter is a no-op: the view is already on the reference pose.
+    expect(controller.recenter()).toBe(false)
+    await controller.exit()
+  })
+
+  it('recenters from a controller select and detaches the listener on exit', async () => {
+    const renderer = fakeRenderer()
+    const { session, selectListeners, fireSelect } = fakeSession()
+    const onSelect = vi.fn()
+    const controller = new XrSession({ renderer, xr: fakeXr(session), onSelect })
+
+    await controller.enter()
+    expect(selectListeners.size).toBe(1)
+
+    fireSelect()
+    expect(onSelect).toHaveBeenCalledTimes(1)
+
+    await controller.exit()
+    expect(selectListeners.size).toBe(0)
+    fireSelect()
+    expect(onSelect).toHaveBeenCalledTimes(1)
+  })
+
+  it('recenters without a session as a harmless no-op', () => {
+    const controller = new XrSession({ renderer: fakeRenderer(), xr: null })
+    expect(controller.recenter()).toBe(false)
   })
 })

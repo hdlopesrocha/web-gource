@@ -7,27 +7,33 @@ import { CameraControls } from './controls'
 import { nextPlaybackSpeed } from './speeds'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
 import { XrSession, nextXrCameraMode, type XrCameraMode } from '../render/xr'
+import { createDwellState, dwell, dwellProgress, XrReticle } from '../render/xr-ui'
 import {
-  XR_2D_PANEL_CENTER,
-  XR_PANEL_CANVAS_HEIGHT,
-  XR_PANEL_CANVAS_WIDTH,
-  XR_PANEL_HEIGHT_METRES,
-  XR_PANEL_WIDTH_METRES,
-  XrReticle,
-  XrTimelinePanel,
-  createDwellState,
-  dwell,
-  dwellProgress,
-  hitTargetId,
-  hitTest,
-  panelLayout,
-  panelPose,
-  xrCommand,
-  type XrHit,
-  type XrPanelLayout,
-  type XrPanelState,
-} from '../render/xr-ui'
-import { formatDateTime } from '../timeline/schedule'
+  XR_2D_SCREEN_CENTER,
+  XR_SCREEN_CANVAS_HEIGHT,
+  XR_SCREEN_CANVAS_WIDTH,
+  XrScreenPanel,
+  hitTestScreen,
+  screenLayout,
+  screenPose,
+  screenSizeMetres,
+  xrScreenAction,
+  xrScreenTargetId,
+  type XrCycleSetting,
+  type XrScreenAction,
+  type XrScreenHit,
+  type XrScreenLayout,
+  type XrScreenSettings,
+  type XrScreenState,
+  type XrScreenView,
+  type XrSettingsTab,
+  type XrToggleSetting,
+} from '../render/xr-screen'
+import { formatDate, formatDateTime } from '../timeline/schedule'
+import { ActivityCursor, contributionCalendar, dayStartMs, WEEKDAY_LABELS } from '../timeline/activity'
+import { MinimapDrawer } from '../render/minimap'
+import { buildInfoPanelModel } from '../render/info-panel'
+import { store } from '../state/store'
 import { authorCssColor } from '../render/palette'
 import type { ChangeKind } from '../timeline/types'
 import type { AudioLevels } from './audio/analysis'
@@ -99,6 +105,21 @@ export interface EngineOptions {
   capacities?: { files: number; dirs: number }
 }
 
+/**
+ * Actions the immersive screen delegates to the controller (the engine owns
+ * playback and rendering, but settings, filters, music and loading live there).
+ */
+export type XrEngineCommand =
+  | { kind: 'toggleAuthor'; id: string }
+  | { kind: 'showAllAuthors' }
+  | { kind: 'clearFilters' }
+  | { kind: 'toggleSetting'; key: XrToggleSetting }
+  | { kind: 'cycleSetting'; key: XrCycleSetting }
+  | { kind: 'audioSource'; source: 'file' | 'microphone' }
+  | { kind: 'adjustVolume'; delta: number }
+  | { kind: 'clearMusic' }
+  | { kind: 'cancelLoad' }
+
 export const DEFAULT_CAMERA_OPTIONS: CameraOptions = {
   followActivity: true,
   autoZoom: true,
@@ -160,18 +181,29 @@ export class Engine {
   private xr: XrSession | null = null
   /** Rig group the camera is parented to while an XR session runs. */
   private readonly xrRig = new THREE.Group()
-  /** In-scene timeline panel, alive only while presenting. */
-  private xrPanel: XrTimelinePanel | null = null
+  /** Complete in-scene UI, alive only while presenting. */
+  private xrPanel: XrScreenPanel | null = null
   /** Circular gaze crosshair, alive only while presenting. */
   private xrReticle: XrReticle | null = null
   /** Gaze dwell accumulator, reset whenever the panel is (re)created. */
   private readonly xrDwell = createDwellState()
-  /** Panel hit rectangles, matching the panel's canvas. */
-  private xrLayout: XrPanelLayout = panelLayout()
+  /** Current screen hit rectangles, regenerated from the screen state. */
+  private xrLayout: XrScreenLayout | null = null
   /** The camera mode the panel was last posed for. */
   private xrPanelMode: XrCameraMode | null = null
   /** The element the gaze is resting on, for the panel highlight. */
   private xrHovered: string | null = null
+  /** Active page on the immersive dashboard. */
+  private xrView: XrScreenView = 'stage'
+  private xrSettingsTab: XrSettingsTab = 'visual'
+  private xrAuthorPage = 0
+  private xrMinimapVisible = true
+  private xrMinimap: MinimapDrawer | null = null
+  /** Incremental activity aggregates for the charts in the screen. */
+  private xrActivityCursor: ActivityCursor | null = null
+  private xrActivityVersion = -1
+  /** Set by the controller: settings, author filters, music and load control. */
+  onXrScreenCommand: ((command: XrEngineCommand) => void) | null = null
   /** Cached activity histogram for the panel (invalidated by timeline changes). */
   private xrBuckets: ActivityBucket[] | null = null
   private xrBucketsVersion = -1
@@ -565,24 +597,46 @@ export class Engine {
           root: this.renderer.world,
           bounds: () => this.sim.bounds(),
         },
+        onSelect: () => this.recenterVr(),
       })
     }
     return this.xr
   }
 
   /* ------------------------------------------------------------------ *
-   * In-scene timeline panel and gaze
+   * Complete in-scene UI and gaze
    * ------------------------------------------------------------------ */
 
   /**
-   * Create the in-scene timeline panel and crosshair.
+   * Recenter the immersive view on the current headset heading.
+   *
+   * WebXR has no API to reset the physical gyroscope, so this moves the rig
+   * under the user and re-places the screen in front of them. Trigger, mirrored
+   * canvas clicks and the Recenter controls all land here.
+   */
+  recenterVr(): void {
+    const xr = this.xr
+    if (!xr?.active) return
+    if (xr.mode !== 'free') xr.setCameraMode('free')
+    xr.recenter()
+    // The rig moved under the camera; refresh the XR camera before placing the
+    // screen so it appears in front of the *new* forward direction.
+    this.renderer.webgl.xr.updateCamera(this.rig.camera)
+    this.xrPanelMode = xr.mode
+    if (this.xrPanel) this.placeXrScreen()
+    this.xrHovered = null
+    this.resetXrDwell()
+  }
+
+  /**
+   * Create the complete in-scene UI and crosshair.
    *
    * Only ever called while an immersive session is presenting: outside VR the
-   * panel does not exist and nothing here runs.
+   * screen does not exist and nothing here runs.
    */
   private createXrUi(): void {
     if (this.xrPanel) return
-    const panel = new XrTimelinePanel()
+    const panel = new XrScreenPanel()
     const reticle = new XrReticle()
     this.renderer.world.add(panel.mesh)
     // The reticle is posed from the headset camera each frame, so it lives in
@@ -590,17 +644,25 @@ export class Engine {
     this.renderer.scene.add(reticle.mesh)
     this.xrPanel = panel
     this.xrReticle = reticle
-    this.xrLayout = panelLayout()
+    this.xrMinimap = new MinimapDrawer()
+    this.xrActivityCursor = new ActivityCursor(this.timeline.commits)
+    this.xrActivityVersion = this.timelineVersion
+    this.xrView = 'stage'
+    this.xrSettingsTab = 'visual'
+    this.xrAuthorPage = 0
+    this.xrMinimapVisible = store.ui.minimapVisible
+    this.xrLayout = null
     this.xrHovered = null
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
     this.xrDwell.fired = false
     this.xrPanelMode = this.xr?.mode ?? 'free'
-    if (this.xrPanelMode === '2d') this.placeXrPanel2D()
-    else this.placeXrPanel()
+    this.xrLayout = screenLayout(this.xrScreenState())
+    if (this.xrPanelMode === '2d') this.placeXrScreen2D()
+    else this.placeXrScreen()
   }
 
-  /** Remove the panel and crosshair (a no-op when there is none). */
+  /** Remove the screen and crosshair (a no-op when there is none). */
   private destroyXrUi(): void {
     if (this.xrPanel) {
       this.renderer.world.remove(this.xrPanel.mesh)
@@ -613,6 +675,10 @@ export class Engine {
       this.xrReticle = null
     }
     this.xrPanelMode = null
+    this.xrLayout = null
+    this.xrMinimap = null
+    this.xrActivityCursor = null
+    this.xrActivityVersion = -1
     this.xrHovered = null
     this.xrDwell.target = null
     this.xrDwell.elapsed = 0
@@ -643,35 +709,35 @@ export class Engine {
   }
 
   /**
-   * Float the panel in the upper part of the view, in front of the user.
+   * Float the complete screen in front of the user.
    *
    * It is parented to the tabletop group (so it shares the room scale and the
    * gaze ray can be mapped into its local space). The pose comes from the
-   * headset itself — ahead of wherever the user is facing, raised into the top
-   * of the view, facing them — so the panel is visible as soon as the session
-   * starts, whatever forward direction the runtime picked. Once placed it stays
-   * fixed in the room, which is what makes gaze selection stable.
+   * headset itself — ahead of wherever the user is facing, facing them — so the
+   * screen is visible as soon as the session starts, whatever forward direction
+   * the runtime picked. Once placed it stays fixed in the room, which is what
+   * makes gaze selection stable.
    */
-  private placeXrPanel(): void {
-    panelPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
-    this.applyXrPanelPose(this.xrPanelPosition, this.xrPanelQuaternion)
+  private placeXrScreen(): void {
+    screenPose(this.xrHead(), this.xrPanelPosition, this.xrPanelQuaternion)
+    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
   /**
-   * Lay the panel flat near the far edge of the tabletop for the 2D overview.
+   * Lay the screen flat on the tabletop for the 2D overview.
    *
-   * A top-down camera would see an upright panel edge-on, so the panel becomes
-   * a horizontal dashboard. Gaze still uses the raw headset orientation, which
-   * sweeps the reticle over this plane.
+   * A top-down camera would see an upright screen edge-on, so the entire UI
+   * becomes a horizontal dashboard. Gaze still uses the raw headset
+   * orientation, which sweeps the reticle over this plane.
    */
-  private placeXrPanel2D(): void {
-    this.xrPanelPosition.set(XR_2D_PANEL_CENTER.x, XR_2D_PANEL_CENTER.y, XR_2D_PANEL_CENTER.z)
+  private placeXrScreen2D(): void {
+    this.xrPanelPosition.set(XR_2D_SCREEN_CENTER.x, XR_2D_SCREEN_CENTER.y, XR_2D_SCREEN_CENTER.z)
     this.xrPanelQuaternion.identity()
-    this.applyXrPanelPose(this.xrPanelPosition, this.xrPanelQuaternion)
+    this.applyXrScreenPose(this.xrPanelPosition, this.xrPanelQuaternion)
   }
 
-  /** Map a scene-space panel pose into the tabletop group and apply it. */
-  private applyXrPanelPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
+  /** Map a scene-space screen pose into the tabletop group and apply it. */
+  private applyXrScreenPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
     const panel = this.xrPanel
     if (!panel) return
     const world = this.renderer.world
@@ -683,7 +749,8 @@ export class Engine {
     world.matrixWorld.decompose(this.xrParentPosition, this.xrParentQuaternion, this.xrParentScale)
     panel.mesh.position.copy(position).applyMatrix4(this.xrRayMatrix)
     panel.mesh.quaternion.copy(this.xrParentQuaternion).invert().multiply(quaternion)
-    panel.mesh.scale.set(XR_PANEL_WIDTH_METRES / scale, XR_PANEL_HEIGHT_METRES / scale, 1)
+    const size = screenSizeMetres(this.xrPanelMode ?? this.xr?.mode ?? 'free')
+    panel.mesh.scale.set(size.width / scale, size.height / scale, 1)
     panel.mesh.updateMatrixWorld(true)
   }
 
@@ -696,13 +763,14 @@ export class Engine {
     return this.xrBuckets
   }
 
-  /** Point the gaze ray from the head at the panel and hit-test it. */
-  private gazeHit(): XrHit | null {
+  /** Point the gaze ray from the head at the screen and hit-test it. */
+  private gazeHit(): XrScreenHit | null {
     const panel = this.xrPanel
-    if (!panel) return null
+    const layout = this.xrLayout
+    if (!panel || !layout) return null
     const head = this.xrHead()
     panel.mesh.updateMatrixWorld(true)
-    // The ray is built in scene space and mapped into the panel's own frame, so
+    // The ray is built in scene space and mapped into the screen's own frame, so
     // the tabletop group's scale (and any rotation) are handled for free.
     this.xrRayMatrix.copy(panel.mesh.matrixWorld).invert()
     this.xrRayOrigin.setFromMatrixPosition(head).applyMatrix4(this.xrRayMatrix)
@@ -713,40 +781,328 @@ export class Engine {
     const x = this.xrRayOrigin.x + this.xrRayDir.x * t
     const y = this.xrRayOrigin.y + this.xrRayDir.y * t
     // The plane spans [-0.5, 0.5] in its own frame; the canvas' Y grows downwards.
-    const canvasX = (x + 0.5) * XR_PANEL_CANVAS_WIDTH
-    const canvasY = (0.5 - y) * XR_PANEL_CANVAS_HEIGHT
-    return hitTest(this.xrLayout, canvasX, canvasY)
+    const canvasX = (x + 0.5) * XR_SCREEN_CANVAS_WIDTH
+    const canvasY = (0.5 - y) * XR_SCREEN_CANVAS_HEIGHT
+    return hitTestScreen(layout, canvasX, canvasY)
   }
 
-  /** Apply the command a gaze hit maps to. */
-  private runXrCommand(hit: XrHit): void {
-    const command = xrCommand(hit)
-    switch (command.kind) {
+  /** Drop the current dwell so a repeatable control can fire again after 2 s. */
+  private resetXrDwell(): void {
+    this.xrDwell.target = null
+    this.xrDwell.elapsed = 0
+    this.xrDwell.fired = false
+  }
+
+  /** Switch the immersive screen page, dropping stale gaze state. */
+  private setXrView(view: XrScreenView): void {
+    this.xrView = view
+    this.xrHovered = null
+    this.resetXrDwell()
+  }
+
+  private setXrSettingsTab(tab: XrSettingsTab): void {
+    this.xrSettingsTab = tab
+    this.xrHovered = null
+    this.resetXrDwell()
+  }
+
+  /** Apply the action a gaze hit maps to. */
+  private runXrScreenAction(action: XrScreenAction): void {
+    switch (action.kind) {
+      case 'view':
+        this.setXrView(action.view)
+        break
+      case 'close':
+        this.setXrView('stage')
+        break
       case 'restart':
         this.restart()
         break
       case 'step':
-        this.step(command.delta)
+        this.step(action.delta)
+        this.resetXrDwell()
         break
       case 'togglePlay':
         this.togglePlay()
         break
       case 'seek':
-        this.seek(command.ratio * this.schedule.duration)
+        this.seek(action.ratio * this.schedule.duration)
+        this.resetXrDwell()
         break
       case 'cycleSpeed':
         this.setSpeed(nextPlaybackSpeed(this.speed))
         break
       case 'cycleCamera':
-        if (this.xr) this.xr.setCameraMode(nextXrCameraMode(this.xr.mode))
+        if (this.xr) {
+          this.xr.setCameraMode(nextXrCameraMode(this.xr.mode))
+          this.xrHovered = null
+          this.resetXrDwell()
+        }
+        break
+      case 'recenter':
+        this.recenterVr()
+        break
+      case 'exitVr':
+        void this.toggleVr()
+        break
+      case 'toggleMinimap':
+        this.xrMinimapVisible = !this.xrMinimapVisible
+        store.ui.minimapVisible = this.xrMinimapVisible
+        break
+      case 'authorPage':
+        this.xrAuthorPage = Math.max(0, this.xrAuthorPage + action.delta)
+        this.resetXrDwell()
+        break
+      case 'toggleAuthor':
+        this.onXrScreenCommand?.({ kind: 'toggleAuthor', id: action.id })
+        break
+      case 'showAllAuthors':
+        this.onXrScreenCommand?.({ kind: 'showAllAuthors' })
+        break
+      case 'clearFilters':
+        this.onXrScreenCommand?.({ kind: 'clearFilters' })
+        break
+      case 'settingsTab':
+        this.setXrSettingsTab(action.tab)
+        break
+      case 'toggleSetting':
+        this.onXrScreenCommand?.({ kind: 'toggleSetting', key: action.key })
+        break
+      case 'cycleSetting':
+        this.onXrScreenCommand?.({ kind: 'cycleSetting', key: action.key })
+        break
+      case 'audioSource':
+        this.onXrScreenCommand?.({ kind: 'audioSource', source: action.source })
+        break
+      case 'adjustVolume':
+        this.onXrScreenCommand?.({ kind: 'adjustVolume', delta: action.delta })
+        this.resetXrDwell()
+        break
+      case 'clearMusic':
+        this.onXrScreenCommand?.({ kind: 'clearMusic' })
+        break
+      case 'jump':
+        this.seek(action.ratio * this.schedule.duration)
+        this.resetXrDwell()
+        break
+      case 'cancelLoad':
+        this.onXrScreenCommand?.({ kind: 'cancelLoad' })
         break
     }
   }
 
+  private xrScreenSettings(): XrScreenSettings {
+    const settings = store.settings
+    return {
+      showLabels: settings.showLabels,
+      showDirectoryLabels: settings.showDirectoryLabels,
+      showFileLabels: settings.showFileLabels,
+      showFileSizes: settings.showFileSizes,
+      showAuthorNames: settings.showAuthorNames,
+      showEdges: settings.showEdges,
+      showDirs: settings.showDirs,
+      showGrid: settings.showGrid,
+      showBeams: settings.showBeams,
+      showPlasma: settings.showPlasma,
+      audioReactive: settings.audioReactive,
+      followActivity: settings.followActivity,
+      autoZoom: settings.autoZoom,
+      dynamicLayout: settings.dynamicLayout,
+      gamepad: settings.gamepad,
+      hideHiddenFolders: store.hideHiddenFolders,
+      sizeMode: this.sizeMode,
+      fileColorMode: settings.fileColorMode,
+    }
+  }
+
+  private xrAuthors(): {
+    rows: { id: string; name: string; color: string; commits: number; project?: string; hidden: boolean }[]
+    page: number
+    pages: number
+    total: number
+    hiddenCount: number
+  } {
+    const hidden = new Set(store.hiddenAuthors)
+    const rows = [...this.timeline.authors]
+      .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
+      .map((author) => ({
+        id: author.id,
+        name: author.name,
+        color: this.authorColorLookup(author.id),
+        commits: author.commits,
+        project: author.projectName,
+        hidden: hidden.has(author.id),
+      }))
+    const pages = Math.max(1, Math.ceil(rows.length / 10))
+    this.xrAuthorPage = Math.min(Math.max(0, this.xrAuthorPage), pages - 1)
+    return {
+      rows,
+      page: this.xrAuthorPage,
+      pages,
+      total: rows.length,
+      hiddenCount: rows.reduce((count, row) => count + (row.hidden ? 1 : 0), 0),
+    }
+  }
+
+  private xrActivity(): XrScreenState['activity'] {
+    if (!this.xrActivityCursor || this.xrActivityVersion !== this.timelineVersion) {
+      this.xrActivityCursor = new ActivityCursor(this.timeline.commits)
+      this.xrActivityVersion = this.timelineVersion
+    }
+    const date = this.computeDate()
+    this.xrActivityCursor.advanceTo(date)
+    const grid = this.xrActivityCursor.grid
+    const calendar = contributionCalendar(this.xrActivityCursor.daily, date)
+    const busiest = grid.busiest
+    const summary =
+      grid.total > 0 && busiest
+        ? `${grid.total.toLocaleString()} commits · busiest ${WEEKDAY_LABELS[busiest.weekday]} ${String(busiest.hour).padStart(2, '0')}:00 UTC`
+        : 'No commits yet'
+    const calendarSummary = `${calendar.total.toLocaleString()} commits · ${formatDate(dayStartMs(calendar.start))} → ${formatDate(dayStartMs(calendar.end))}`
+    return { grid, calendar, summary, calendarSummary }
+  }
+
+  private xrInfoModel(): ReturnType<typeof buildInfoPanelModel> {
+    const stats = this.sim.stats()
+    const currentIndex = this.sim.currentIndex
+    const commit = currentIndex >= 0 ? (this.timeline.commits[currentIndex] ?? null) : null
+    const activeAuthors: HudAuthor[] = []
+    for (const author of this.sim.authors) {
+      if (!author.visible) continue
+      activeAuthors.push({
+        id: author.author.id,
+        name: author.author.name,
+        project: this.timeline.projects.length > 1 ? author.author.projectName : undefined,
+        color: this.authorColorLookup(author.author.id),
+        commits: author.appliedCommits,
+        lastActiveAt: author.lastActiveAt,
+      })
+    }
+    activeAuthors.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+    return buildInfoPanelModel({
+      date: this.computeDate(),
+      time: this.simTime,
+      duration: this.schedule.duration,
+      fps: Math.round(this.fps),
+      commit: commit ? this.toHudCommit(commit) : null,
+      visibleFiles: stats.visibleFiles,
+      visibleDirs: stats.dirs,
+      totalFiles: this.timeline.stats.files,
+      totalBytes: this.timeline.stats.totalBytes,
+      authors: this.timeline.stats.authors,
+      activeAuthors: activeAuthors.slice(0, 10),
+    })
+  }
+
+  /** Build the complete data model painted by the in-scene UI. */
+  private xrScreenState(): XrScreenState {
+    const timeline = this.timeline
+    const projects = timeline.projects.map((project) => ({
+      name: project.repo.fullName,
+      commits: project.commits,
+      authors: project.authors,
+    }))
+    const multi = projects.length > 1
+    const stats = timeline.stats
+    const loading = store.loading
+    const from = store.dateRange.from
+    const to = store.dateRange.to
+    const filterLabel = from !== null || to !== null
+      ? `${from !== null ? formatDate(from) : '…'} → ${to !== null ? formatDate(to) : '…'}`
+      : null
+    const progress = store.recording.progress
+    const recording = store.recording.active
+      ? {
+          width: store.recording.width,
+          height: store.recording.height,
+          fps: EXPORT_FPS,
+          speed: this.speed,
+          percent: progress?.percent ?? 0,
+          elapsed: progress?.elapsed ?? 0,
+        }
+      : null
+
+    return {
+      view: this.xrView,
+      settingsTab: this.xrSettingsTab,
+      hovered: this.xrHovered,
+      repoLabel: multi ? `${projects.length} repositories` : timeline.repo.fullName,
+      repoTitle: timeline.repo.fullName,
+      summary: multi
+        ? projects.map((project) => project.name).join(' · ')
+        : timeline.repo.description || `${stats.commits.toLocaleString()} commits · ${stats.authors.toLocaleString()} authors`,
+      providers: [...new Set(timeline.projects.map((project) => project.repo.provider))],
+      partialHistory: timeline.truncated,
+      loading: {
+        active: loading.active,
+        streaming: loading.streaming,
+        status: loading.status,
+        loaded: loading.loaded,
+        target: loading.target,
+        requests: loading.requests,
+        rateRemaining: loading.rateRemaining,
+        error: loading.error,
+      },
+      warnings: [...store.warnings],
+      xrError: store.ui.xrError,
+      recording,
+      info: this.xrInfoModel(),
+      stats: {
+        commits: stats.commits,
+        authors: stats.authors,
+        files: stats.files,
+        dirs: stats.uniquePaths.dirs,
+        additions: stats.additions,
+        deletions: stats.deletions,
+        totalBytes: stats.totalBytes,
+        merges: stats.merges,
+        withoutFileData: stats.withoutFileData,
+      },
+      playback: {
+        buckets: this.xrActivityBuckets(),
+        position: this.simTime,
+        duration: this.schedule.duration,
+        date: formatDateTime(this.computeDate()),
+        progress: this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0,
+        playing: this.playing,
+        speed: this.speed,
+        cameraMode: this.xr?.mode ?? 'free',
+        index: Math.max(0, this.sim.currentIndex),
+        total: timeline.commits.length,
+        startDate: formatDate(this.schedule.realStart),
+        endDate: formatDate(this.schedule.realEnd),
+        filterLabel,
+      },
+      authors: this.xrAuthors(),
+      activity: this.xrActivity(),
+      settings: this.xrScreenSettings(),
+      projects,
+      minimapVisible: this.xrMinimapVisible,
+      music: {
+        fileName: store.music.fileName,
+        source: store.music.source,
+        volume: store.music.volume,
+        reactive: store.settings.audioReactive,
+      },
+      drawMinimap: (ctx, x, y, size) => {
+        ctx.save()
+        ctx.translate(x, y)
+        this.xrMinimap?.draw(ctx, {
+          size,
+          sim: this.sim,
+          cameraTarget: this.rig.focusPoint,
+          showCamera: true,
+          showAuthors: true,
+        })
+        ctx.restore()
+      },
+    }
+  }
+
   /**
-   * Update the in-scene panel and run the gaze dwell for one frame.
+   * Update the in-scene screen and run the gaze dwell for one frame.
    *
-   * Inert unless a session is presenting: the panel is created on the first
+   * Inert unless a session is presenting: the screen is created on the first
    * presenting frame and torn down as soon as presentation stops.
    */
   private updateXrUi(dt: number): void {
@@ -756,8 +1112,9 @@ export class Engine {
     const reticle = this.xrReticle
     if (!panel || !reticle) return
 
-    // Entering or leaving the top-down overview moves the panel between the
-    // upright HUD and a flat dashboard. Repose it before the gaze is cast.
+    // Entering or leaving the top-down overview moves the screen between the
+    // upright dashboard and a flat tabletop panel. Repose it before the gaze is
+    // cast.
     const mode = this.xr?.mode ?? 'free'
     if (mode !== this.xrPanelMode) {
       this.xrPanelMode = mode
@@ -765,27 +1122,20 @@ export class Engine {
       this.xrDwell.target = null
       this.xrDwell.elapsed = 0
       this.xrDwell.fired = false
-      if (mode === '2d') this.placeXrPanel2D()
-      else this.placeXrPanel()
+      if (mode === '2d') this.placeXrScreen2D()
+      else this.placeXrScreen()
     }
 
+    const state = this.xrScreenState()
+    this.xrLayout = screenLayout(state)
     const hit = this.gazeHit()
-    this.xrHovered = hitTargetId(hit)
-
-    const state: XrPanelState = {
-      buckets: this.xrActivityBuckets(),
-      position: this.simTime,
-      duration: this.schedule.duration,
-      date: formatDateTime(this.computeDate()),
-      progress: this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0,
-      playing: this.playing,
-      speed: this.speed,
-      cameraMode: mode,
-      hovered: this.xrHovered,
-    }
+    this.xrHovered = xrScreenTargetId(hit)
+    state.hovered = this.xrHovered
     panel.redraw(state)
 
-    if (dwell(this.xrDwell, this.xrHovered, dt) && hit) this.runXrCommand(hit)
+    if (dwell(this.xrDwell, this.xrHovered, dt) && hit) {
+      this.runXrScreenAction(xrScreenAction(hit))
+    }
 
     reticle.update({ progress: dwellProgress(this.xrDwell), hovered: this.xrHovered !== null })
     reticle.place(this.xrHead())
