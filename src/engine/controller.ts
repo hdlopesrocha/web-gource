@@ -1,6 +1,7 @@
 import { describeGitError } from '../git/errors'
 import { loadHistory, type LoadResult, type LoadStage } from '../git/loader'
 import { resolveRepoInput, type ResolvedRepo } from '../git/providers'
+import { DEMO_REPOSITORIES } from '../git/providers/demo'
 import type { RawCommit, RepoInfo } from '../git/types'
 import { buildTimeline, bucketActivity, type TimelineProjectInput } from '../timeline/builder'
 import { compileIgnoredFolders, normaliseIgnoredFolders } from '../timeline/ignore'
@@ -1640,9 +1641,9 @@ export class VisualizerController {
    * Utilities
    * ------------------------------------------------------------------ */
 
-  /** Load the built-in synthetic repository (clearly labelled as fake). */
+  /** Load the three built-in synthetic projects (clearly labelled as fake). */
   async loadDemo(): Promise<void> {
-    await this.loadMany(['demo/synthetic-repository'], { providerId: 'demo' })
+    await this.loadMany([...DEMO_REPOSITORIES], { providerId: 'demo' })
   }
 
   /**

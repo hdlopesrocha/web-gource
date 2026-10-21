@@ -11,6 +11,7 @@ import StageView from '../src/ui/StageView.vue'
 import { store, setToken, tokenFor, resetRunState } from '../src/state/store'
 import { AuthorField } from '../src/render/authors'
 import { controller } from '../src/engine/controller'
+import { DEMO_REPOSITORIES } from '../src/git/providers/demo'
 import { buildTimeline } from '../src/timeline/builder'
 import type { RawCommit, RepoInfo } from '../src/git/types'
 
@@ -96,7 +97,7 @@ describe('LandingView', () => {
     expect(wrapper.findAll('option').length).toBeGreaterThan(3)
   })
 
-  it('presents the synthetic demo as a second primary action and still starts it', async () => {
+  it('presents the synthetic demo as a second primary action and fills three projects', async () => {
     const loadDemo = vi.spyOn(controller, 'loadDemo').mockResolvedValue()
     const wrapper = mount(LandingView)
     const buttonNamed = (label: string) => wrapper.findAll('button').find((button) => button.text().trim() === label)
@@ -111,10 +112,11 @@ describe('LandingView', () => {
     }
     await demoButton!.trigger('click')
     expect(loadDemo).toHaveBeenCalledTimes(1)
-    // The demo fills the field with its synthetic repository, as before.
-    expect((wrapper.find('input[aria-label="Repository URL"]').element as HTMLInputElement).value).toBe(
-      'demo/synthetic-repository',
-    )
+    const values = wrapper
+      .findAll('input[aria-label="Repository URL"]')
+      .map((input) => (input.element as HTMLInputElement).value)
+    expect(values).toEqual([...DEMO_REPOSITORIES])
+    expect(wrapper.text()).toContain('Load 3 repositories')
     loadDemo.mockRestore()
   })
 

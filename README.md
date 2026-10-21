@@ -17,8 +17,8 @@ one or more repository URLs   →   animated 3D map of their histories
 ```
 
 **Live:** <https://hdlopesrocha.github.io/web-gource/> — the published build is the same code as
-`master`; the demo repository works offline, and real repositories are fetched straight from the
-host API in your browser.
+`master`; the three-project synthetic demo works offline, and real repositories are fetched straight
+from the host API in your browser.
 
 ## Quick start
 

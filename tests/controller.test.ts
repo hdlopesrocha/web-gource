@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { controller } from '../src/engine/controller'
+import { DEMO_REPOSITORIES } from '../src/git/providers/demo'
 import { analyzeMusic, type AudioLevels } from '../src/engine/audio/analysis'
 import type { MusicSource } from '../src/engine/audio/music'
 import { resetRunState, store } from '../src/state/store'
@@ -97,6 +98,22 @@ describe('VisualizerController', () => {
     // The controller keeps the timeline playable even without a renderer.
     expect(controller.duration()).toBeGreaterThan(0)
     expect(controller.activityBuckets(10)).toHaveLength(10)
+  })
+
+  it('loads the three synthetic demo projects in parallel', async () => {
+    await controller.loadDemo()
+
+    expect(store.loading.error).toBeNull()
+    expect(store.view).toBe('stage')
+    const timeline = controller.currentTimeline!
+    expect(timeline.projects).toHaveLength(3)
+    expect(timeline.projects.map((project) => project.repo.fullName)).toEqual([...DEMO_REPOSITORIES])
+    // The default 150-commit window is filled for every synthetic project.
+    expect(timeline.commits).toHaveLength(450)
+    expect(timeline.commits.every((commit, index, commits) => index === 0 || commits[index - 1]!.timestamp <= commit.timestamp)).toBe(true)
+    for (const project of timeline.projects) {
+      expect(timeline.commits.filter((commit) => commit.projectKey === project.key)).toHaveLength(150)
+    }
   })
 
   it('reports unsupported hosts and empty repositories as errors', async () => {

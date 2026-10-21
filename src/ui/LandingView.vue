@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { controller } from '../engine/controller'
+import { DEMO_REPOSITORIES } from '../git/providers/demo'
 import { loadingPercent, providerDescriptors, store } from '../state/store'
 import TokenField from './TokenField.vue'
 
@@ -111,8 +112,8 @@ function submit(): void {
 }
 
 function loadDemo(): void {
-  rows.value = ['demo/synthetic-repository']
-  store.url = 'demo/synthetic-repository'
+  rows.value = [...DEMO_REPOSITORIES]
+  store.url = DEMO_REPOSITORIES[0] ?? ''
   void controller.loadDemo()
 }
 
