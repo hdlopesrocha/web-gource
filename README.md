@@ -370,14 +370,14 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
 * **files and folders are always real spheres** — instanced `SphereGeometry` with a light,
   world-scaled and depth-tested. The same representation is used on screen and in VR, where
   camera-facing billboards would read as discs;
-* **the whole interface comes with you**: one WebGL-rendered plane is placed ahead of the headset and
-  raised into view. It carries the header (repository summary and page buttons), the stage cards
-  (commit details, stats, overview minimap, load notices), the footer timeline with the commit
-  histogram, playhead, date and progress, and dedicated **Activity**, **Authors**, **Settings**,
-  **Help** and **Warnings** pages. Its centre is left transparent, so the tree stays visible through
-  the middle of the screen. The plane is placed from the headset pose itself, so it is in front of
-  you whatever direction the runtime picked at start-up, then stays fixed in the room. In **2D** the
-  same screen is laid flat as a dashboard above the tree;
+* **the whole interface comes with you**: one WebGL-rendered plane is placed dead centre in the
+  view and sized to fill **80% of the visible screen** (the size is derived from the headset's own
+  projection, not a fixed metre size). It carries the header (repository summary and page buttons),
+  the stage cards (commit details, stats, overview minimap, load notices), the footer timeline with
+  the commit histogram, playhead, date and progress, and dedicated **Activity**, **Authors**,
+  **Settings**, **Help** and **Warnings** pages. Its centre is left transparent, so the tree stays
+  visible through the middle of the screen. The plane is fixed once placed, which keeps gaze
+  selection stable; in **2D** it is laid flat as a dashboard above the tree;
 * **the screen is driven by gaze**: a circular crosshair sits at the centre of your view and an
   element activates once it rests on it for **2 seconds**, the ring filling over that time and the
   hovered control highlighted. Looking away or moving to another control resets the dwell, so
@@ -386,9 +386,11 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   between the eyes through the plane. In the fixed 2D view the raw headset orientation still drives
   the gaze, so turning your head sweeps the crosshair across the flat dashboard while the overview
   itself stays still;
-* **recenter** re-anchors the standard overview: the current heading becomes forward without moving
-  the vantage, then the screen is re-placed in front of you. Pulling the XR trigger, a tap on the
-  mirrored desktop canvas, and the in-screen **Recenter** button all do the same thing;
+* **recenter** re-anchors the standard overview and re-places the screen: the current heading becomes
+  forward without moving the vantage, the screen is put back dead centre at 80% of the view, and the
+  view keeps the head-up vector captured at that click so later head rolls no longer tilt the world.
+  Pulling the XR trigger, a tap on the mirrored desktop canvas, and the in-screen **Recenter** button
+  all do the same thing;
 * the transport controls cover restart, previous commit, play/pause, next commit, speed and view.
   The speed button cycles the same 0.25×–32× presets as the on-screen selector. The view button
   cycles **Standard** (the Gource overview described above), **2D** (a fixed top-down overview, with

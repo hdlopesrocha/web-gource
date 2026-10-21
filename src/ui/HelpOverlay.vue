@@ -101,10 +101,11 @@ const shortcuts: { keys: string; action: string }[] = [
         </p>
         <p class="muted small">
           Inside the session the <strong>whole interface travels with you</strong>: one WebGL-rendered plane placed
-          ahead of the headset carries the header, the stage cards (commit, stats and overview minimap), the footer
-          timeline and transport, and the <strong>Activity</strong>, <strong>Authors</strong>,
-          <strong>Settings</strong>, <strong>Help</strong> and <strong>Warnings</strong> pages. Its centre is
-          transparent, so the tree stays visible through the middle of the screen.
+          dead centre in your view and sized to fill <strong>80% of the visible screen</strong> carries the header, the
+          stage cards (commit, stats and overview minimap), the footer timeline and transport, and the
+          <strong>Activity</strong>, <strong>Authors</strong>, <strong>Settings</strong>, <strong>Help</strong> and
+          <strong>Warnings</strong> pages. Its centre is transparent, so the tree stays visible through the middle of
+          the screen. The plane is fixed once placed, so gazing around sweeps the reticle across it.
         </p>
         <p class="muted small">
           The default view is the <strong>standard Gource overview</strong>: the eyes sit at an elevated vantage
@@ -121,9 +122,10 @@ const shortcuts: { keys: string; action: string }[] = [
         </p>
         <p class="muted small">
           <strong>Recenter</strong> re-anchors the standard view: your current heading becomes forward without moving
-          the vantage, then the screen is re-placed in front of you. Pulling the XR trigger, tapping the mirrored
-          screen on the desktop, or gazing at a <strong>Recenter</strong> button all do the same thing.
-          <strong>Exit VR</strong> (or taking the headset off) restores the exact view you had.
+          the vantage, and the screen is re-placed dead centre in your view at 80% of the screen. The view also keeps
+          the head-up vector it had at that click, so tilting your head no longer rolls the world. Pulling the XR
+          trigger, tapping the mirrored screen on the desktop, or gazing at a <strong>Recenter</strong> button all do
+          the same thing. <strong>Exit VR</strong> (or taking the headset off) restores the exact view you had.
         </p>
       </section>
 
