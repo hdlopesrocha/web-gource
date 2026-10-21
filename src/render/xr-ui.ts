@@ -19,8 +19,10 @@
 
 import * as THREE from 'three'
 import type { ActivityBucket } from '../timeline/types'
-import type { XrCameraMode } from './xr'
 import { drawActivityBars, drawPanel, TEXT_COLOR, TEXT_STRONG } from './overlays'
+
+/** Legacy timeline panel's camera label; the live UI no longer cycles modes. */
+export type XrCameraMode = 'free' | 'follow'
 
 /** Seconds the gaze must rest on an element before it activates. */
 export const XR_UI_DWELL_SECONDS = 2

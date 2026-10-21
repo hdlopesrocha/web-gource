@@ -114,16 +114,6 @@ export function clampXrViewHeight(value: number): number {
 /** The table's up axis, in the tree's own Z-up frame. */
 const XR_UP = new THREE.Vector3(0, 0, 1)
 
-/** The camera behaviours the in-scene View button cycles through. */
-export const XR_CAMERA_MODES = ['free', 'follow'] as const
-export type XrCameraMode = (typeof XR_CAMERA_MODES)[number]
-
-/** The next camera behaviour after `mode`, wrapping back to free. */
-export function nextXrCameraMode(mode: XrCameraMode): XrCameraMode {
-  const index = XR_CAMERA_MODES.indexOf(mode)
-  return XR_CAMERA_MODES[(index + 1) % XR_CAMERA_MODES.length] ?? 'free'
-}
-
 /**
  * Rotation that makes the tree's own frame read as a room.
  *
@@ -193,10 +183,10 @@ interface SavedState {
  * `store.ui.xrError` and leaves the app exactly as it was. While a session is
  * running the camera is parented to an XR rig group and the rig is tipped and
  * placed at the local-floor origin (see {@link frameTabletop}), so three can
- * pose the camera from the headset. `free` mirrors the desktop Gource camera
- * with the headset adding look-around; `follow` watches the recent activity
- * from the height picked by the `VR view height` setting. `end` (or `exit()`)
- * restores the previous scene, rig and camera transforms.
+ * pose the camera from the headset. The camera watches the recent activity from
+ * the height picked by the `VR view height` setting, with the headset adding
+ * look-around. `end` (or `exit()`) restores the previous scene, rig and camera
+ * transforms.
  */
 export class XrSession {
   private readonly renderer: XrRendererLike
@@ -208,16 +198,11 @@ export class XrSession {
   private saved: SavedState | null = null
   private cameraHeightFitted = false
   private disposed = false
-  private cameraMode: XrCameraMode = 'free'
-  /** Headset orientation treated as "looking forward" by the camera. */
+  /** Headset orientation treated as the camera's forward reference. */
   private readonly headReference = new THREE.Quaternion()
   private readonly headReferenceInverse = new THREE.Quaternion()
   private hasHeadReference = false
-  /** Desktop camera pose mirrored by `free`; set by the engine each frame. */
-  private readonly mirrorPosition = new THREE.Vector3()
-  private readonly mirrorQuaternion = new THREE.Quaternion()
-  private hasMirror = false
-  /** Scene point the follow camera watches; set by the engine each frame. */
+  /** Scene point the camera watches; set by the engine each frame. */
   private readonly followTarget = new THREE.Vector3()
   private hasFollowTarget = false
   private readonly rigPosition = new THREE.Vector3()
@@ -259,7 +244,6 @@ export class XrSession {
     if (this.session || this.disposed) return
     store.ui.xrError = null
     this.cameraHeightFitted = false
-    this.cameraMode = 'free'
     this.hasFollowTarget = false
 
     const xr = this.xr
@@ -376,7 +360,6 @@ export class XrSession {
     framing.rig.updateMatrixWorld(true)
     this.hasHeadReference = false
     this.hasFollowTarget = false
-    this.hasMirror = false
   }
 
   /**
@@ -404,82 +387,29 @@ export class XrSession {
     this.hasHeadReference = true
   }
 
-  /** The current camera behaviour (mirror the desktop view, or follow). */
-  get mode(): XrCameraMode {
-    return this.cameraMode
-  }
-
   /**
-   * Desktop camera pose for `free` mode, in scene coordinates. The engine sets
-   * this each frame from the orbit camera, so VR mirrors the Gource view.
-   */
-  setMirrorPose(position: THREE.Vector3, quaternion: THREE.Quaternion): void {
-    this.mirrorPosition.copy(position)
-    this.mirrorQuaternion.copy(quaternion)
-    this.hasMirror = true
-  }
-
-  /**
-   * Scene point the `follow` camera watches. The engine sets this each frame to
-   * the damped focus of recent activity, so the camera tracks the users.
+   * Scene point the camera watches. The engine sets this each frame to the
+   * damped focus of recent activity, so the camera tracks the users.
    */
   setFollowTarget(target: THREE.Vector3): void {
     this.followTarget.copy(target)
     this.hasFollowTarget = true
   }
 
-  /** Switch behaviour. The next frame applies the new rig pose. */
-  setCameraMode(mode: XrCameraMode): void {
-    if (mode === this.cameraMode) return
-    // Entering either mode re-anchors the base view to where the user looks.
-    this.hasHeadReference = false
-    this.cameraMode = mode
-  }
-
   /**
-   * Apply the selected camera behaviour to the rig.
+   * Apply the camera behaviour to the rig.
    *
    * The headset pose itself is never changed: instead the rig is moved and
-   * rotated so that `rig * headsetPose` is the view we want. Because the rig is
-   * the camera's parent, three's XR manager can keep owning the raw pose and
-   * still re-pose the camera every render.
-   *
-   * - `free` leaves the measured-height rig in place, so the user's own headset
-   *   movement drives the view (room scale).
-   * - `free` mirrors the desktop Gource camera: the base is the orbit camera's
-   *   current pose, so the VR view matches the on-screen view, with the headset
-   *   orientation adding look-around.
-   * - `follow` flies the camera to a vantage over the followed point and looks
-   *   at it, with the headset orientation rotating the view around that base.
-   *
-   * Returns true when the rig changed, so the caller can re-pose the XR camera
-   * before drawing the panel and gaze.
+   * rotated so that `rig * headsetPose` is the view we want. The camera flies
+   * to a vantage over the followed point and looks at it, with the headset
+   * orientation rotating the view around that base. Returns true when the rig
+   * changed, so the caller can re-pose the XR camera before drawing the panel
+   * and gaze.
    */
-  applyCameraMode(): boolean {
+  applyCameraPose(): boolean {
     const framing = this.framing
     if (!this.session || !framing) return false
-    if (this.cameraMode === 'free') return this.applyMirror()
     return this.applyFollow()
-  }
-
-  /**
-   * Mirror the desktop Gource camera into VR.
-   *
-   * The engine hands over the orbit camera's pose each frame, so the base view
-   * is exactly the on-screen view (auto-fit and activity follow included). The
-   * headset orientation is applied on top and its translation cancelled, so the
-   * user looks around the Gource camera rather than walking the scene.
-   */
-  private applyMirror(): boolean {
-    const framing = this.framing
-    if (!framing || !this.hasMirror) return false
-    if (!this.hasHeadReference) this.captureHeadReference()
-
-    this.overviewBase.copy(this.mirrorQuaternion)
-    this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
-    this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
-    this.rigPosition.copy(this.mirrorPosition).sub(this.rotatedPosition)
-    return this.applyRigPose(this.rigPosition, this.rigQuaternion)
   }
 
   /**
@@ -533,10 +463,8 @@ export class XrSession {
     this.saved = null
     this.session = null
     this.cameraHeightFitted = false
-    this.cameraMode = 'free'
     this.hasHeadReference = false
     this.hasFollowTarget = false
-    this.hasMirror = false
     if (session) {
       session.removeEventListener('end', this.onEnd)
       session.removeEventListener('select', this.onSelectEvent)

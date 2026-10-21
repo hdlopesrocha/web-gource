@@ -107,10 +107,9 @@ const shortcuts: { keys: string; action: string }[] = [
           transparent, so the tree stays visible through the middle of the screen.
         </p>
         <p class="muted small">
-          The view button cycles two camera modes. <strong>Free</strong> mirrors the desktop Gource camera, so the
-          headset sees the same orbit view (auto-fit and activity follow included) and your head looks around it.
-          <strong>Follow</strong> flies the camera with the most recent activity and looks at it while you look
-          around; <strong>Settings → Camera</strong> sets how high it sits above the table.
+          The camera watches the most recent activity: it flies to a vantage over the action and looks at it, with your
+          head adding look-around. <strong>Settings → Camera → VR view height</strong> sets how high that vantage sits
+          above the table.
         </p>
         <p class="muted small">
           It is driven by <strong>gaze</strong>: the circular crosshair at the centre of your view activates whatever
@@ -120,7 +119,7 @@ const shortcuts: { keys: string; action: string }[] = [
         </p>
         <p class="muted small">
           <strong>Recenter</strong> only moves the menu: it comes back centred in front of you and the camera is left
-          alone, so it stays free or following the users. Pulling the XR trigger, tapping the mirrored screen on the
+          alone, so it keeps watching the action. Pulling the XR trigger, tapping the mirrored screen on the
           desktop, or gazing at a <strong>Recenter</strong> button all do the same thing. <strong>Exit VR</strong> (or
           taking the headset off) restores the exact view you had.
         </p>

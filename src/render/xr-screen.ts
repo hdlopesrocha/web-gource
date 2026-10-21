@@ -22,7 +22,6 @@ import * as THREE from 'three'
 import type { ActivityBucket } from '../timeline/types'
 import type { ContributionCalendar, WeekdayHourGrid } from '../timeline/activity'
 import type { SizeMode } from '../sim/simulation'
-import type { XrCameraMode } from './xr'
 import { formatBytes } from '../util/format'
 import { drawInfoPanel, fitText, wrapText, type InfoPanelModel } from './info-panel'
 import {
@@ -49,12 +48,6 @@ export const XR_SCREEN_HEIGHT_METRES = XR_SCREEN_WIDTH_METRES * XR_SCREEN_ASPECT
 
 /** How far in front of the eyes the screen floats, in metres. */
 export const XR_SCREEN_DISTANCE = 0.95
-
-/** Human-readable camera-mode labels used by the footer button. */
-export const XR_SCREEN_CAMERA_LABELS: Record<XrCameraMode, string> = {
-  free: 'Free',
-  follow: 'Follow',
-}
 
 export const XR_SCREEN_VIEWS = ['stage', 'activity', 'authors', 'settings', 'help', 'warnings'] as const
 export type XrScreenView = (typeof XR_SCREEN_VIEWS)[number]
@@ -109,7 +102,6 @@ export type XrScreenAction =
   | { kind: 'togglePlay' }
   | { kind: 'seek'; ratio: number }
   | { kind: 'cycleSpeed' }
-  | { kind: 'cycleCamera' }
   | { kind: 'recenter' }
   | { kind: 'exitVr' }
   | { kind: 'toggleMinimap' }
@@ -155,7 +147,7 @@ export interface XrScreenSettings {
   hideHiddenFolders: boolean
   sizeMode: SizeMode
   fileColorMode: 'extension' | 'activity' | 'flat'
-  /** Height of the VR standard overview above the tabletop, in metres. */
+  /** Height of the VR follow camera above the tabletop, in metres. */
   xrViewHeight: number
 }
 
@@ -167,7 +159,6 @@ export interface XrPlaybackState {
   progress: number
   playing: boolean
   speed: number
-  cameraMode: XrCameraMode
   index: number
   total: number
   startDate: string
@@ -342,12 +333,6 @@ export function screenLayout(
     },
     { id: 'next', label: 'Next', width: 92, action: { kind: 'step', delta: 1 } },
     { id: 'speed', label: `Speed ${state.playback.speed}×`, width: 172, action: { kind: 'cycleSpeed' } },
-    {
-      id: 'camera',
-      label: `View ${XR_SCREEN_CAMERA_LABELS[state.playback.cameraMode]}`,
-      width: 172,
-      action: { kind: 'cycleCamera' },
-    },
     { id: 'recenter-footer', label: 'Recenter', width: 154, action: { kind: 'recenter' } },
   ]
   let x = footer.x + 16
@@ -571,10 +556,9 @@ function addSettingsControls(state: XrScreenState, content: Rect, controls: XrSc
     settingsRow(controls, content, 3, 'setting:gamepad', 'Gamepad', settings.gamepad ? 'On' : 'Off', { kind: 'toggleSetting', key: 'gamepad' }, { active: settings.gamepad })
     settingsRow(controls, content, 4, 'cycle:sizeMode', 'File size source', settings.sizeMode, { kind: 'cycleSetting', key: 'sizeMode' })
     settingsRow(controls, content, 5, 'cycle:fileColorMode', 'File colour', settings.fileColorMode, { kind: 'cycleSetting', key: 'fileColorMode' })
-    settingsRow(controls, content, 6, 'cycle:camera', 'Camera view', XR_SCREEN_CAMERA_LABELS[state.playback.cameraMode], { kind: 'cycleCamera' })
-    settingsRow(controls, content, 7, 'recenter-settings', 'Recenter view', 'Now', { kind: 'recenter' })
-    settingsRow(controls, content, 8, 'camera-height-down', 'VR height −', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: -0.1 })
-    settingsRow(controls, content, 9, 'camera-height-up', 'VR height +', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: 0.1 })
+    settingsRow(controls, content, 6, 'recenter-settings', 'Recenter view', 'Now', { kind: 'recenter' })
+    settingsRow(controls, content, 7, 'camera-height-down', 'VR height −', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: -0.1 })
+    settingsRow(controls, content, 8, 'camera-height-up', 'VR height +', `${settings.xrViewHeight.toFixed(1)} m`, { kind: 'adjustViewHeight', delta: 0.1 })
     return
   }
 
@@ -671,7 +655,6 @@ export function xrScreenKey(state: XrScreenState): string {
     Math.round(playback.progress * 2000),
     playback.playing ? 1 : 0,
     playback.speed,
-    playback.cameraMode,
     playback.index,
     playback.total,
     playback.startDate,
@@ -1373,9 +1356,8 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
     {
       title: 'Camera views',
       lines: [
-        'Free: mirrors the desktop Gource camera, with your head looking around it.',
-        'Follow: the camera flies with the most recent activity and you look around it.',
-        'Settings → Camera sets how high the follow camera sits above the table.',
+        'The camera watches the most recent activity and you look around it.',
+        'Settings → Camera sets how high it sits above the table.',
       ],
     },
     {

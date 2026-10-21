@@ -6,7 +6,7 @@ import { OrbitCamera, type CameraOptions } from '../render/camera'
 import { CameraControls } from './controls'
 import { nextPlaybackSpeed } from './speeds'
 import { SceneRenderer, type RendererSettings } from '../render/renderer'
-import { XrSession, nextXrCameraMode } from '../render/xr'
+import { XrSession } from '../render/xr'
 import { createDwellState, dwell, dwellProgress, XrReticle } from '../render/xr-ui'
 import {
   XR_SCREEN_CANVAS_HEIGHT,
@@ -218,9 +218,6 @@ export class Engine {
   /** Panel pose in scene coordinates, before mapping into the tabletop group. */
   private readonly xrPanelPosition = new THREE.Vector3()
   private readonly xrPanelQuaternion = new THREE.Quaternion()
-  /** Desktop camera pose the `free` VR view mirrors, in scene coordinates. */
-  private readonly xrMirrorPosition = new THREE.Vector3()
-  private readonly xrMirrorQuaternion = new THREE.Quaternion()
   private readonly xrParentPosition = new THREE.Vector3()
   private readonly xrParentQuaternion = new THREE.Quaternion()
   private readonly xrParentScale = new THREE.Vector3()
@@ -613,10 +610,10 @@ export class Engine {
   /**
    * Put the menu back in front of the user.
    *
-   * This never touches the camera: the view stays free or following the users.
-   * Only the screen is re-placed, centred on the current head orientation, and
-   * then fixed. Trigger, mirrored canvas clicks and the Recenter buttons all
-   * land here.
+   * This never touches the camera: the view keeps watching the action. Only the
+   * screen is re-placed, centred on the current head orientation, and then
+   * fixed. Trigger, mirrored canvas clicks and the Recenter buttons all land
+   * here.
    */
   recenterVr(): void {
     const xr = this.xr
@@ -811,13 +808,6 @@ export class Engine {
         break
       case 'cycleSpeed':
         this.setSpeed(nextPlaybackSpeed(this.speed))
-        break
-      case 'cycleCamera':
-        if (this.xr) {
-          this.xr.setCameraMode(nextXrCameraMode(this.xr.mode))
-          this.xrHovered = null
-          this.resetXrDwell()
-        }
         break
       case 'recenter':
         this.recenterVr()
@@ -1051,7 +1041,6 @@ export class Engine {
         progress: this.schedule.duration > 0 ? this.simTime / this.schedule.duration : 0,
         playing: this.playing,
         speed: this.speed,
-        cameraMode: this.xr?.mode ?? 'free',
         index: Math.max(0, this.sim.currentIndex),
         total: timeline.commits.length,
         startDate: formatDate(this.schedule.realStart),
@@ -1190,27 +1179,14 @@ export class Engine {
     // update gives this frame's camera-facing layers, gaze and panel the current
     // headset pose instead of the previous frame's.
     if (this.renderer.webgl.xr.isPresenting) {
-      const xr = this.xr
-      if (xr) {
-        if (xr.mode === 'follow') {
-          // The follow camera watches the damped focus of recent activity.
-          xr.setFollowTarget(this.rig.focusPoint)
-        } else {
-          // Free mirrors the desktop Gource camera. The orbit camera works in
-          // the tree's own frame; the tabletop root only scales and centres, so
-          // mapping its pose by the root's matrix puts it in scene coordinates.
-          this.renderer.world.updateMatrixWorld(true)
-          this.xrMirrorPosition.copy(this.rig.camera.position).applyMatrix4(this.renderer.world.matrixWorld)
-          this.xrMirrorQuaternion.copy(this.rig.camera.quaternion)
-          xr.setMirrorPose(this.xrMirrorPosition, this.xrMirrorQuaternion)
-        }
-      }
+      // The camera watches the damped focus of recent activity.
+      this.xr?.setFollowTarget(this.rig.focusPoint)
       this.renderer.webgl.xr.updateCamera(this.rig.camera)
-      // The first pose anchors the head reference. Then apply the chosen camera
-      // behaviour (free mirror or follow); either can move the rig, so re-pose
-      // the XR camera before the panel and reticle update.
+      // The first pose anchors the head reference. Then apply the camera pose;
+      // it can move the rig, so re-pose the XR camera before the panel and
+      // reticle update.
       const fitted = this.xr?.fitCameraHeight() ?? false
-      const posed = this.xr?.applyCameraMode() ?? false
+      const posed = this.xr?.applyCameraPose() ?? false
       if (fitted || posed) this.renderer.webgl.xr.updateCamera(this.rig.camera)
     }
     const audio = this.audioLevels?.('live', this.simTime) ?? null

@@ -380,13 +380,12 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   nothing fires by accident. Repeatable controls (stepping, seeking, page turns, volume, view
   height) re-arm after they fire, while toggles wait for you to look away. The gaze ray is cast from
   between the eyes through the plane;
-* the view button cycles two camera modes. **Free** mirrors the desktop Gource camera: the headset
-  sees the same orbit view (auto-fit and activity follow included), with your head adding look-around.
-  **Follow** flies the camera with the damped focus of recent activity and looks at it while your head
-  looks around; **Settings → Camera → VR view height** sets how high it sits above the table;
+* the camera watches the damped focus of recent activity: it flies to a vantage over the action and
+  looks at it while your head adds look-around. **Settings → Camera → VR view height** sets how high
+  it sits above the table;
 * **recenter** only moves the menu: it is re-placed centred in front of you and the camera is left
-  untouched, so it stays free or following the users. Pulling the XR trigger, a tap on the mirrored
-  desktop canvas, and the in-screen **Recenter** button all do the same thing;
+  untouched, so it keeps watching the action. Pulling the XR trigger, a tap on the mirrored desktop
+  canvas, and the in-screen **Recenter** button all do the same thing;
 * the transport controls cover restart, previous commit, play/pause, next commit, speed and view.
   The speed button cycles the same 0.25×–32× presets as the on-screen selector. **Exit VR** leaves the
   session from inside the headset;

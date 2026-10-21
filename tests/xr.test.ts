@@ -7,7 +7,6 @@ import {
   XR_OVERVIEW_RADIUS,
   XrSession,
   isXrSupported,
-  nextXrCameraMode,
   type XrSessionLike,
   type XrSystemLike,
 } from '../src/render/xr'
@@ -264,7 +263,7 @@ describe('XrSession', () => {
     await controller.exit()
   })
 
-  it('mirrors the desktop camera in free and follows the users in follow', async () => {
+  it('flies the camera to a vantage over the followed point', async () => {
     const renderer = fakeRenderer()
     const { session } = fakeSession()
     const root = new THREE.Group()
@@ -281,7 +280,6 @@ describe('XrSession', () => {
     const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
 
     await controller.enter()
-    expect(controller.mode).toBe('free')
 
     // A realistic headset pose: walking offset and a non-identity orientation.
     const rawPosition = new THREE.Vector3(0.5, 1.6, -0.25)
@@ -291,25 +289,11 @@ describe('XrSession', () => {
     camera.updateMatrixWorld(true)
     expect(controller.fitCameraHeight()).toBe(true)
 
-    // Free: the VR view matches the desktop Gource camera pose, with the
-    // headset orientation applied on top and its translation cancelled.
-    const desktopPosition = new THREE.Vector3(4, -6, 7)
-    const desktopQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, -0.9, 0.1))
-    controller.setMirrorPose(desktopPosition, desktopQuaternion)
-    expect(controller.applyCameraMode()).toBe(true)
-    camera.updateMatrixWorld(true)
-    const free = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(free.distanceTo(desktopPosition)).toBeLessThan(1e-6)
-    const freeOrientation = new THREE.Quaternion()
-    camera.getWorldQuaternion(freeOrientation)
-    expect(freeOrientation.angleTo(desktopQuaternion)).toBeLessThan(1e-6)
-
-    // Follow: the camera flies to a vantage over the target and looks at it,
-    // while the headset orientation is applied on top.
+    // The camera flies to a vantage over the target and looks at it, while the
+    // headset orientation is applied on top.
     const target = new THREE.Vector3(2, -1, 0.4)
     controller.setFollowTarget(target)
-    controller.setCameraMode('follow')
-    expect(controller.applyCameraMode()).toBe(true)
+    expect(controller.applyCameraPose()).toBe(true)
     camera.updateMatrixWorld(true)
     const height = XR_OVERVIEW_DEFAULT_HEIGHT
     const horizontal = Math.sqrt(XR_OVERVIEW_RADIUS ** 2 - height ** 2)
@@ -323,18 +307,8 @@ describe('XrSession', () => {
 
     // Changing the target moves the camera with it.
     controller.setFollowTarget(new THREE.Vector3(-3, 2, 0.2))
-    expect(controller.applyCameraMode()).toBe(true)
+    expect(controller.applyCameraPose()).toBe(true)
 
-    // Back to free mirrors the desktop camera again.
-    controller.setMirrorPose(desktopPosition, desktopQuaternion)
-    controller.setCameraMode('free')
-    expect(controller.applyCameraMode()).toBe(true)
-    camera.updateMatrixWorld(true)
-    const freeAgain = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-    expect(freeAgain.distanceTo(desktopPosition)).toBeLessThan(1e-6)
-
-    expect(nextXrCameraMode('free')).toBe('follow')
-    expect(nextXrCameraMode('follow')).toBe('free')
     await controller.exit()
   })
 

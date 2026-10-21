@@ -139,7 +139,6 @@ function screenState(overrides: Partial<XrScreenState> = {}): XrScreenState {
       progress: 0.25,
       playing: true,
       speed: 2,
-      cameraMode: 'free',
       index: 30,
       total: 120,
       startDate: '2024-01-01',
@@ -222,7 +221,6 @@ describe('screenLayout', () => {
       'play',
       'next',
       'speed',
-      'camera',
       'recenter-footer',
       'jump-start',
       'jump-end',
@@ -284,7 +282,7 @@ describe('screenLayout', () => {
 
     const camera = screenLayout(screenState({ view: 'settings', settingsTab: 'camera' }))
     expect(camera.controls.map((entry) => entry.id)).toContain('cycle:sizeMode')
-    expect(camera.controls.map((entry) => entry.id)).toContain('cycle:camera')
+    expect(camera.controls.map((entry) => entry.id)).toContain('camera-height-up')
 
     const filters = screenLayout(screenState({ view: 'settings', settingsTab: 'filters' }))
     expect(filters.controls.map((entry) => entry.id)).toContain('setting:hideHiddenFolders')
@@ -364,7 +362,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('Add the VR dashboard')
     expect(painted).toContain('Pause')
     expect(painted).toContain('Speed 2×')
-    expect(painted).toContain('View Free')
+    expect(painted).toContain('Recenter')
     expect(painted).toContain('Restart')
     expect(painted.some((text) => text.includes('Gaze for 2 s'))).toBe(true)
     expect(painted.some((text) => text.includes('WEB GOURCE'))).toBe(true)
@@ -453,8 +451,6 @@ describe('drawXrScreen', () => {
     const camera = recordingContext()
     drawXrScreen(camera.ctx, screenState({ view: 'settings', settingsTab: 'camera' }))
     painted = texts(camera.calls)
-    expect(painted).toContain('Camera view')
-    expect(painted).toContain('Free')
     expect(painted).toContain('VR height −')
     expect(painted).toContain('VR height +')
     expect(painted).toContain('1.8 m')
@@ -467,7 +463,7 @@ describe('drawXrScreen', () => {
     expect(painted).toContain('How the immersive screen works')
     expect(painted).toContain('Gaze & dwell')
     expect(painted).toContain('Recenter')
-    expect(painted.some((text) => text.startsWith('Free:'))).toBe(true)
+    expect(painted.some((text) => text.includes('watch'))).toBe(true)
 
     const warnings = recordingContext()
     drawXrScreen(
