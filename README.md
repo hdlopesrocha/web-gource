@@ -385,7 +385,8 @@ The stage toolbar has a **VR** button that opens the same scene in an immersive 
   **Gource** (the Gource view raised, watching the damped focus of recent activity). The headset adds
   look-around in all three. **Settings → Camera → View height** (default 4 m) sets how high Top and
   Gource sit. **Zoom + / −** (next to the view buttons in both the menu and the desktop toolbar)
-  dollies the camera along its own view direction;
+  dollies the camera along its own view direction. The scene keeps the up it was calibrated with, so
+  rolling your head no longer tilts it;
 * the menu translates with the camera whenever it moves, but its orientation is never changed;
 * **recenter** only moves the menu: it is re-placed centred in front of you and the camera is left
   untouched, so it keeps watching the action. Pulling the XR trigger, a tap on the mirrored desktop

@@ -1386,6 +1386,7 @@ function drawHelp(ctx: CanvasRenderingContext2D, layout: XrScreenLayout): void {
         'Top: straight down over the whole scene.',
         'Gource: the Gource view raised by the View height setting.',
         'Zoom + / − dolly the camera along its view direction.',
+        'The scene keeps the up it was calibrated with; head rolls do not tilt it.',
         'The menu translates with the camera; it is never rotated.',
       ],
     },

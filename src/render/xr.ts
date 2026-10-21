@@ -130,6 +130,8 @@ export const XR_VIEW_BACK = XR_TABLE_SIZE * 1.2
 const XR_UP = new THREE.Vector3(0, 0, 1)
 /** Screen-up axis for the straight-down top view. */
 const XR_TOP_UP = new THREE.Vector3(0, 1, 0)
+/** The camera's own up axis in its local frame. */
+const CAMERA_UP = new THREE.Vector3(0, 1, 0)
 
 /**
  * Rotation that makes the tree's own frame read as a room.
@@ -232,6 +234,13 @@ export class XrSession {
   private readonly overviewBase = new THREE.Quaternion()
   private readonly overviewMatrix = new THREE.Matrix4()
   private readonly viewForward = new THREE.Vector3()
+  private readonly rawHeadQuaternion = new THREE.Quaternion()
+  private readonly headInverse = new THREE.Quaternion()
+  private readonly horizonForward = new THREE.Vector3()
+  private readonly horizonRight = new THREE.Vector3()
+  private readonly horizonUp = new THREE.Vector3()
+  private readonly horizonBackward = new THREE.Vector3()
+  private readonly horizonMatrix = new THREE.Matrix4()
 
   constructor(options: XrSessionOptions) {
     this.renderer = options.renderer
@@ -458,6 +467,7 @@ export class XrSession {
     }
 
     this.rigQuaternion.copy(this.overviewBase).multiply(this.headReferenceInverse)
+    this.lockHorizon(this.rigQuaternion, framing.camera.quaternion, this.overviewBase)
     this.rotatedPosition.copy(framing.camera.position).applyQuaternion(this.rigQuaternion)
     this.rigPosition.copy(this.overviewEye).sub(this.rotatedPosition)
     return this.applyRigPose(this.rigPosition, this.rigQuaternion)
@@ -489,6 +499,32 @@ export class XrSession {
     this.overviewEye.set(target.x, target.y - XR_VIEW_BACK, target.z + height)
     this.overviewMatrix.lookAt(this.overviewEye, target, XR_UP)
     this.overviewBase.setFromRotationMatrix(this.overviewMatrix)
+  }
+
+  /**
+   * Remove the headset roll, keeping the view's up as it was at calibration.
+   *
+   * `rig` is rewritten so that `rig * head` keeps the current view direction but
+   * takes its roll from the view's base orientation (`base`), which is fixed
+   * when the session starts or the view changes. Tilting the head no longer
+   * rolls the scene, so its up stays exactly as it was when calibrated.
+   */
+  private lockHorizon(rig: THREE.Quaternion, head: THREE.Quaternion, base: THREE.Quaternion): void {
+    this.rawHeadQuaternion.copy(rig).multiply(head)
+    this.horizonForward.set(0, 0, -1).applyQuaternion(this.rawHeadQuaternion)
+    this.horizonUp.copy(CAMERA_UP).applyQuaternion(base)
+    this.horizonRight.crossVectors(this.horizonForward, this.horizonUp)
+    if (this.horizonRight.lengthSq() < 1e-9) {
+      this.horizonRight.set(1, 0, 0).applyQuaternion(this.rawHeadQuaternion)
+      if (this.horizonRight.lengthSq() < 1e-9) return
+    }
+    this.horizonRight.normalize()
+    this.horizonUp.crossVectors(this.horizonRight, this.horizonForward).normalize()
+    this.horizonBackward.copy(this.horizonForward).negate()
+    this.horizonMatrix.makeBasis(this.horizonRight, this.horizonUp, this.horizonBackward)
+    this.rawHeadQuaternion.setFromRotationMatrix(this.horizonMatrix)
+    this.headInverse.copy(head).invert()
+    rig.copy(this.rawHeadQuaternion).multiply(this.headInverse)
   }
 
   private applyRigPose(position: THREE.Vector3, quaternion: THREE.Quaternion): boolean {

@@ -354,6 +354,52 @@ describe('XrSession', () => {
     await controller.exit()
   })
 
+  it('keeps the view up level when the headset rolls', async () => {
+    const renderer = fakeRenderer()
+    const { session } = fakeSession()
+    const root = new THREE.Group()
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+    const rig = new THREE.Group()
+    const scene = new THREE.Group()
+    const framing = {
+      rig,
+      scene,
+      camera,
+      root,
+      bounds: () => ({ center: { x: 0, y: 0, z: 0 }, radius: 30 }),
+    }
+    const controller = new XrSession({ renderer, framing, xr: fakeXr(session) })
+
+    await controller.enter()
+    camera.position.set(0, 1.6, 0)
+    camera.quaternion.identity()
+    camera.updateMatrixWorld(true)
+    expect(controller.fitCameraHeight()).toBe(true)
+
+    const target = new THREE.Vector3(0, 0, 0)
+    controller.setFollowTarget(target)
+    controller.setView('gource')
+    controller.applyCameraPose()
+
+    // Roll the head about its own forward axis: the scene must not roll.
+    camera.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.6))
+    camera.updateMatrixWorld(true)
+    expect(controller.applyCameraPose()).toBe(true)
+    camera.updateMatrixWorld(true)
+
+    const world = camera.getWorldQuaternion(new THREE.Quaternion())
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(world)
+    const height = XR_VIEW_DEFAULT_HEIGHT
+    const eye = new THREE.Vector3(0, -XR_VIEW_BACK, height)
+    const forward = target.clone().sub(eye).normalize()
+    const expectedUp = new THREE.Vector3(0, 0, 1)
+      .addScaledVector(forward, -new THREE.Vector3(0, 0, 1).dot(forward))
+      .normalize()
+    expect(up.angleTo(expectedUp)).toBeLessThan(1e-6)
+
+    await controller.exit()
+  })
+
   it('records an error and stays out of VR when requestSession rejects', async () => {
     const renderer = fakeRenderer()
     const denied = Object.assign(new Error('denied'), { name: 'NotAllowedError' })
